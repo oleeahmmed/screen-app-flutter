@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../config.dart';
 import '../services/api_service.dart';
 import '../services/screenshot_service.dart';
+import '../services/user_data_service.dart';
 
 class DashboardPage extends StatefulWidget {
   final ApiService apiService;
@@ -29,13 +30,31 @@ class _DashboardPageState extends State<DashboardPage> {
   late DateTime _now;
   String _companyTimezone = 'UTC';
   String _companyName = '';
+  String _fullName = '';
+  String _designation = '';
+  String _department = '';
   bool _isProcessing = false;
 
   @override
   void initState() {
     super.initState();
     _now = DateTime.now();
+    _loadUserData();
     _startClock();
+  }
+  
+  Future<void> _loadUserData() async {
+    final userData = await UserDataService.getUserData();
+    setState(() {
+      _companyName = userData['company_name'] ?? '';
+      _fullName = userData['full_name'] ?? widget.username;
+      _designation = userData['designation'] ?? '';
+      _department = userData['department'] ?? '';
+    });
+    
+    print('👤 Dashboard loaded for: $_fullName');
+    print('🏢 Company: $_companyName');
+    print('💼 Designation: $_designation');
   }
 
   void _startClock() {
@@ -72,12 +91,21 @@ class _DashboardPageState extends State<DashboardPage> {
         print('📊 Checkout result: ${result['success']}');
         print('📝 Response: ${result['data'] ?? result['error']}');
         
-        setState(() {
-          _isClockedIn = false;
-          _todayWorkDuration += _workDuration;
-          _workDuration = Duration.zero;
-        });
-        _showSnackBar('✓ Checked out successfully', Colors.green);
+        if (result['success']) {
+          setState(() {
+            _isClockedIn = false;
+            _todayWorkDuration += _workDuration;
+            _workDuration = Duration.zero;
+          });
+          
+          // Stop screenshot capture on checkout
+          widget.screenshotService?.stopCapture();
+          print('🛑 Screenshot capture stopped');
+          
+          _showSnackBar('✓ Checked out successfully', Colors.green);
+        } else {
+          _showSnackBar('✗ ${result['error'] ?? 'Check-out failed'}', Colors.red);
+        }
       } else {
         print('🔄 Attempting checkin...');
         final result = await widget.apiService.checkIn();
@@ -89,7 +117,12 @@ class _DashboardPageState extends State<DashboardPage> {
             _isClockedIn = true;
             _clockInTime = DateTime.now();
           });
-          _showSnackBar('✓ Checked in successfully', Colors.green);
+          
+          // Start screenshot capture on checkin
+          widget.screenshotService?.startCapture();
+          print('🚀 Screenshot capture started');
+          
+          _showSnackBar('✓ Checked in successfully - Screenshot capture started', Colors.green);
         } else {
           _showSnackBar('✗ ${result['error'] ?? 'Check-in failed'}', Colors.red);
         }
@@ -140,27 +173,41 @@ class _DashboardPageState extends State<DashboardPage> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Hi, ${widget.username}',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w500,
-                              color: Colors.white,
-                              fontStyle: FontStyle.italic,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Hi, ${_fullName.isNotEmpty ? _fullName : widget.username}',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.white,
+                                fontStyle: FontStyle.italic,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                          SizedBox(height: 2),
-                          Text(
-                            'Welcome back',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.white54,
-                            ),
-                          ),
-                        ],
+                            SizedBox(height: 2),
+                            if (_designation.isNotEmpty)
+                              Text(
+                                _designation + (_department.isNotEmpty ? ' • $_department' : ''),
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white70,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            if (_companyName.isNotEmpty)
+                              Text(
+                                _companyName,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.white54,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                          ],
+                        ),
                       ),
                       Icon(Icons.menu, color: Colors.white, size: 24),
                     ],

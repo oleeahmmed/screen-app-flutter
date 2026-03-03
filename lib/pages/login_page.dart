@@ -1,6 +1,7 @@
 // login_page.dart - Login Page
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import '../services/api_service.dart';
 
@@ -50,8 +51,39 @@ class _LoginPageState extends State<LoginPage> {
 
     if (result['success']) {
       final data = result['data'];
-      final username = data['user']['username'] ?? 'User';
+      
+      // Check if access is granted
+      if (data['access_granted'] == false) {
+        setState(() => _errorMessage = data['message'] ?? 'Access denied');
+        return;
+      }
+      
+      // Extract user data
+      final username = data['user']?['username'] ?? 'User';
       final token = data['access'] ?? '';
+      
+      print('✅ Login successful:');
+      print('  User: $username');
+      print('  Access Granted: ${data['access_granted']}');
+      
+      // Save all login data using UserDataService
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('auth_token', token);
+      await prefs.setString('refresh_token', data['refresh'] ?? '');
+      await prefs.setString('username', username);
+      await prefs.setString('user_id', data['user']?['id']?.toString() ?? '');
+      await prefs.setString('email', data['user']?['email'] ?? '');
+      await prefs.setString('full_name', data['user']?['full_name'] ?? username);
+      await prefs.setString('designation', data['employee']?['designation'] ?? '');
+      await prefs.setBool('is_admin', data['employee']?['is_admin'] ?? false);
+      await prefs.setString('company_id', data['company']?['id']?.toString() ?? '');
+      await prefs.setString('company_name', data['company']?['name'] ?? '');
+      await prefs.setString('subscription_plan', data['subscription']?['plan'] ?? '');
+      await prefs.setString('subscription_status', data['subscription']?['status'] ?? '');
+      await prefs.setBool('access_granted', data['access_granted'] ?? false);
+      
+      print('💾 User data saved to SharedPreferences');
+      
       widget.onLoginSuccess(username, token);
     } else {
       setState(() => _errorMessage = result['error'] ?? 'Login failed');

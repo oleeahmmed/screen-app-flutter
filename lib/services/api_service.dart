@@ -2,10 +2,20 @@
 
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
+import 'user_data_service.dart';
 
 class ApiService {
   String? _token;
+
+  // Initialize token from storage
+  Future<void> initToken() async {
+    _token = await UserDataService.getAuthToken();
+    if (_token != null && _token!.isNotEmpty) {
+      print('🔑 Token loaded from storage');
+    }
+  }
 
   void setToken(String token) {
     _token = token;
@@ -14,7 +24,7 @@ class ApiService {
   Map<String, String> _getHeaders() {
     return {
       'Content-Type': 'application/json',
-      if (_token != null) 'Authorization': 'Bearer $_token',
+      if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
     };
   }
 
@@ -162,6 +172,9 @@ class ApiService {
   Future<Map<String, dynamic>> getChatUsers() async {
     try {
       print('👥 Loading chat users...');
+      print('🔗 URL: ${AppConfig.chatUsersUrl}');
+      print('🔑 Token: ${_token != null && _token!.isNotEmpty ? "Present" : "Missing"}');
+      
       final response = await http
           .get(
             Uri.parse(AppConfig.chatUsersUrl),
@@ -170,14 +183,21 @@ class ApiService {
           .timeout(Duration(seconds: 10));
 
       print('📊 Chat users response: ${response.statusCode}');
+      print('📝 Response body: ${response.body}');
 
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final data = jsonDecode(response.body);
+        print('✅ Successfully loaded ${(data as List).length} users');
+        return {'success': true, 'data': data};
+      } else if (response.statusCode == 401) {
+        return {'success': false, 'error': 'Unauthorized - please login again'};
+      } else if (response.statusCode == 403) {
+        return {'success': false, 'error': 'Access denied - check subscription'};
       }
-      return {'success': false, 'error': 'Failed to load users'};
+      return {'success': false, 'error': 'Failed to load users (${response.statusCode})'};
     } catch (e) {
       print('❌ Chat users error: $e');
-      return {'success': false, 'error': 'Chat error: $e'};
+      return {'success': false, 'error': 'Connection error: $e'};
     }
   }
 
@@ -204,7 +224,7 @@ class ApiService {
       print('💬 Sending message to user $userId: $message');
       final response = await http
           .post(
-            Uri.parse('https://att.igenhr.com/chat/api/send/'),
+            Uri.parse(AppConfig.chatSendUrl),
             headers: _getHeaders(),
             body: jsonEncode({
               'receiver_id': userId,
@@ -296,6 +316,99 @@ class ApiService {
     } catch (e) {
       print('❌ Activity update error: $e');
       return {'success': false, 'error': 'Activity error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getUserProfile() async {
+    try {
+      print('👤 Getting user profile...');
+      final response = await http
+          .get(
+            Uri.parse(AppConfig.profileUrl),
+            headers: _getHeaders(),
+          )
+          .timeout(Duration(seconds: 10));
+
+      print('📊 Profile response: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load profile: ${response.statusCode}'};
+    } catch (e) {
+      print('❌ Profile error: $e');
+      return {'success': false, 'error': 'Profile error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateUserProfile({
+    required String email,
+    String? firstName,
+    String? lastName,
+  }) async {
+    try {
+      print('✏️ Updating user profile...');
+      final response = await http
+          .put(
+            Uri.parse(AppConfig.profileUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({
+              'email': email,
+              'first_name': firstName ?? '',
+              'last_name': lastName ?? '',
+            }),
+          )
+          .timeout(Duration(seconds: 10));
+
+      print('📊 Update profile response: ${response.statusCode}');
+      print('📝 Response: ${response.body}');
+
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to update profile: ${response.statusCode}'};
+    } catch (e) {
+      print('❌ Update profile error: $e');
+      return {'success': false, 'error': 'Update error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadProfilePhoto(List<int> imageBytes) async {
+    try {
+      print('📤 Uploading profile photo...');
+      
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse(AppConfig.uploadPhotoUrl),
+      );
+
+      request.headers.addAll(_getHeaders());
+      
+      // Add file
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'profile_photo',
+          imageBytes,
+          filename: 'profile.jpg',
+        ),
+      );
+
+      var response = await request.send().timeout(Duration(seconds: 30));
+      
+      print('📊 Upload photo response: ${response.statusCode}');
+      
+      if (response.statusCode == 200) {
+        final responseBody = await response.stream.bytesToString();
+        print('✅ Profile photo uploaded: $responseBody');
+        return {'success': true, 'data': jsonDecode(responseBody)};
+      } else {
+        final responseBody = await response.stream.bytesToString();
+        print('❌ Upload failed: ${response.statusCode} - $responseBody');
+        return {'success': false, 'error': 'Upload failed: ${response.statusCode}'};
+      }
+    } catch (e) {
+      print('❌ Upload photo error: $e');
+      return {'success': false, 'error': 'Upload error: $e'};
     }
   }
 }

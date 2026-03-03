@@ -51,8 +51,15 @@ class _MainScreenState extends State<MainScreen> {
     super.initState();
     _apiService = ApiService();
     _screenshotService = ScreenshotService(_apiService);
-    _checkLoginStatus();
+    _initializeApp();
     _setWindowSize();
+  }
+  
+  Future<void> _initializeApp() async {
+    // Initialize API service with saved token
+    await _apiService.initToken();
+    // Check login status
+    await _checkLoginStatus();
   }
 
   void _setWindowSize() {
@@ -68,15 +75,22 @@ class _MainScreenState extends State<MainScreen> {
     final token = prefs.getString('auth_token');
     final username = prefs.getString('username');
 
-    if (token != null && username != null) {
+    print('🔍 Checking login status...');
+    print('  Token exists: ${token != null && token.isNotEmpty}');
+    print('  Username: $username');
+
+    if (token != null && username != null && token.isNotEmpty) {
       _apiService.setToken(token);
       setState(() {
         _isLoggedIn = true;
         _username = username;
         _isLoading = false;
       });
-      _screenshotService.startCapture();
+      print('✅ User already logged in: $username');
+      // Don't auto-start screenshot - user needs to Clock In first
+      print('💡 Screenshot will start when user clicks Clock In');
     } else {
+      print('❌ No saved login found');
       setState(() => _isLoading = false);
     }
   }
@@ -91,13 +105,19 @@ class _MainScreenState extends State<MainScreen> {
       _username = username;
       _currentIndex = 0;
     });
-    _screenshotService.startCapture();
+    
+    // Don't start screenshot capture automatically on login
+    // It will start when user clicks "Clock In" button
+    print('✅ Login successful - Screenshot will start on Clock In');
   }
 
   Future<void> _handleLogout() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
-    await prefs.remove('username');
+    
+    // Clear all saved user data
+    await prefs.clear();
+    
+    print('🚪 User logged out - all data cleared');
 
     setState(() {
       _isLoggedIn = false;

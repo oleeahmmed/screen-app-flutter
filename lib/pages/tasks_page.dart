@@ -364,7 +364,7 @@ class _TasksPageState extends State<TasksPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        task['title'] ?? task['name'] ?? 'Task',
+                        task['name'] ?? 'Task',
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
@@ -401,9 +401,7 @@ class _TasksPageState extends State<TasksPage> {
                           ),
                           SizedBox(width: 4),
                           Text(
-                            task['due_date'] ??
-                                task['due_time'] ??
-                                'No date',
+                            task['due_date'] ?? task['date'] ?? 'No date',
                             style: TextStyle(
                               fontSize: 11,
                               color: color,

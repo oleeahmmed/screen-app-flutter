@@ -28,7 +28,18 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _loadUsers() async {
+    print('👥 Loading chat users...');
+    setState(() => _isLoading = true);
+    
     final result = await widget.apiService.getChatUsers();
+    
+    print('📊 Chat users result: ${result['success']}');
+    if (!result['success']) {
+      print('❌ Error: ${result['error']}');
+    } else {
+      print('✅ Loaded ${(result['data'] as List?)?.length ?? 0} users');
+    }
+    
     if (result['success']) {
       setState(() {
         _users = result['data'] ?? [];
@@ -37,10 +48,17 @@ class _ChatPageState extends State<ChatPage> {
     } else {
       setState(() => _isLoading = false);
       if (mounted) {
+        final errorMsg = result['error'] ?? 'Unknown error';
+        print('⚠️ Showing error to user: $errorMsg');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to load users: ${result['error']}'),
+            content: Text('Failed to load users: $errorMsg'),
             backgroundColor: Colors.red,
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: _loadUsers,
+            ),
           ),
         );
       }
