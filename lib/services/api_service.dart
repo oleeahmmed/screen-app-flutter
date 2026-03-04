@@ -248,7 +248,7 @@ class ApiService {
 
   Future<Map<String, dynamic>> uploadScreenshot(List<int> imageBytes) async {
     try {
-      print('📤 Uploading screenshot...');
+      print('📤 Uploading screenshot (${imageBytes.length} bytes)...');
       
       // Create relative path with timestamp
       final now = DateTime.now();
@@ -261,7 +261,10 @@ class ApiService {
         Uri.parse(AppConfig.screenshotUploadUrl),
       );
 
-      request.headers.addAll(_getHeaders());
+      // Remove Content-Type from headers for multipart request
+      final headers = _getHeaders();
+      headers.remove('Content-Type');
+      request.headers.addAll(headers);
       
       // Add file
       request.files.add(
@@ -274,21 +277,21 @@ class ApiService {
       
       // Add relative_path
       request.fields['relative_path'] = relativePath;
-
-      print('📝 Relative path: $relativePath');
+      
+      print('📋 Upload URL: ${AppConfig.screenshotUploadUrl}');
+      print('📋 Relative path: $relativePath');
+      print('📋 File size: ${imageBytes.length} bytes');
       
       var response = await request.send().timeout(Duration(seconds: 30));
+      final responseBody = await response.stream.bytesToString();
       
       print('📊 Upload response: ${response.statusCode}');
+      print('📝 Response body: $responseBody');
       
       if (response.statusCode == 200 || response.statusCode == 201) {
-        final responseBody = await response.stream.bytesToString();
-        print('✅ Screenshot uploaded: $responseBody');
         return {'success': true, 'data': responseBody};
       } else {
-        final responseBody = await response.stream.bytesToString();
-        print('❌ Upload failed: ${response.statusCode} - $responseBody');
-        return {'success': false, 'error': 'Upload failed: ${response.statusCode}'};
+        return {'success': false, 'error': 'Upload failed: ${response.statusCode} - $responseBody'};
       }
     } catch (e) {
       print('❌ Upload error: $e');
@@ -298,7 +301,6 @@ class ApiService {
 
   Future<Map<String, dynamic>> updateActivityStatus(bool isActive) async {
     try {
-      print('📊 Updating activity status: ${isActive ? 'ACTIVE' : 'IDLE'}');
       final response = await http
           .post(
             Uri.parse('${AppConfig.apiBaseUrl}/attendance/activity/'),
@@ -307,14 +309,11 @@ class ApiService {
           )
           .timeout(Duration(seconds: 10));
 
-      print('📊 Activity update response: ${response.statusCode}');
-
       if (response.statusCode == 200 || response.statusCode == 201) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
       return {'success': false, 'error': 'Activity update failed: ${response.statusCode}'};
     } catch (e) {
-      print('❌ Activity update error: $e');
       return {'success': false, 'error': 'Activity error: $e'};
     }
   }

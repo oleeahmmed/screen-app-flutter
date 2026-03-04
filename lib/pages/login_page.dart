@@ -19,20 +19,20 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _emailController = TextEditingController();
+  final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   String? _errorMessage;
 
   @override
   void dispose() {
-    _emailController.dispose();
+    _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
   Future<void> _login() async {
-    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+    if (_usernameController.text.isEmpty || _passwordController.text.isEmpty) {
       setState(() => _errorMessage = 'Please fill all fields');
       return;
     }
@@ -43,7 +43,7 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     final result = await widget.apiService.login(
-      _emailController.text,
+      _usernameController.text,
       _passwordController.text,
     );
 
@@ -152,10 +152,10 @@ class _LoginPageState extends State<LoginPage> {
                   SizedBox(height: 20),
                 ],
                 TextField(
-                  controller: _emailController,
+                  controller: _usernameController,
                   enabled: !_isLoading,
                   decoration: InputDecoration(
-                    hintText: 'Email',
+                    hintText: 'Username',
                     filled: true,
                     fillColor: Colors.white.withOpacity(0.1),
                     border: OutlineInputBorder(
@@ -177,7 +177,7 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                     ),
                     hintStyle: TextStyle(color: Colors.white54),
-                    prefixIcon: Icon(Icons.email, color: Colors.white54),
+                    prefixIcon: Icon(Icons.person, color: Colors.white54),
                   ),
                   style: TextStyle(color: Colors.white),
                 ),

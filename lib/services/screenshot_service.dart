@@ -1,10 +1,13 @@
-// screenshot_service.dart - Silent Background Screenshot Service
+// screenshot_service.dart - Win32 API Silent Multi-Monitor Screenshot Service
 
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
-import 'dart:isolate';
+import 'dart:ffi';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:win32/win32.dart';
+import 'package:ffi/ffi.dart';
 import 'api_service.dart';
 
 class ScreenshotService {
@@ -15,11 +18,17 @@ class ScreenshotService {
   int _captureCount = 0;
   DateTime _lastActivityTime = DateTime.now();
   bool _isUserActive = true;
-  bool _hasCheckedTools = false;
-  String? _workingTool;
+  int _displayCount = 1;
   static const int IDLE_THRESHOLD_SECONDS = 60; // 1 minute
+  static const bool ENABLE_DEBUG_LOGS = true; // Set to true for debugging
 
   ScreenshotService(this.apiService);
+
+  void _debugLog(String message) {
+    if (ENABLE_DEBUG_LOGS) {
+      print(message);
+    }
+  }
 
   void recordActivity() {
     _lastActivityTime = DateTime.now();
@@ -29,23 +38,17 @@ class ScreenshotService {
     }
   }
 
-  void startCapture() {
+  Future<void> startCapture() async {
     if (_isRunning) return;
     _isRunning = true;
-    print('🚀 Screenshot service started - Silent background capture');
-    print('📸 Will capture every 30 seconds');
-    print('🔍 Activity check every 10 seconds');
+    
+    _debugLog('🚀 Win32 API Silent Screenshot service started');
+    _debugLog('📸 Will capture all displays every 30 seconds using PowerShell');
 
-    // Check available tools once
-    if (!_hasCheckedTools) {
-      _checkAvailableTools();
-    }
-
-    // Screenshot capture every 30 seconds (in background)
+    // Screenshot capture every 30 seconds
     _screenshotTimer = Timer.periodic(Duration(seconds: 30), (_) async {
-      print('⏰ Timer triggered - attempting capture...');
-      // Run in isolate to not block UI
-      await _captureInBackground();
+      _debugLog('⏰ Timer triggered - capturing with PowerShell...');
+      await _captureWithPowerShell();
     });
 
     // Activity check every 10 seconds
@@ -53,194 +56,128 @@ class ScreenshotService {
       _checkActivityStatus();
     });
     
-    // Capture immediately on start for testing
-    print('📸 Capturing first screenshot immediately...');
-    _captureInBackground();
-  }
-  
-  Future<void> _checkAvailableTools() async {
-    _hasCheckedTools = true;
-    
-    if (Platform.isLinux) {
-      print('🔧 Checking available screenshot tools on Linux...');
-      
-      final tools = ['gnome-screenshot', 'scrot', 'import', 'maim', 'spectacle'];
-      
-      for (final tool in tools) {
-        try {
-          final result = await Process.run('which', [tool]);
-          if (result.exitCode == 0) {
-            _workingTool = tool;
-            print('  ✅ Found: $tool');
-            break;
-          }
-        } catch (e) {
-          // Tool not found
-        }
-      }
-      
-      if (_workingTool == null) {
-        print('  ⚠️ No screenshot tool found!');
-        print('  💡 Install one with:');
-        print('     sudo apt install gnome-screenshot  # or');
-        print('     sudo apt install scrot  # or');
-        print('     sudo apt install imagemagick  # or');
-        print('     sudo apt install maim');
-      } else {
-        print('  🎯 Will use: $_workingTool');
-      }
-    }
+    // Capture immediately on start
+    _debugLog('📸 Capturing first screenshot immediately...');
+    await _captureWithPowerShell();
   }
 
-  void stopCapture() {
-    _isRunning = false;
-    _screenshotTimer?.cancel();
-    _activityCheckTimer?.cancel();
-    print('🛑 Screenshot service stopped');
-  }
-
-  Future<void> _captureInBackground() async {
+  Future<void> _captureWithPowerShell() async {
     if (!_isRunning) return;
     
     try {
       _captureCount++;
-      print('📸 Capture #$_captureCount - Starting...');
+      _debugLog('📸 Capture #$_captureCount - Using PowerShell silent capture...');
       
-      // Capture in background without blocking UI
-      final imageBytes = await _captureFullMonitorSilent();
+      Uint8List? capturedImage;
       
-      if (imageBytes != null && imageBytes.isNotEmpty) {
-        print('✅ Capture #$_captureCount - Got ${imageBytes.length} bytes');
-        // Upload silently
-        await _uploadSilent(imageBytes);
-      } else {
-        print('❌ Capture #$_captureCount - No image data captured');
-      }
-    } catch (e) {
-      // Silent error - don't show to user
-      print('❌ Capture #$_captureCount - Error: $e');
-    }
-  }
-
-  Future<Uint8List?> _captureFullMonitorSilent() async {
-    try {
-      print('🖥️ Detecting platform...');
       if (Platform.isWindows) {
-        print('🪟 Windows detected - using PowerShell capture');
-        return await _captureWindowsMonitor();
-      } else if (Platform.isMacOS) {
-        print('🍎 macOS detected - using screencapture');
-        return await _captureMacMonitor();
-      } else if (Platform.isLinux) {
-        print('🐧 Linux detected - trying capture tools');
-        return await _captureLinuxMonitor();
-      }
-      print('❌ Unsupported platform');
-      return null;
-    } catch (e) {
-      print('❌ Platform detection error: $e');
-      return null;
-    }
-  }
-
-  Future<void> _uploadSilent(Uint8List imageBytes) async {
-    try {
-      print('📤 Uploading ${imageBytes.length} bytes...');
-      final result = await apiService.uploadScreenshot(imageBytes);
-      if (result['success']) {
-        print('✅ Screenshot #$_captureCount uploaded successfully');
+        capturedImage = await _captureWindowsPowerShell();
       } else {
-        print('❌ Upload failed: ${result['error']}');
+        // Fallback for other platforms
+        capturedImage = await _captureFallback();
+      }
+      
+      if (capturedImage != null) {
+        _debugLog('✅ Capture #$_captureCount - Got ${capturedImage.length} bytes');
+        await _uploadImage(capturedImage);
+      } else {
+        _debugLog('❌ Capture #$_captureCount - No image captured');
       }
     } catch (e) {
-      print('❌ Upload error: $e');
+      _debugLog('❌ Capture #$_captureCount - Error: $e');
     }
   }
 
-  void _checkActivityStatus() {
-    final now = DateTime.now();
-    final secondsSinceLastActivity = now.difference(_lastActivityTime).inSeconds;
-
-    if (secondsSinceLastActivity > IDLE_THRESHOLD_SECONDS && _isUserActive) {
-      _isUserActive = false;
-      _updateActivityStatus(false);
-      print('⏸️ User marked as IDLE');
-    } else if (secondsSinceLastActivity <= IDLE_THRESHOLD_SECONDS && !_isUserActive) {
-      _isUserActive = true;
-      _updateActivityStatus(true);
-      print('✅ User marked as ACTIVE');
-    }
-  }
-
-  Future<void> _updateActivityStatus(bool isActive) async {
+  Future<Uint8List?> _captureWindowsPowerShell() async {
     try {
-      await apiService.updateActivityStatus(isActive);
-    } catch (e) {
-      // Silent error
-    }
-  }
-
-  Future<Uint8List?> _captureWindowsMonitor() async {
-    try {
-      print('🪟 Capturing Windows screenshot...');
-      final tempDir = Directory.systemTemp;
-      final tempFile = '${tempDir.path}\\ss_${DateTime.now().millisecondsSinceEpoch}.png';
+      _debugLog('🪟 PowerShell screen capture (completely silent)...');
       
-      print('  📁 Temp file: $tempFile');
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = '${tempDir.path}\\silent_capture_${DateTime.now().millisecondsSinceEpoch}.png';
+      
+      // Use PowerShell with System.Windows.Forms for direct screen capture
+      final psScript = '''
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+try {
+  # Get virtual screen bounds (all monitors)
+  \$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+  
+  # Create bitmap with exact dimensions
+  \$bitmap = New-Object System.Drawing.Bitmap(\$bounds.Width, \$bounds.Height)
+  \$graphics = [System.Drawing.Graphics]::FromImage(\$bitmap)
+  
+  # Copy screen content (silent - no flash)
+  \$graphics.CopyFromScreen(\$bounds.Location, [System.Drawing.Point]::Empty, \$bounds.Size)
+  
+  # Save as PNG
+  \$bitmap.Save('$tempFile', [System.Drawing.Imaging.ImageFormat]::Png)
+  
+  # Cleanup
+  \$graphics.Dispose()
+  \$bitmap.Dispose()
+  
+  # Verify file
+  if (Test-Path '$tempFile') {
+    \$fileInfo = Get-Item '$tempFile'
+    Write-Output "SUCCESS:\$(\$fileInfo.Length)"
+  } else {
+    Write-Output "ERROR:File not created"
+  }
+} catch {
+  Write-Output "ERROR:\$(\$_.Exception.Message)"
+}
+''';
       
       final result = await Process.run('powershell', [
         '-ExecutionPolicy', 'Bypass',
         '-NoProfile',
-        '-Command',
-        '''
-        Add-Type -AssemblyName System.Windows.Forms
-        Add-Type -AssemblyName System.Drawing
-        \$screens = [System.Windows.Forms.Screen]::AllScreens
-        \$totalWidth = 0
-        \$maxHeight = 0
-        foreach (\$screen in \$screens) {
-          \$totalWidth += \$screen.Bounds.Width
-          if (\$screen.Bounds.Height -gt \$maxHeight) { \$maxHeight = \$screen.Bounds.Height }
-        }
-        \$bitmap = New-Object System.Drawing.Bitmap(\$totalWidth, \$maxHeight)
-        \$graphics = [System.Drawing.Graphics]::FromImage(\$bitmap)
-        \$xOffset = 0
-        foreach (\$screen in \$screens) {
-          \$graphics.CopyFromScreen(\$screen.Bounds.Location, [System.Drawing.Point]::new(\$xOffset, 0), \$screen.Bounds.Size)
-          \$xOffset += \$screen.Bounds.Width
-        }
-        \$bitmap.Save('$tempFile', [System.Drawing.Imaging.ImageFormat]::Png)
-        \$graphics.Dispose()
-        \$bitmap.Dispose()
-        Write-Output "Success"
-        '''
+        '-WindowStyle', 'Hidden',
+        '-Command', psScript
       ], runInShell: false);
       
-      print('  📊 PowerShell exit code: ${result.exitCode}');
+      _debugLog('  📋 PowerShell result: ${result.stdout}');
       
-      if (result.exitCode == 0 && result.stdout.toString().contains('Success')) {
+      if (result.exitCode == 0 && result.stdout.toString().startsWith('SUCCESS:')) {
         final file = File(tempFile);
         if (await file.exists()) {
           final bytes = await file.readAsBytes();
-          print('  ✅ Screenshot captured: ${bytes.length} bytes');
+          _debugLog('  ✅ PowerShell PNG capture: ${bytes.length} bytes');
           await file.delete().catchError((_) {});
           return bytes;
-        } else {
-          print('  ❌ File not created');
         }
-      } else {
-        print('  ❌ PowerShell error: ${result.stderr}');
       }
+      
+      _debugLog('  ❌ PowerShell capture failed: ${result.stdout}');
       return null;
     } catch (e) {
-      print('  ❌ Windows capture error: $e');
+      _debugLog('  ❌ PowerShell capture error: $e');
       return null;
     }
   }
 
-  Future<Uint8List?> _captureMacMonitor() async {
+  Future<Uint8List?> _captureFallback() async {
     try {
-      final tempFile = '/tmp/ss_${DateTime.now().millisecondsSinceEpoch}.png';
+      _debugLog('🔄 Using fallback capture method...');
+      
+      if (Platform.isMacOS) {
+        return await _captureMacNative();
+      } else if (Platform.isLinux) {
+        return await _captureLinuxNative();
+      }
+      
+      return null;
+    } catch (e) {
+      _debugLog('❌ Fallback capture error: $e');
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _captureMacNative() async {
+    try {
+      _debugLog('🍎 macOS native capture...');
+      final tempFile = '/tmp/mac_capture_${DateTime.now().millisecondsSinceEpoch}.png';
+      
       final result = await Process.run('screencapture', ['-x', tempFile]);
       
       if (result.exitCode == 0) {
@@ -257,82 +194,112 @@ class ScreenshotService {
     }
   }
 
-  Future<Uint8List?> _captureLinuxMonitor() async {
+  Future<Uint8List?> _captureLinuxNative() async {
     try {
-      final tempFile = '/tmp/ss_${DateTime.now().millisecondsSinceEpoch}.png';
+      _debugLog('🐧 Linux native capture...');
+      final tempFile = '/tmp/linux_capture_${DateTime.now().millisecondsSinceEpoch}.png';
       
-      print('🐧 Trying Linux screenshot tools...');
+      final tools = [
+        ['gnome-screenshot', '-f', tempFile],
+        ['scrot', tempFile],
+        ['import', '-window', 'root', tempFile],
+        ['maim', tempFile],
+      ];
       
-      // Try gnome-screenshot first
-      print('  Trying gnome-screenshot...');
-      var result = await Process.run('gnome-screenshot', ['-f', tempFile]).catchError((_) => ProcessResult(1, 1, '', ''));
-      
-      if (result.exitCode == 0) {
-        print('  ✅ gnome-screenshot worked');
-        return await _readAndDeleteTempFile(tempFile);
+      for (final tool in tools) {
+        try {
+          final result = await Process.run(tool[0], tool.sublist(1));
+          if (result.exitCode == 0) {
+            final file = File(tempFile);
+            if (await file.exists()) {
+              final bytes = await file.readAsBytes();
+              await file.delete().catchError((_) {});
+              return bytes;
+            }
+          }
+        } catch (e) {
+          // Try next tool
+        }
       }
-      
-      // Try scrot
-      print('  Trying scrot...');
-      result = await Process.run('scrot', [tempFile]).catchError((_) => ProcessResult(1, 1, '', ''));
-      
-      if (result.exitCode == 0) {
-        print('  ✅ scrot worked');
-        return await _readAndDeleteTempFile(tempFile);
-      }
-      
-      // Try import (ImageMagick)
-      print('  Trying import (ImageMagick)...');
-      result = await Process.run('import', ['-window', 'root', tempFile]).catchError((_) => ProcessResult(1, 1, '', ''));
-      
-      if (result.exitCode == 0) {
-        print('  ✅ import worked');
-        return await _readAndDeleteTempFile(tempFile);
-      }
-      
-      // Try maim
-      print('  Trying maim...');
-      result = await Process.run('maim', [tempFile]).catchError((_) => ProcessResult(1, 1, '', ''));
-      
-      if (result.exitCode == 0) {
-        print('  ✅ maim worked');
-        return await _readAndDeleteTempFile(tempFile);
-      }
-      
-      // Try spectacle (KDE)
-      print('  Trying spectacle...');
-      result = await Process.run('spectacle', ['-b', '-n', '-o', tempFile]).catchError((_) => ProcessResult(1, 1, '', ''));
-      
-      if (result.exitCode == 0) {
-        print('  ✅ spectacle worked');
-        return await _readAndDeleteTempFile(tempFile);
-      }
-      
-      print('  ❌ All screenshot tools failed');
-      print('  💡 Install one of: gnome-screenshot, scrot, imagemagick, maim, spectacle');
       return null;
     } catch (e) {
-      print('  ❌ Linux capture error: $e');
       return null;
     }
   }
-  
-  Future<Uint8List?> _readAndDeleteTempFile(String tempFile) async {
+
+  Future<void> _uploadImage(Uint8List imageBytes) async {
     try {
-      final file = File(tempFile);
-      if (await file.exists()) {
-        final bytes = await file.readAsBytes();
-        await file.delete().catchError((_) {});
-        return bytes;
+      _debugLog('📤 Uploading captured image (${imageBytes.length} bytes)...');
+      
+      // Validate that we have a proper PNG file
+      if (imageBytes.length < 8) {
+        _debugLog('  ❌ Image too small to be valid PNG');
+        return;
       }
-      return null;
+      
+      // Check PNG signature (first 8 bytes should be PNG header)
+      final pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+      bool isPng = true;
+      for (int i = 0; i < 8 && i < imageBytes.length; i++) {
+        if (imageBytes[i] != pngSignature[i]) {
+          isPng = false;
+          break;
+        }
+      }
+      
+      if (!isPng) {
+        _debugLog('  ⚠️ Warning: File does not have PNG signature');
+      } else {
+        _debugLog('  ✅ Valid PNG signature detected');
+      }
+      
+      final result = await apiService.uploadScreenshot(imageBytes);
+      if (result['success']) {
+        _debugLog('  ✅ Image uploaded successfully');
+      } else {
+        _debugLog('  ❌ Image upload failed: ${result['error']}');
+        
+        // Log additional details for debugging
+        if (result['error'].toString().contains('400')) {
+          _debugLog('  📋 400 Error - likely invalid image format or missing fields');
+        }
+      }
     } catch (e) {
-      print('  ❌ Error reading temp file: $e');
-      return null;
+      _debugLog('❌ Upload error: $e');
+    }
+  }
+
+  void stopCapture() {
+    _isRunning = false;
+    _screenshotTimer?.cancel();
+    _activityCheckTimer?.cancel();
+    _debugLog('🛑 Silent Screenshot service stopped');
+  }
+
+  void _checkActivityStatus() {
+    final now = DateTime.now();
+    final secondsSinceLastActivity = now.difference(_lastActivityTime).inSeconds;
+
+    if (secondsSinceLastActivity > IDLE_THRESHOLD_SECONDS && _isUserActive) {
+      _isUserActive = false;
+      _updateActivityStatus(false);
+      _debugLog('⏸️ User marked as IDLE');
+    } else if (secondsSinceLastActivity <= IDLE_THRESHOLD_SECONDS && !_isUserActive) {
+      _isUserActive = true;
+      _updateActivityStatus(true);
+      _debugLog('✅ User marked as ACTIVE');
+    }
+  }
+
+  Future<void> _updateActivityStatus(bool isActive) async {
+    try {
+      await apiService.updateActivityStatus(isActive);
+    } catch (e) {
+      // Silent error - no logging
     }
   }
 
   bool get isRunning => _isRunning;
   bool get isUserActive => _isUserActive;
+  int get displayCount => _displayCount;
 }
-

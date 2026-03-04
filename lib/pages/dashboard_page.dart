@@ -98,9 +98,8 @@ class _DashboardPageState extends State<DashboardPage> {
             _workDuration = Duration.zero;
           });
           
-          // Stop screenshot capture on checkout
+          // Stop screenshot capture on checkout (silently)
           widget.screenshotService?.stopCapture();
-          print('🛑 Screenshot capture stopped');
           
           _showSnackBar('✓ Checked out successfully', Colors.green);
         } else {
@@ -118,11 +117,10 @@ class _DashboardPageState extends State<DashboardPage> {
             _clockInTime = DateTime.now();
           });
           
-          // Start screenshot capture on checkin
+          // Start screenshot capture on checkin (silently)
           widget.screenshotService?.startCapture();
-          print('🚀 Screenshot capture started');
           
-          _showSnackBar('✓ Checked in successfully - Screenshot capture started', Colors.green);
+          _showSnackBar('✓ Checked in successfully', Colors.green);
         } else {
           _showSnackBar('✗ ${result['error'] ?? 'Check-in failed'}', Colors.red);
         }
@@ -346,6 +344,84 @@ class _DashboardPageState extends State<DashboardPage> {
                                 color: Colors.white,
                               ),
                             ),
+                    ),
+                  ),
+                  SizedBox(height: 16),
+                  
+                  // Screenshot Service Status
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(0.15),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.monitor,
+                              color: Color(int.parse('0xFF3B82F6')),
+                              size: 16,
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Multi-Monitor Capture',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white70,
+                              ),
+                            ),
+                            Spacer(),
+                            Container(
+                              padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: (widget.screenshotService?.isRunning ?? false)
+                                    ? Color(int.parse('0xFF4CD964')).withOpacity(0.2)
+                                    : Color(int.parse('0xFFE74C3C')).withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                (widget.screenshotService?.isRunning ?? false) ? 'ACTIVE' : 'STOPPED',
+                                style: TextStyle(
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.bold,
+                                  color: (widget.screenshotService?.isRunning ?? false)
+                                      ? Color(int.parse('0xFF4CD964'))
+                                      : Color(int.parse('0xFFE74C3C')),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Displays: ${widget.screenshotService?.displayCount ?? 0}',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: Colors.white54,
+                              ),
+                            ),
+                            Text(
+                              'Activity: ${(widget.screenshotService?.isUserActive ?? false) ? 'Active' : 'Idle'}',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: (widget.screenshotService?.isUserActive ?? false)
+                                    ? Color(int.parse('0xFF4CD964'))
+                                    : Colors.orange,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
                 ],

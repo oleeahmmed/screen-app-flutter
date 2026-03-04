@@ -65,7 +65,7 @@ class _MainScreenState extends State<MainScreen> {
   void _setWindowSize() {
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        print('🖥️ Desktop app - Window size: 500x600');
+        print('🖥️ Desktop app - Window size: 620x720');
       });
     }
   }
@@ -87,8 +87,7 @@ class _MainScreenState extends State<MainScreen> {
         _isLoading = false;
       });
       print('✅ User already logged in: $username');
-      // Don't auto-start screenshot - user needs to Clock In first
-      print('💡 Screenshot will start when user clicks Clock In');
+      // Screenshot will start when user clicks Clock In;
     } else {
       print('❌ No saved login found');
       setState(() => _isLoading = false);
@@ -106,9 +105,8 @@ class _MainScreenState extends State<MainScreen> {
       _currentIndex = 0;
     });
     
-    // Don't start screenshot capture automatically on login
-    // It will start when user clicks "Clock In" button
-    print('✅ Login successful - Screenshot will start on Clock In');
+    // Screenshot will start when user clicks "Clock In" button
+    print('✅ Login successful');
   }
 
   Future<void> _handleLogout() async {
@@ -197,6 +195,7 @@ class _MainScreenState extends State<MainScreen> {
               _buildNavItem(0, Icons.work, 'Work', Color(int.parse('0xFF10B981'))),
               _buildNavItem(1, Icons.checklist, 'Tasks', Color(int.parse('0xFFF59E0B'))),
               _buildNavItem(2, Icons.chat, 'Chat', Color(int.parse('0xFF3B82F6'))),
+              _buildNavItem(3, Icons.screenshot_monitor, 'Test', Color(int.parse('0xFF8B5CF6'))),
               GestureDetector(
                 onTap: _handleLogout,
                 child: Padding(
