@@ -15,7 +15,7 @@ class AppConfig {
 }
 
 class AppColors {
-  static const String bgDark = '#0a1628';
+  static const String bgDark = '#0e2547ff';
   static const String headerBlue = '#2196F3';
   static const String textWhite = '#FFFFFF';
   static const String textGray = '#8899aa';

@@ -1,5 +1,6 @@
 // api_service.dart - API Service
 
+import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -88,45 +89,106 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> checkOut() async {
-    try {
-      print('❌ Checking out...');
-      
-      // Do checkout directly
-      var response = await http
-          .post(
-            Uri.parse(AppConfig.checkOutUrl),
-            headers: _getHeaders(),
-          )
-          .timeout(Duration(seconds: 10));
+    int retryCount = 0;
+    const maxRetries = 3;
+    
+    while (retryCount < maxRetries) {
+      try {
+        print('❌ Checking out... (Attempt ${retryCount + 1}/$maxRetries)');
+        
+        var response = await http
+            .post(
+              Uri.parse(AppConfig.checkOutUrl),
+              headers: _getHeaders(),
+            )
+            .timeout(Duration(seconds: 15));
 
-      print('📊 Check-out response: ${response.statusCode}');
-      print('📝 Response body: ${response.body}');
+        print('📊 Check-out response: ${response.statusCode}');
+        print('📝 Response body: ${response.body}');
 
-      // If 401, token might be expired - try to refresh
-      if (response.statusCode == 401) {
-        print('⚠️ Token expired, attempting refresh...');
-        // For now, just return error - user needs to login again
-        return {'success': false, 'error': 'Session expired - please login again'};
-      }
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final data = jsonDecode(response.body);
-        return {'success': true, 'data': data};
-      } else if (response.statusCode == 400) {
-        try {
-          final data = jsonDecode(response.body);
-          return {'success': false, 'error': data['message'] ?? 'No active check-in found'};
-        } catch (e) {
-          return {'success': false, 'error': 'No active check-in found'};
+        // If 401, token might be expired
+        if (response.statusCode == 401) {
+          print('⚠️ Token expired, attempting refresh...');
+          return {'success': false, 'error': 'Session expired - please login again'};
         }
-      } else if (response.statusCode == 403) {
-        return {'success': false, 'error': 'Access denied - subscription expired'};
+
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          final data = jsonDecode(response.body);
+          print('✅ Check-out successful');
+          return {'success': true, 'data': data};
+        } else if (response.statusCode == 400) {
+          try {
+            final data = jsonDecode(response.body);
+            return {'success': false, 'error': data['message'] ?? 'No active check-in found'};
+          } catch (e) {
+            return {'success': false, 'error': 'No active check-in found'};
+          }
+        } else if (response.statusCode == 403) {
+          return {'success': false, 'error': 'Access denied - subscription expired'};
+        }
+        
+        // For other errors, retry
+        retryCount++;
+        if (retryCount < maxRetries) {
+          print('⚠️ Retrying in 2 seconds...');
+          await Future.delayed(Duration(seconds: 2));
+          continue;
+        }
+        
+        return {'success': false, 'error': 'Check-out failed: ${response.statusCode}'};
+        
+      } on http.ClientException catch (e) {
+        print('❌ Network error: $e');
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          print('⚠️ Retrying in 2 seconds...');
+          await Future.delayed(Duration(seconds: 2));
+          continue;
+        }
+        
+        return {
+          'success': false,
+          'error': 'Network connection failed. Please check:\n'
+              '1. Django server is running\n'
+              '2. Server URL is correct (${AppConfig.checkOutUrl})\n'
+              '3. Your internet connection'
+        };
+      } on TimeoutException catch (e) {
+        print('❌ Timeout error: $e');
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          print('⚠️ Retrying in 2 seconds...');
+          await Future.delayed(Duration(seconds: 2));
+          continue;
+        }
+        
+        return {
+          'success': false,
+          'error': 'Server timeout. Please check if Django server is running.'
+        };
+      } catch (e) {
+        print('❌ Check-out error: $e');
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          print('⚠️ Retrying in 2 seconds...');
+          await Future.delayed(Duration(seconds: 2));
+          continue;
+        }
+        
+        return {
+          'success': false,
+          'error': 'Check-out error: ${e.toString()}'
+        };
       }
-      return {'success': false, 'error': 'Check-out failed: ${response.statusCode}'};
-    } catch (e) {
-      print('❌ Check-out error: $e');
-      return {'success': false, 'error': 'Check-out error: $e'};
     }
+    
+    return {
+      'success': false,
+      'error': 'Failed after $maxRetries attempts. Please try again.'
+    };
   }
 
   Future<Map<String, dynamic>> getTasks() async {
@@ -246,9 +308,18 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> uploadScreenshot(List<int> imageBytes) async {
+  Future<Map<String, dynamic>> uploadScreenshot(
+    List<int> imageBytes, {
+    bool isIdle = false,
+    int idleDuration = 0,
+    String? lastActivityAt,
+  }) async {
     try {
       print('📤 Uploading screenshot (${imageBytes.length} bytes)...');
+      print('   Activity Status: ${isIdle ? "IDLE" : "ACTIVE"}');
+      if (isIdle) {
+        print('   Idle Duration: ${idleDuration}m');
+      }
       
       // Create relative path with timestamp
       final now = DateTime.now();
@@ -275,12 +346,19 @@ class ApiService {
         ),
       );
       
-      // Add relative_path
+      // Add fields
       request.fields['relative_path'] = relativePath;
+      request.fields['is_idle'] = isIdle.toString();
+      request.fields['idle_duration'] = idleDuration.toString();
+      if (lastActivityAt != null) {
+        request.fields['last_activity_at'] = lastActivityAt;
+      }
       
       print('📋 Upload URL: ${AppConfig.screenshotUploadUrl}');
       print('📋 Relative path: $relativePath');
       print('📋 File size: ${imageBytes.length} bytes');
+      print('📋 Is Idle: $isIdle');
+      print('📋 Idle Duration: ${idleDuration}m');
       
       var response = await request.send().timeout(Duration(seconds: 30));
       final responseBody = await response.stream.bytesToString();

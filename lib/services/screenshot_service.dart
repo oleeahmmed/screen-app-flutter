@@ -9,9 +9,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:win32/win32.dart';
 import 'package:ffi/ffi.dart';
 import 'api_service.dart';
+import 'activity_detection_service.dart';
 
 class ScreenshotService {
   final ApiService apiService;
+  final ActivityDetectionService activityDetection = ActivityDetectionService();
   Timer? _screenshotTimer;
   Timer? _activityCheckTimer;
   bool _isRunning = false;
@@ -229,7 +231,7 @@ try {
 
   Future<void> _uploadImage(Uint8List imageBytes) async {
     try {
-      _debugLog('📤 Uploading captured image (${imageBytes.length} bytes)...');
+      _debugLog('📤 Processing captured image (${imageBytes.length} bytes)...');
       
       // Validate that we have a proper PNG file
       if (imageBytes.length < 8) {
@@ -253,9 +255,52 @@ try {
         _debugLog('  ✅ Valid PNG signature detected');
       }
       
-      final result = await apiService.uploadScreenshot(imageBytes);
+      // 🆕 Analyze screenshot for activity detection
+      _debugLog('🔍 Analyzing screenshot for activity...');
+      final activityStatus = activityDetection.analyzeScreenshot(imageBytes);
+      
+      bool wasIdle = _isUserActive == false;
+      bool isNowActive = activityStatus['is_idle'] == false;
+      
+      _debugLog('  📊 Activity Status:');
+      _debugLog('     - Is Idle: ${activityStatus['is_idle']}');
+      _debugLog('     - Idle Duration: ${activityStatus['idle_duration']}m');
+      _debugLog('     - Reason: ${activityStatus['reason']}');
+      _debugLog('     - Same Count: ${activityStatus['same_screenshot_count']}');
+      
+      // 🆕 Skip upload if user is idle
+      if (activityStatus['is_idle'] == true) {
+        _debugLog('  ⏸️ User is IDLE - Skipping screenshot upload to save bandwidth');
+        _debugLog('  💡 Screenshot will resume when activity is detected');
+        _isUserActive = false;
+        return; // Don't upload idle screenshots
+      }
+      
+      _debugLog('  ✅ User is ACTIVE - Uploading screenshot...');
+      _isUserActive = true;
+      
+      // 🆕 If user just became active, capture another screenshot immediately
+      if (wasIdle && isNowActive) {
+        _debugLog('  🎉 Activity RESUMED - Will capture fresh screenshot immediately!');
+        // Schedule immediate capture after this upload
+        Future.delayed(Duration(seconds: 2), () async {
+          if (_isRunning) {
+            _debugLog('  📸 Capturing fresh screenshot after activity resume...');
+            await _captureWithPowerShell();
+          }
+        });
+      }
+      
+      // Upload with activity status
+      final result = await apiService.uploadScreenshot(
+        imageBytes,
+        isIdle: activityStatus['is_idle'],
+        idleDuration: activityStatus['idle_duration'],
+        lastActivityAt: activityStatus['last_activity_at'],
+      );
+      
       if (result['success']) {
-        _debugLog('  ✅ Image uploaded successfully');
+        _debugLog('  ✅ Image uploaded successfully with activity status');
       } else {
         _debugLog('  ❌ Image upload failed: ${result['error']}');
         

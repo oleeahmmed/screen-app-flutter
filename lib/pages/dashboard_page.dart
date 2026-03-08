@@ -103,7 +103,9 @@ class _DashboardPageState extends State<DashboardPage> {
           
           _showSnackBar('✓ Checked out successfully', Colors.green);
         } else {
-          _showSnackBar('✗ ${result['error'] ?? 'Check-out failed'}', Colors.red);
+          // Show detailed error message
+          final errorMsg = result['error'] ?? 'Check-out failed';
+          _showErrorDialog('Check-out Error', errorMsg);
         }
       } else {
         print('🔄 Attempting checkin...');
@@ -122,7 +124,9 @@ class _DashboardPageState extends State<DashboardPage> {
           
           _showSnackBar('✓ Checked in successfully', Colors.green);
         } else {
-          _showSnackBar('✗ ${result['error'] ?? 'Check-in failed'}', Colors.red);
+          // Show detailed error message
+          final errorMsg = result['error'] ?? 'Check-in failed';
+          _showErrorDialog('Check-in Error', errorMsg);
         }
       }
     } finally {
@@ -136,6 +140,24 @@ class _DashboardPageState extends State<DashboardPage> {
         content: Text(message),
         backgroundColor: color,
         duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _showErrorDialog(String title, String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(
+          child: Text(message),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK'),
+          ),
+        ],
       ),
     );
   }

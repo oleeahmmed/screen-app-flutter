@@ -38,6 +38,7 @@ dependencies:
   path_provider: ^2.1.1
   ffi: ^2.1.0
   win32: ^5.15.0
+  crypto: ^3.0.3  # For screenshot hash calculation
 
 dev_dependencies:
   flutter_test:
