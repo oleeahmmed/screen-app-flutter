@@ -308,6 +308,236 @@ class ApiService {
     }
   }
 
+  // ─── Mark Messages Read ───
+  Future<Map<String, dynamic>> markMessagesRead(int senderId) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.chatMarkReadUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({'sender_id': senderId}),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to mark read'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Unread Count ───
+  Future<Map<String, dynamic>> getUnreadCount() async {
+    try {
+      final response = await http
+          .get(Uri.parse(AppConfig.chatUnreadUrl), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Edit Message ───
+  Future<Map<String, dynamic>> editMessage(int messageId, String newText) async {
+    try {
+      final response = await http
+          .patch(
+            Uri.parse('${AppConfig.chatMessageDetailUrl}$messageId/'),
+            headers: _getHeaders(),
+            body: jsonEncode({'message': newText}),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to edit message'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Delete Message ───
+  Future<Map<String, dynamic>> deleteMessage(int messageId) async {
+    try {
+      final response = await http
+          .delete(
+            Uri.parse('${AppConfig.chatMessageDetailUrl}$messageId/'),
+            headers: _getHeaders(),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete message'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Group Chat APIs ───
+  Future<Map<String, dynamic>> getChatGroups() async {
+    try {
+      final response = await http
+          .get(Uri.parse(AppConfig.chatGroupsUrl), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load groups'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> createGroup(String name, String description, List<int> memberIds) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.chatGroupsUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({
+              'name': name,
+              'description': description,
+              'member_ids': memberIds,
+            }),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to create group'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getGroupMessages(int groupId) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
+            headers: _getHeaders(),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load group messages'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> sendGroupMessage(int groupId, String message) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
+            headers: _getHeaders(),
+            body: jsonEncode({'message': message}),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to send group message'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getGroupMembers(int groupId) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/'),
+            headers: _getHeaders(),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load members'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> addGroupMembers(int groupId, List<int> memberIds) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/'),
+            headers: _getHeaders(),
+            body: jsonEncode({'member_ids': memberIds}),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to add members'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> removeGroupMember(int groupId, int memberId) async {
+    try {
+      final response = await http
+          .delete(
+            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/$memberId/'),
+            headers: _getHeaders(),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to remove member'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteGroup(int groupId) async {
+    try {
+      final response = await http
+          .delete(
+            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/'),
+            headers: _getHeaders(),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete group'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateGroup(int groupId, String name, String description) async {
+    try {
+      final response = await http
+          .patch(
+            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/'),
+            headers: _getHeaders(),
+            body: jsonEncode({'name': name, 'description': description}),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to update group'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> uploadScreenshot(
     List<int> imageBytes, {
     bool isIdle = false,

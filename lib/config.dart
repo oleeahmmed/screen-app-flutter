@@ -9,6 +9,11 @@ class AppConfig {
   static const String chatUsersUrl = '$apiBaseUrl/chat/users/';
   static const String chatConversationUrl = '$apiBaseUrl/chat/conversation/';
   static const String chatSendUrl = '$apiBaseUrl/chat/send/';
+  static const String chatUnreadUrl = '$apiBaseUrl/chat/unread/';
+  static const String chatMarkReadUrl = '$apiBaseUrl/chat/mark-read/';
+  static const String chatOnlineUrl = '$apiBaseUrl/chat/online/';
+  static const String chatMessageDetailUrl = '$apiBaseUrl/chat/messages/';
+  static const String chatGroupsUrl = '$apiBaseUrl/chat/groups/';
   static const String profileUrl = '$apiBaseUrl/user/profile/';
   static const String uploadPhotoUrl = '$apiBaseUrl/user/upload-photo/';
   static const int screenshotInterval = 30; // seconds
