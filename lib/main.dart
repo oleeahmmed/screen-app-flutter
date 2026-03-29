@@ -228,6 +228,7 @@ class _MainScreenState extends State<MainScreen> {
             screenshotService: _screenshotService,
           ),
           TasksPage(apiService: _apiService),
+          ProjectsPage(apiService: _apiService),
           ChatPage(apiService: _apiService),
         ],
       ),
@@ -254,8 +255,8 @@ class _MainScreenState extends State<MainScreen> {
             children: [
               _buildNavItem(0, Icons.work, 'Work', Color(int.parse('0xFF10B981'))),
               _buildNavItem(1, Icons.checklist, 'Tasks', Color(int.parse('0xFFF59E0B'))),
-              _buildNavItem(2, Icons.chat, 'Chat', Color(int.parse('0xFF3B82F6'))),
-              _buildNavItem(3, Icons.screenshot_monitor, 'Test', Color(int.parse('0xFF8B5CF6'))),
+              _buildNavItem(2, Icons.folder_copy, 'Projects', Color(int.parse('0xFF8B5CF6'))),
+              _buildNavItem(3, Icons.chat, 'Chat', Color(int.parse('0xFF3B82F6'))),
               GestureDetector(
                 onTap: _handleLogout,
                 child: Padding(
