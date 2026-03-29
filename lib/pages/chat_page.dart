@@ -7,17 +7,15 @@ import '../services/api_service.dart';
 // ═══════════════════════════════════════════════════════════════
 class _C {
   static const bgDark = Color(0xFF0F172A);
-  static const glassBg = Color(0x731E293B);
-  static const glassBorder = Color(0x14FFFFFF);
   static const blue = Color(0xFF3B82F6);
   static const blueDark = Color(0xFF2563EB);
   static const textMain = Color(0xFFF8FAFC);
   static const textMuted = Color(0xFF94A3B8);
-  static const slateCard = Color(0x661E293B);
   static const inputBg = Color(0x990F172A);
   static const inputBorder = Color(0x1AFFFFFF);
   static const red = Color(0xFFEF4444);
   static const green = Color(0xFF22C55E);
+  static const glassBorder = Color(0x14FFFFFF);
 }
 
 class ChatPage extends StatefulWidget {

@@ -538,6 +538,235 @@ class ApiService {
     }
   }
 
+  // ─── Create Task ───
+  Future<Map<String, dynamic>> createTask({
+    required String name,
+    String description = '',
+    String priority = 'medium',
+    String? dueDate,
+    int? projectId,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'name': name,
+        'description': description,
+        'priority': priority,
+      };
+      if (dueDate != null) body['due_date'] = dueDate;
+      if (projectId != null) body['project'] = projectId;
+
+      final response = await http
+          .post(Uri.parse(AppConfig.tasksUrl), headers: _getHeaders(), body: jsonEncode(body))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to create task: ${response.statusCode}'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Update Task ───
+  Future<Map<String, dynamic>> updateTask(int taskId, Map<String, dynamic> data) async {
+    try {
+      final response = await http
+          .patch(Uri.parse('${AppConfig.tasksUrl}$taskId/'), headers: _getHeaders(), body: jsonEncode(data))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to update task'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Delete Task ───
+  Future<Map<String, dynamic>> deleteTask(int taskId) async {
+    try {
+      final response = await http
+          .delete(Uri.parse('${AppConfig.tasksUrl}$taskId/'), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete task'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── SubTask APIs ───
+  Future<Map<String, dynamic>> getSubTasks(int taskId) async {
+    try {
+      final response = await http
+          .get(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/'), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load subtasks'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> createSubTask(int taskId, {
+    required String summary,
+    String description = '',
+    String priority = 'medium',
+    String? dueDate,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'summary': summary,
+        'description': description,
+        'priority': priority,
+      };
+      if (dueDate != null) body['due_date'] = dueDate;
+
+      final response = await http
+          .post(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/'), headers: _getHeaders(), body: jsonEncode(body))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to create subtask'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateSubTask(int taskId, int subtaskId, Map<String, dynamic> data) async {
+    try {
+      final response = await http
+          .patch(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/'), headers: _getHeaders(), body: jsonEncode(data))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to update subtask'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteSubTask(int taskId, int subtaskId) async {
+    try {
+      final response = await http
+          .delete(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/'), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete subtask'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> toggleSubTask(int taskId, int subtaskId) async {
+    try {
+      final response = await http
+          .post(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/toggle/'), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to toggle subtask'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Notification APIs ───
+  Future<Map<String, dynamic>> getNotifications() async {
+    try {
+      final response = await http
+          .get(Uri.parse(AppConfig.notificationsUrl), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load notifications'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getNotificationUnreadCount() async {
+    try {
+      final response = await http
+          .get(Uri.parse(AppConfig.notificationsUnreadUrl), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> markAllNotificationsRead() async {
+    try {
+      final response = await http
+          .post(Uri.parse(AppConfig.notificationsMarkAllReadUrl), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Company APIs ───
+  Future<Map<String, dynamic>> getCompanyDashboard() async {
+    try {
+      final response = await http
+          .get(Uri.parse(AppConfig.companyDashboardUrl), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load company info'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getSubscriptionUsage() async {
+    try {
+      final response = await http
+          .get(Uri.parse(AppConfig.subscriptionUsageUrl), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load usage'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Access Check (verify token is still valid) ───
+  Future<Map<String, dynamic>> accessCheck() async {
+    try {
+      final response = await http
+          .get(Uri.parse(AppConfig.accessCheckUrl), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Access check failed: ${response.statusCode}'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> uploadScreenshot(
     List<int> imageBytes, {
     bool isIdle = false,

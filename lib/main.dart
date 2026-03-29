@@ -9,6 +9,7 @@ import 'services/screenshot_service.dart';
 import 'pages/login_page.dart';
 import 'pages/dashboard_page.dart';
 import 'pages/tasks_page.dart';
+import 'pages/projects_page.dart';
 import 'pages/chat_page.dart';
 
 void main() {
@@ -74,20 +75,79 @@ class _MainScreenState extends State<MainScreen> {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('auth_token');
     final username = prefs.getString('username');
+    final accessGranted = prefs.getBool('access_granted') ?? false;
 
     print('🔍 Checking login status...');
     print('  Token exists: ${token != null && token.isNotEmpty}');
     print('  Username: $username');
+    print('  Access granted: $accessGranted');
 
     if (token != null && username != null && token.isNotEmpty) {
       _apiService.setToken(token);
-      setState(() {
-        _isLoggedIn = true;
-        _username = username;
-        _isLoading = false;
-      });
-      print('✅ User already logged in: $username');
-      // Screenshot will start when user clicks Clock In;
+      
+      // Verify token is still valid by calling access-check API
+      try {
+        final result = await _apiService.accessCheck();
+        if (result['success']) {
+          final data = result['data'];
+          if (data['access_granted'] == true) {
+            // Update stored user data from server response
+            if (data['user'] != null) {
+              await prefs.setString('user_id', data['user']['id']?.toString() ?? '');
+              await prefs.setString('email', data['user']['email'] ?? '');
+              await prefs.setString('full_name', data['user']['full_name'] ?? username);
+            }
+            if (data['employee'] != null) {
+              await prefs.setString('designation', data['employee']['designation'] ?? '');
+              await prefs.setBool('is_admin', data['employee']['is_admin'] ?? false);
+            }
+            if (data['company'] != null) {
+              await prefs.setString('company_id', data['company']['id']?.toString() ?? '');
+              await prefs.setString('company_name', data['company']['name'] ?? '');
+            }
+            if (data['subscription'] != null) {
+              await prefs.setString('subscription_plan', data['subscription']['plan'] ?? '');
+              await prefs.setString('subscription_status', data['subscription']['status'] ?? '');
+            }
+            await prefs.setBool('access_granted', true);
+            
+            setState(() {
+              _isLoggedIn = true;
+              _username = username;
+              _isLoading = false;
+            });
+            print('✅ Token valid, user data refreshed: $username');
+            return;
+          } else {
+            // Access denied - clear data and go to login
+            print('❌ Access denied: ${data['message']}');
+            await prefs.clear();
+            setState(() => _isLoading = false);
+            return;
+          }
+        } else {
+          // Token expired or invalid - clear and go to login
+          print('❌ Token invalid/expired, redirecting to login');
+          await prefs.clear();
+          setState(() => _isLoading = false);
+          return;
+        }
+      } catch (e) {
+        // Network error - use cached data if access was granted before
+        print('⚠️ Network error during access check: $e');
+        if (accessGranted) {
+          setState(() {
+            _isLoggedIn = true;
+            _username = username;
+            _isLoading = false;
+          });
+          print('✅ Using cached login data: $username');
+          return;
+        }
+        await prefs.clear();
+        setState(() => _isLoading = false);
+        return;
+      }
     } else {
       print('❌ No saved login found');
       setState(() => _isLoading = false);

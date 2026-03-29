@@ -16,6 +16,26 @@ class AppConfig {
   static const String chatGroupsUrl = '$apiBaseUrl/chat/groups/';
   static const String profileUrl = '$apiBaseUrl/user/profile/';
   static const String uploadPhotoUrl = '$apiBaseUrl/user/upload-photo/';
+  static const String accessCheckUrl = '$apiBaseUrl/access-check/';
+  
+  // Notifications
+  static const String notificationsUrl = '$apiBaseUrl/notifications/';
+  static const String notificationsUnreadUrl = '$apiBaseUrl/notifications/unread-count/';
+  static const String notificationsMarkAllReadUrl = '$apiBaseUrl/notifications/mark-all-read/';
+  static const String notificationsClearUrl = '$apiBaseUrl/notifications/clear/';
+  
+  // Company Management
+  static const String companyDashboardUrl = '$apiBaseUrl/company/';
+  static const String companySettingsUrl = '$apiBaseUrl/company/settings/';
+  static const String subscriptionUsageUrl = '$apiBaseUrl/company/subscription/usage/';
+  static const String companyEmployeesUrl = '$apiBaseUrl/company/employees/';
+  static const String companyTeamsUrl = '$apiBaseUrl/company/teams/';
+  static const String companyInvitationsUrl = '$apiBaseUrl/company/invitations/';
+  
+  // Plans & Registration
+  static const String plansUrl = '$apiBaseUrl/plans/';
+  static const String registerUrl = '$apiBaseUrl/register/';
+  
   static const int screenshotInterval = 30; // seconds
 }
 
