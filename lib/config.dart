@@ -36,6 +36,9 @@ class AppConfig {
   static const String plansUrl = '$apiBaseUrl/plans/';
   static const String registerUrl = '$apiBaseUrl/register/';
   
+  // Projects
+  static const String projectsUrl = '$apiBaseUrl/projects/';
+  
   static const int screenshotInterval = 30; // seconds
 }
 

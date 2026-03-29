@@ -544,6 +544,7 @@ class ApiService {
     String priority = 'medium',
     String? dueDate,
     int? projectId,
+    int? stageId,
   }) async {
     try {
       final body = <String, dynamic>{
@@ -553,6 +554,7 @@ class ApiService {
       };
       if (dueDate != null) body['due_date'] = dueDate;
       if (projectId != null) body['project'] = projectId;
+      if (stageId != null) body['stage'] = stageId;
 
       final response = await http
           .post(Uri.parse(AppConfig.tasksUrl), headers: _getHeaders(), body: jsonEncode(body))
@@ -746,6 +748,148 @@ class ApiService {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
       return {'success': false, 'error': 'Failed to load usage'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Project APIs ───
+  Future<Map<String, dynamic>> getProjects() async {
+    try {
+      final response = await http
+          .get(Uri.parse(AppConfig.projectsUrl), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load projects'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getProjectDetail(int projectId) async {
+    try {
+      final response = await http
+          .get(Uri.parse('${AppConfig.projectsUrl}$projectId/'), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load project'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Project CRUD ───
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    String description = '',
+    String priority = 'medium',
+    List<Map<String, dynamic>>? stages,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'name': name,
+        'description': description,
+        'priority': priority,
+      };
+      if (stages != null) body['stages'] = stages;
+      final response = await http
+          .post(Uri.parse('${AppConfig.projectsUrl}create/'), headers: _getHeaders(), body: jsonEncode(body))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to create project'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateProject(int projectId, Map<String, dynamic> data) async {
+    try {
+      final response = await http
+          .patch(Uri.parse('${AppConfig.projectsUrl}$projectId/update/'), headers: _getHeaders(), body: jsonEncode(data))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) return {'success': true};
+      return {'success': false, 'error': 'Failed to update project'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteProject(int projectId) async {
+    try {
+      final response = await http
+          .delete(Uri.parse('${AppConfig.projectsUrl}$projectId/update/'), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) return {'success': true};
+      return {'success': false, 'error': 'Failed to delete project'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Stage CRUD ───
+  Future<Map<String, dynamic>> createStage(int projectId, {required String name, String color = '#3B82F6'}) async {
+    try {
+      final response = await http
+          .post(Uri.parse('${AppConfig.projectsUrl}$projectId/stages/'), headers: _getHeaders(), body: jsonEncode({'name': name, 'color': color}))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to create stage'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateStage(int projectId, int stageId, Map<String, dynamic> data) async {
+    try {
+      final response = await http
+          .patch(Uri.parse('${AppConfig.projectsUrl}$projectId/stages/$stageId/'), headers: _getHeaders(), body: jsonEncode(data))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) return {'success': true};
+      return {'success': false, 'error': 'Failed to update stage'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteStage(int projectId, int stageId) async {
+    try {
+      final response = await http
+          .delete(Uri.parse('${AppConfig.projectsUrl}$projectId/stages/$stageId/'), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) return {'success': true};
+      return {'success': false, 'error': 'Failed to delete stage'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> reorderStages(int projectId, List<int> stageIds) async {
+    try {
+      final response = await http
+          .post(Uri.parse('${AppConfig.projectsUrl}$projectId/stages/reorder/'), headers: _getHeaders(), body: jsonEncode({'order': stageIds}))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) return {'success': true};
+      return {'success': false, 'error': 'Failed to reorder stages'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> moveTask(int taskId, int stageId) async {
+    try {
+      final response = await http
+          .post(Uri.parse('${AppConfig.tasksUrl}$taskId/move/'), headers: _getHeaders(), body: jsonEncode({'stage_id': stageId}))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) return {'success': true};
+      return {'success': false, 'error': 'Failed to move task'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
