@@ -3,7 +3,6 @@
 import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'user_data_service.dart';
 
@@ -760,6 +759,9 @@ class ApiService {
           .timeout(Duration(seconds: 10));
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
+      } else if (response.statusCode == 403) {
+        // Access denied but token is valid - return the error data
+        return {'success': false, 'data': jsonDecode(response.body), 'error': 'Access denied'};
       }
       return {'success': false, 'error': 'Access check failed: ${response.statusCode}'};
     } catch (e) {
