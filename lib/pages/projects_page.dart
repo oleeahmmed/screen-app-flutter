@@ -327,33 +327,96 @@ class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTicke
     final dim = DateTime(y, m + 1, 0).day; final fw = DateTime(y, m, 1).weekday;
     final mn = ['','January','February','March','April','May','June','July','August','September','October','November','December'];
     final ebd = <String, List<dynamic>>{}; for (final e in _calEvents) { final d = e['date'] ?? ''; ebd.putIfAbsent(d, () => []); ebd[d]!.add(e); }
+    final now = DateTime.now();
     return Column(children: [
-      Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10), child: Row(children: [
-        GestureDetector(onTap: () => setState(() => _calMonth = DateTime(y, m - 1)), child: Icon(Icons.chevron_left, color: Colors.white54)),
-        Expanded(child: Text('${mn[m]} $y', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold))),
-        GestureDetector(onTap: () => setState(() => _calMonth = DateTime(y, m + 1)), child: Icon(Icons.chevron_right, color: Colors.white54))])),
-      Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Row(children: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d) =>
-        Expanded(child: Text(d, textAlign: TextAlign.center, style: TextStyle(color: Colors.white30, fontSize: 10, fontWeight: FontWeight.w600)))).toList())),
-      SizedBox(height: 4),
-      Expanded(child: GridView.builder(padding: EdgeInsets.symmetric(horizontal: 16),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, childAspectRatio: 0.75),
-        itemCount: (fw - 1) + dim,
-        itemBuilder: (ctx, i) {
-          if (i < fw - 1) return SizedBox();
-          final day = i - (fw - 1) + 1; if (day > dim) return SizedBox();
-          final ds = '$y-${m.toString().padLeft(2,"0")}-${day.toString().padLeft(2,"0")}';
-          final evts = ebd[ds] ?? []; final isToday = DateTime.now().year == y && DateTime.now().month == m && DateTime.now().day == day;
-          return Container(margin: EdgeInsets.all(1),
-            decoration: BoxDecoration(color: isToday ? Color(0xFF8B5CF6).withOpacity(0.2) : evts.isNotEmpty ? Colors.white.withOpacity(0.03) : Colors.transparent,
-              borderRadius: BorderRadius.circular(6), border: isToday ? Border.all(color: Color(0xFF8B5CF6), width: 1) : null),
-            child: Column(mainAxisAlignment: MainAxisAlignment.start, children: [SizedBox(height: 2),
-              Text('$day', style: TextStyle(color: isToday ? Color(0xFF8B5CF6) : Colors.white54, fontSize: 11, fontWeight: isToday ? FontWeight.bold : FontWeight.normal)),
-              ...evts.take(3).map((e) { final c = e['type']=='deadline' ? Color(0xFFEF4444) : e['type']=='due_date' ? Color(0xFF10B981) : _pc(e['priority'] ?? 'medium');
-                return Container(margin: EdgeInsets.symmetric(horizontal: 2, vertical: 1), padding: EdgeInsets.symmetric(horizontal: 2, vertical: 1),
-                  decoration: BoxDecoration(color: c.withOpacity(0.3), borderRadius: BorderRadius.circular(2)),
-                  child: Text(e['title'] ?? '', style: TextStyle(color: c, fontSize: 6, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis)); })]));
-        }))]);
+      // Header with month nav
+      Container(margin: EdgeInsets.fromLTRB(16, 8, 16, 0), padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: BorderRadius.vertical(top: Radius.circular(16)), border: Border.all(color: Colors.white.withOpacity(0.06))),
+        child: Row(children: [
+          GestureDetector(onTap: () => setState(() => _calMonth = DateTime(y, m - 1)),
+            child: Container(padding: EdgeInsets.all(6), decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(8)),
+              child: Icon(Icons.chevron_left, color: Colors.white54, size: 20))),
+          Expanded(child: Text('${mn[m]} $y', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700))),
+          GestureDetector(onTap: () => setState(() => _calMonth = DateTime(y, m + 1)),
+            child: Container(padding: EdgeInsets.all(6), decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(8)),
+              child: Icon(Icons.chevron_right, color: Colors.white54, size: 20))),
+          SizedBox(width: 8),
+          GestureDetector(onTap: () => setState(() => _calMonth = now),
+            child: Container(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6), decoration: BoxDecoration(color: Color(0xFF8B5CF6).withOpacity(0.15), borderRadius: BorderRadius.circular(8), border: Border.all(color: Color(0xFF8B5CF6).withOpacity(0.3))),
+              child: Text('Today', style: TextStyle(color: Color(0xFFA78BFA), fontSize: 11, fontWeight: FontWeight.w700)))),
+        ])),
+      // Day headers
+      Container(margin: EdgeInsets.symmetric(horizontal: 16), padding: EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.03), border: Border.symmetric(vertical: BorderSide(color: Colors.white.withOpacity(0.06)))),
+        child: Row(children: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d) =>
+          Expanded(child: Text(d, textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF64748B), fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.5)))).toList())),
+      // Calendar grid
+      Expanded(child: Container(margin: EdgeInsets.fromLTRB(16, 0, 16, 8),
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.02), borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)), border: Border.all(color: Colors.white.withOpacity(0.06))),
+        child: GridView.builder(padding: EdgeInsets.zero,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 7, childAspectRatio: 0.65),
+          itemCount: (fw % 7) + dim,
+          itemBuilder: (ctx, i) {
+            if (i < fw % 7) return Container(decoration: BoxDecoration(border: Border.all(color: Colors.white.withOpacity(0.03))));
+            final day = i - (fw % 7) + 1; if (day > dim) return SizedBox();
+            final ds = '$y-${m.toString().padLeft(2,"0")}-${day.toString().padLeft(2,"0")}';
+            final evts = ebd[ds] ?? [];
+            final isToday = now.year == y && now.month == m && now.day == day;
+            return Container(
+              decoration: BoxDecoration(border: Border.all(color: Colors.white.withOpacity(0.03)),
+                color: isToday ? Color(0xFF8B5CF6).withOpacity(0.08) : Colors.transparent),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // Day number
+                Padding(padding: EdgeInsets.fromLTRB(6, 4, 6, 2), child: isToday
+                  ? Container(width: 22, height: 22, decoration: BoxDecoration(color: Color(0xFF8B5CF6).withOpacity(0.25), borderRadius: BorderRadius.circular(6)),
+                      child: Center(child: Text('$day', style: TextStyle(color: Color(0xFFA78BFA), fontSize: 11, fontWeight: FontWeight.w800))))
+                  : Text('$day', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w600))),
+                // Events
+                ...evts.take(3).map((e) => _calEvent(e)),
+                if (evts.length > 3) Padding(padding: EdgeInsets.symmetric(horizontal: 4),
+                  child: Text('+${evts.length - 3} more', style: TextStyle(color: Color(0xFFA78BFA), fontSize: 7, fontWeight: FontWeight.w700))),
+              ]));
+          }))),
+      // Legend
+      Padding(padding: EdgeInsets.fromLTRB(16, 0, 16, 8), child: Row(children: [
+        _legendDot(Color(0xFF8B5CF6), 'Task'), SizedBox(width: 10),
+        _legendDot(Color(0xFFF59E0B), 'High'), SizedBox(width: 10),
+        _legendDot(Color(0xFF3B82F6), 'Active'), SizedBox(width: 10),
+        _legendDot(Color(0xFF10B981), 'Done/Due'),
+      ])),
+    ]);
   }
+
+  Widget _calEvent(dynamic e) {
+    final type = e['type'] ?? 'task';
+    final completed = e['completed'] == true;
+    final priority = e['priority'] ?? 'medium';
+    Color bg;
+    if (type == 'deadline') { bg = Color(0xFFEF4444); }
+    else if (type == 'due_date') { bg = Color(0xFF10B981); }
+    else if (completed) { bg = Color(0xFF10B981); }
+    else if (priority == 'high') { bg = Color(0xFFF59E0B); }
+    else { bg = Color(0xFF8B5CF6); }
+
+    return GestureDetector(
+      onTap: () {
+        final taskId = e['id'];
+        if (taskId != null && taskId != 0) {
+          Navigator.push(context, MaterialPageRoute(builder: (_) => _TaskSubtasksPage(
+            apiService: widget.apiService, taskId: taskId, taskName: e['title'] ?? '', taskDesc: '', employees: _employees, isManager: _isManager,
+          ))).then((_) => _load());
+        }
+      },
+      child: Container(margin: EdgeInsets.fromLTRB(3, 0, 3, 2), padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),
+        child: Text(e['title'] ?? '', style: TextStyle(color: Colors.white, fontSize: 7, fontWeight: FontWeight.w700), maxLines: 1, overflow: TextOverflow.ellipsis)),
+    );
+  }
+
+  Widget _legendDot(Color c, String label) => Row(children: [
+    Container(width: 8, height: 8, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(3))),
+    SizedBox(width: 4), Text(label, style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.w600)),
+  ]);
 }
 
 class _TaskSubtasksPage extends StatefulWidget {

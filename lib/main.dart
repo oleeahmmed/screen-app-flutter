@@ -11,6 +11,7 @@ import 'pages/dashboard_page.dart';
 import 'pages/tasks_page.dart';
 import 'pages/projects_page.dart';
 import 'pages/chat_page.dart';
+import 'pages/notifications_page.dart';
 
 void main() {
   runApp(const MyApp());
@@ -46,6 +47,7 @@ class _MainScreenState extends State<MainScreen> {
   String _username = '';
   int _currentIndex = 0;
   bool _isLoading = true;
+  int _unreadNotifs = 0;
 
   @override
   void initState() {
@@ -117,6 +119,7 @@ class _MainScreenState extends State<MainScreen> {
               _isLoading = false;
             });
             print('✅ Token valid, user data refreshed: $username');
+            _pollNotifCount();
             return;
           } else {
             // Access denied - clear data and go to login
@@ -142,6 +145,7 @@ class _MainScreenState extends State<MainScreen> {
             _isLoading = false;
           });
           print('✅ Using cached login data: $username');
+          _pollNotifCount();
           return;
         }
         await prefs.clear();
@@ -167,6 +171,14 @@ class _MainScreenState extends State<MainScreen> {
     
     // Screenshot will start when user clicks "Clock In" button
     print('✅ Login successful');
+    _pollNotifCount();
+  }
+
+  void _pollNotifCount() async {
+    final r = await _apiService.getNotificationUnreadCount();
+    if (r['success'] && mounted) setState(() => _unreadNotifs = r['data']?['unread_count'] ?? 0);
+    // Poll every 30s
+    Future.delayed(Duration(seconds: 30), () { if (_isLoggedIn && mounted) _pollNotifCount(); });
   }
 
   Future<void> _handleLogout() async {
@@ -230,6 +242,7 @@ class _MainScreenState extends State<MainScreen> {
           TasksPage(apiService: _apiService),
           ProjectsPage(apiService: _apiService),
           ChatPage(apiService: _apiService),
+          NotificationsPage(apiService: _apiService),
         ],
       ),
       bottomNavigationBar: Container(
@@ -257,6 +270,7 @@ class _MainScreenState extends State<MainScreen> {
               _buildNavItem(1, Icons.checklist, 'Tasks', Color(int.parse('0xFFF59E0B'))),
               _buildNavItem(2, Icons.folder_copy, 'Projects', Color(int.parse('0xFF8B5CF6'))),
               _buildNavItem(3, Icons.chat, 'Chat', Color(int.parse('0xFF3B82F6'))),
+              _buildNotifNavItem(),
               GestureDetector(
                 onTap: _handleLogout,
                 child: Padding(
@@ -270,6 +284,32 @@ class _MainScreenState extends State<MainScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildNotifNavItem() {
+    final isActive = _currentIndex == 4;
+    final color = Color(0xFFF59E0B);
+    return GestureDetector(
+      onTap: () { setState(() => _currentIndex = 4); _pollNotifCount(); },
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: isActive ? color.withOpacity(0.2) : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: isActive ? Border.all(color: color.withOpacity(0.5), width: 1) : null,
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Stack(children: [
+            Icon(Icons.notifications, color: isActive ? color : Colors.white54, size: 20),
+            if (_unreadNotifs > 0) Positioned(right: 0, top: 0,
+              child: Container(width: 14, height: 14, decoration: BoxDecoration(color: Color(0xFFEF4444), shape: BoxShape.circle, border: Border.all(color: Color(0xFF0f172a), width: 1.5)),
+                child: Center(child: Text(_unreadNotifs > 9 ? '9+' : '$_unreadNotifs', style: TextStyle(color: Colors.white, fontSize: 7, fontWeight: FontWeight.w800))))),
+          ]),
+          SizedBox(height: 2),
+          Text('Alerts', style: TextStyle(color: isActive ? color : Colors.white54, fontWeight: isActive ? FontWeight.w600 : FontWeight.w500, fontSize: 10)),
+        ]),
       ),
     );
   }

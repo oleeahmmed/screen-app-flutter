@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'dart:convert';
 import '../config.dart';
 import 'user_data_service.dart';
@@ -308,6 +309,51 @@ class ApiService {
   }
 
   // ─── Mark Messages Read ───
+  Future<Map<String, dynamic>> sendVoiceMessage(int userId, List<int> audioBytes, String filename) async {
+    try {
+      var request = http.MultipartRequest('POST', Uri.parse(AppConfig.chatSendUrl));
+      final headers = _getHeaders(); headers.remove('Content-Type');
+      request.headers.addAll(headers);
+      request.fields['receiver_id'] = userId.toString();
+      request.fields['message'] = '';
+      request.files.add(http.MultipartFile.fromBytes('voice_message', audioBytes, filename: filename));
+      var response = await request.send().timeout(Duration(seconds: 30));
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 200 || response.statusCode == 201) return {'success': true, 'data': jsonDecode(body)};
+      return {'success': false, 'error': 'Failed: ${response.statusCode}'};
+    } catch (e) { return {'success': false, 'error': '$e'}; }
+  }
+
+  Future<Map<String, dynamic>> sendImageMessage(int userId, List<int> imageBytes, String filename, {String message = ''}) async {
+    try {
+      var request = http.MultipartRequest('POST', Uri.parse(AppConfig.chatSendUrl));
+      final headers = _getHeaders(); headers.remove('Content-Type');
+      request.headers.addAll(headers);
+      request.fields['receiver_id'] = userId.toString();
+      request.fields['message'] = message;
+      request.files.add(http.MultipartFile.fromBytes('image', imageBytes, filename: filename, contentType: MediaType('image', filename.endsWith('.png') ? 'png' : 'jpeg')));
+      var response = await request.send().timeout(Duration(seconds: 30));
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 200 || response.statusCode == 201) return {'success': true, 'data': jsonDecode(body)};
+      return {'success': false, 'error': 'Failed: ${response.statusCode}'};
+    } catch (e) { return {'success': false, 'error': '$e'}; }
+  }
+
+  Future<Map<String, dynamic>> sendFileMessage(int userId, List<int> fileBytes, String filename, {String message = ''}) async {
+    try {
+      var request = http.MultipartRequest('POST', Uri.parse(AppConfig.chatSendUrl));
+      final headers = _getHeaders(); headers.remove('Content-Type');
+      request.headers.addAll(headers);
+      request.fields['receiver_id'] = userId.toString();
+      request.fields['message'] = message;
+      request.files.add(http.MultipartFile.fromBytes('file', fileBytes, filename: filename));
+      var response = await request.send().timeout(Duration(seconds: 60));
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 200 || response.statusCode == 201) return {'success': true, 'data': jsonDecode(body)};
+      return {'success': false, 'error': 'Failed: ${response.statusCode}'};
+    } catch (e) { return {'success': false, 'error': '$e'}; }
+  }
+
   Future<Map<String, dynamic>> markMessagesRead(int senderId) async {
     try {
       final response = await http
@@ -948,6 +994,7 @@ class ApiService {
           'file',
           imageBytes,
           filename: '$time.png',
+          contentType: MediaType('image', 'png'),
         ),
       );
       
@@ -965,16 +1012,24 @@ class ApiService {
       print('📋 Is Idle: $isIdle');
       print('📋 Idle Duration: ${idleDuration}m');
       
-      var response = await request.send().timeout(Duration(seconds: 30));
+      var response = await request.send().timeout(Duration(seconds: 60));
       final responseBody = await response.stream.bytesToString();
       
       print('📊 Upload response: ${response.statusCode}');
-      print('📝 Response body: $responseBody');
+      print('📝 Response body: ${responseBody.length > 200 ? responseBody.substring(0, 200) : responseBody}');
       
       if (response.statusCode == 200 || response.statusCode == 201) {
         return {'success': true, 'data': responseBody};
       } else {
-        return {'success': false, 'error': 'Upload failed: ${response.statusCode} - $responseBody'};
+        // Extract error message - handle both JSON and HTML responses
+        String errorMsg = 'Upload failed: ${response.statusCode}';
+        try {
+          final json = jsonDecode(responseBody);
+          errorMsg = json['error'] ?? json['errors']?.toString() ?? errorMsg;
+        } catch (_) {
+          // HTML error page - just use status code
+        }
+        return {'success': false, 'error': errorMsg};
       }
     } catch (e) {
       print('❌ Upload error: $e');

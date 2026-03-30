@@ -255,63 +255,87 @@ try {
         _debugLog('  ✅ Valid PNG signature detected');
       }
       
-      // 🆕 Analyze screenshot for activity detection
-      _debugLog('🔍 Analyzing screenshot for activity...');
+      // Always compress before upload - resize to 360px width, JPEG 50%
+      _debugLog('  🗜️ Compressing ${(imageBytes.length / 1024).toStringAsFixed(0)}KB...');
+      Uint8List uploadBytes = await _compressImage(imageBytes);
+      _debugLog('  ✅ ${(imageBytes.length / 1024).toStringAsFixed(0)}KB → ${(uploadBytes.length / 1024).toStringAsFixed(0)}KB');
+      
+      // Analyze screenshot for activity detection
       final activityStatus = activityDetection.analyzeScreenshot(imageBytes);
       
-      bool wasIdle = _isUserActive == false;
-      bool isNowActive = activityStatus['is_idle'] == false;
+      _debugLog('  📊 Activity: ${activityStatus['is_idle'] == true ? "IDLE" : "ACTIVE"}');
       
-      _debugLog('  📊 Activity Status:');
-      _debugLog('     - Is Idle: ${activityStatus['is_idle']}');
-      _debugLog('     - Idle Duration: ${activityStatus['idle_duration']}m');
-      _debugLog('     - Reason: ${activityStatus['reason']}');
-      _debugLog('     - Same Count: ${activityStatus['same_screenshot_count']}');
-      
-      // 🆕 Skip upload if user is idle
       if (activityStatus['is_idle'] == true) {
-        _debugLog('  ⏸️ User is IDLE - Skipping screenshot upload to save bandwidth');
-        _debugLog('  💡 Screenshot will resume when activity is detected');
+        _debugLog('  ⏸️ User is IDLE - uploading with idle flag');
         _isUserActive = false;
-        return; // Don't upload idle screenshots
+      } else {
+        _isUserActive = true;
       }
       
-      _debugLog('  ✅ User is ACTIVE - Uploading screenshot...');
-      _isUserActive = true;
-      
-      // 🆕 If user just became active, capture another screenshot immediately
-      if (wasIdle && isNowActive) {
-        _debugLog('  🎉 Activity RESUMED - Will capture fresh screenshot immediately!');
-        // Schedule immediate capture after this upload
-        Future.delayed(Duration(seconds: 2), () async {
-          if (_isRunning) {
-            _debugLog('  📸 Capturing fresh screenshot after activity resume...');
-            await _captureWithPowerShell();
-          }
-        });
-      }
-      
-      // Upload with activity status
+      // Upload
       final result = await apiService.uploadScreenshot(
-        imageBytes,
+        uploadBytes,
         isIdle: activityStatus['is_idle'],
         idleDuration: activityStatus['idle_duration'],
         lastActivityAt: activityStatus['last_activity_at'],
       );
       
       if (result['success']) {
-        _debugLog('  ✅ Image uploaded successfully with activity status');
+        _debugLog('  ✅ Uploaded successfully');
       } else {
-        _debugLog('  ❌ Image upload failed: ${result['error']}');
-        
-        // Log additional details for debugging
-        if (result['error'].toString().contains('400')) {
-          _debugLog('  📋 400 Error - likely invalid image format or missing fields');
-        }
+        _debugLog('  ❌ Upload failed: ${result['error']}');
       }
     } catch (e) {
       _debugLog('❌ Upload error: $e');
     }
+  }
+
+  Future<Uint8List> _compressImage(Uint8List imageBytes) async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final inputFile = '${tempDir.path}\\cap_in_$ts.png';
+      final outputFile = '${tempDir.path}\\cap_out_$ts.jpg';
+      
+      await File(inputFile).writeAsBytes(imageBytes);
+      
+      // Resize to 360px width and save as JPEG 50% quality
+      final psScript = '''
+Add-Type -AssemblyName System.Drawing
+try {
+  \$img = [System.Drawing.Image]::FromFile('$inputFile')
+  \$ratio = 720 / \$img.Width
+  \$w = 720
+  \$h = [int](\$img.Height * \$ratio)
+  \$bmp = New-Object System.Drawing.Bitmap(\$w, \$h)
+  \$g = [System.Drawing.Graphics]::FromImage(\$bmp)
+  \$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  \$g.DrawImage(\$img, 0, 0, \$w, \$h)
+  \$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { \$_.MimeType -eq 'image/jpeg' }
+  \$ep = New-Object System.Drawing.Imaging.EncoderParameters(1)
+  \$ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]70)
+  \$bmp.Save('$outputFile', \$codec, \$ep)
+  \$g.Dispose(); \$bmp.Dispose(); \$img.Dispose()
+  Write-Output "OK"
+} catch { Write-Output "ERR:\$(\$_.Exception.Message)" }
+''';
+      
+      final result = await Process.run('powershell', ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-WindowStyle', 'Hidden', '-Command', psScript], runInShell: false);
+      
+      final outFile = File(outputFile);
+      if (result.stdout.toString().trim() == 'OK' && await outFile.exists()) {
+        final compressed = await outFile.readAsBytes();
+        await File(inputFile).delete().catchError((_) {});
+        await outFile.delete().catchError((_) {});
+        return Uint8List.fromList(compressed);
+      }
+      
+      await File(inputFile).delete().catchError((_) {});
+      await File(outputFile).delete().catchError((_) {});
+    } catch (e) {
+      _debugLog('  ⚠️ Compression failed: $e');
+    }
+    return imageBytes;
   }
 
   void stopCapture() {

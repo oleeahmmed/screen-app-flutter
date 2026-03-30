@@ -1,5 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/api_service.dart';
 
 // ═══════════════════════════════════════════════════════════════
@@ -38,6 +42,13 @@ class _ChatPageState extends State<ChatPage> {
   bool _isSending = false;
   String _searchQuery = '';
   Timer? _refreshTimer;
+  bool _isRecording = false;
+  int _recordSeconds = 0;
+  Timer? _recordTimer;
+  Process? _recProcess;
+  String? _recPath;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  String? _playingUrl;
 
   final _msgController = TextEditingController();
   final _searchController = TextEditingController();
@@ -52,6 +63,9 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _recordTimer?.cancel();
+    _recProcess?.kill();
+    _audioPlayer.dispose();
     _msgController.dispose();
     _searchController.dispose();
     _scrollController.dispose();
@@ -144,6 +158,129 @@ class _ChatPageState extends State<ChatPage> {
     } else {
       _showError('Failed to send message');
     }
+  }
+
+  // ─── Voice Recording (Windows PowerShell) ───
+  Future<void> _toggleRecording() async {
+    if (_isRecording) {
+      await _stopAndSendRecording();
+    } else {
+      final dir = await getTemporaryDirectory();
+      _recPath = '${dir.path}\\voice_${DateTime.now().millisecondsSinceEpoch}.wav';
+      
+      // Use PowerShell with .NET to record audio via MCI in a single script
+      // The script records until a stop file is created
+      final stopFile = '${dir.path}\\stop_rec.flag';
+      // Remove old stop file
+      try { await File(stopFile).delete(); } catch (_) {}
+      
+      final ps = '''
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class MciRec {
+  [DllImport("winmm.dll", CharSet=CharSet.Auto)]
+  public static extern int mciSendString(string cmd, System.Text.StringBuilder ret, int retLen, IntPtr hwnd);
+}
+"@
+[MciRec]::mciSendString("open new Type waveaudio Alias vrec", \$null, 0, [IntPtr]::Zero)
+[MciRec]::mciSendString("record vrec", \$null, 0, [IntPtr]::Zero)
+while (-not (Test-Path '$stopFile')) { Start-Sleep -Milliseconds 200 }
+[MciRec]::mciSendString("stop vrec", \$null, 0, [IntPtr]::Zero)
+[MciRec]::mciSendString("save vrec $_recPath", \$null, 0, [IntPtr]::Zero)
+[MciRec]::mciSendString("close vrec", \$null, 0, [IntPtr]::Zero)
+Remove-Item '$stopFile' -ErrorAction SilentlyContinue
+''';
+      _recProcess = await Process.start('powershell', [
+        '-ExecutionPolicy', 'Bypass', '-NoProfile', '-WindowStyle', 'Hidden', '-Command', ps
+      ]);
+      setState(() { _isRecording = true; _recordSeconds = 0; });
+      _recordTimer = Timer.periodic(Duration(seconds: 1), (_) { if (mounted) setState(() => _recordSeconds++); });
+      // Auto-stop after 60s
+      Future.delayed(Duration(seconds: 60), () { if (_isRecording) _stopAndSendRecording(); });
+    }
+  }
+
+  Future<void> _stopAndSendRecording() async {
+    if (!_isRecording) return;
+    _recordTimer?.cancel();
+    setState(() { _isRecording = false; });
+    
+    // Create stop flag file to signal PowerShell to stop
+    final dir = await getTemporaryDirectory();
+    final stopFile = File('${dir.path}\\stop_rec.flag');
+    await stopFile.writeAsString('stop');
+    
+    // Wait for PowerShell to save the file
+    await Future.delayed(Duration(seconds: 2));
+    _recProcess?.kill();
+    
+    if (_recPath != null && _selectedUser != null) {
+      final file = File(_recPath!);
+      if (await file.exists() && await file.length() > 1000) {
+        setState(() => _isSending = true);
+        final bytes = await file.readAsBytes();
+        print('🎤 Voice file: ${bytes.length} bytes');
+        final result = await widget.apiService.sendVoiceMessage(
+          _selectedUser['id'], bytes, 'voice_${DateTime.now().millisecondsSinceEpoch}.wav');
+        setState(() => _isSending = false);
+        if (result['success']) {
+          print('✅ Voice sent successfully');
+          _refreshMessages();
+        } else {
+          print('❌ Voice send failed: ${result['error']}');
+          _showError('Failed to send voice');
+        }
+        await file.delete().catchError((_) {});
+      } else {
+        print('❌ Voice file not found or too small');
+        _showError('Recording failed - try again');
+      }
+    }
+    setState(() => _recordSeconds = 0);
+  }
+
+  // ─── Pick & Send Image ───
+  Future<void> _pickImage() async {
+    if (_selectedUser == null) return;
+    final result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: false);
+    if (result != null && result.files.isNotEmpty) {
+      final file = File(result.files.first.path!);
+      setState(() => _isSending = true);
+      final bytes = await file.readAsBytes();
+      final r = await widget.apiService.sendImageMessage(_selectedUser['id'], bytes, result.files.first.name);
+      setState(() => _isSending = false);
+      if (r['success']) { _refreshMessages(); } else { _showError('Failed to send image'); }
+    }
+  }
+
+  // ─── Pick & Send File ───
+  Future<void> _pickFile() async {
+    if (_selectedUser == null) return;
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
+    if (result != null && result.files.isNotEmpty) {
+      final pf = result.files.first;
+      if (pf.size > 10 * 1024 * 1024) { _showError('File must be under 10MB'); return; }
+      final file = File(pf.path!);
+      setState(() => _isSending = true);
+      final bytes = await file.readAsBytes();
+      final r = await widget.apiService.sendFileMessage(_selectedUser['id'], bytes, pf.name);
+      setState(() => _isSending = false);
+      if (r['success']) { _refreshMessages(); } else { _showError('Failed to send file'); }
+    }
+  }
+
+  // ─── Play Voice ───
+  Future<void> _playVoice(String url) async {
+    if (_playingUrl == url) { await _audioPlayer.stop(); setState(() => _playingUrl = null); return; }
+    setState(() => _playingUrl = url);
+    await _audioPlayer.play(UrlSource(url));
+    _audioPlayer.onPlayerComplete.listen((_) { if (mounted) setState(() => _playingUrl = null); });
+  }
+
+  void _refreshMessages() {
+    if (_selectedUser != null) { _selectUser(_selectedUser); }
+    else if (_selectedGroup != null) { _selectGroup(_selectedGroup); }
   }
 
   Future<void> _createGroup(String name, String desc, List<int> memberIds) async {
@@ -590,7 +727,20 @@ class _ChatPageState extends State<ChatPage> {
         ),
 
         // ─── Input ───
-        Container(
+        if (_isRecording) Container(
+          padding: EdgeInsets.all(16),
+          decoration: BoxDecoration(color: Color(0x331E293B), border: Border(top: BorderSide(color: _C.glassBorder))),
+          child: Row(children: [
+            Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: _C.red),
+              child: null),
+            SizedBox(width: 8),
+            Text('Recording ${_recordSeconds}s', style: TextStyle(color: _C.red, fontSize: 14, fontWeight: FontWeight.w600)),
+            Spacer(),
+            GestureDetector(onTap: _stopAndSendRecording, child: Container(width: 44, height: 44,
+              decoration: BoxDecoration(color: _C.red, shape: BoxShape.circle),
+              child: Icon(Icons.stop, color: Colors.white, size: 22))),
+          ]),
+        ) else Container(
           padding: EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: Color(0x331E293B),
@@ -598,6 +748,11 @@ class _ChatPageState extends State<ChatPage> {
           ),
           child: Row(
             children: [
+              // Attachment buttons
+              GestureDetector(onTap: _pickImage, child: Padding(padding: EdgeInsets.only(right: 4),
+                child: Icon(Icons.image, color: _C.textMuted, size: 22))),
+              GestureDetector(onTap: _pickFile, child: Padding(padding: EdgeInsets.only(right: 8),
+                child: Icon(Icons.attach_file, color: _C.textMuted, size: 22))),
               Expanded(
                 child: TextField(
                   controller: _msgController,
@@ -623,11 +778,12 @@ class _ChatPageState extends State<ChatPage> {
                     ),
                   ),
                   onSubmitted: (_) => _sendMessage(),
+                  onChanged: (_) => setState(() {}),
                 ),
               ),
               SizedBox(width: 12),
               GestureDetector(
-                onTap: _isSending ? null : _sendMessage,
+                onTap: _isSending ? null : (_msgController.text.trim().isEmpty ? _toggleRecording : _sendMessage),
                 child: Container(
                   width: 44, height: 44,
                   decoration: BoxDecoration(
@@ -640,7 +796,7 @@ class _ChatPageState extends State<ChatPage> {
                           padding: EdgeInsets.all(12),
                           child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                         )
-                      : Icon(Icons.send, color: Colors.white, size: 18),
+                      : Icon(_msgController.text.trim().isEmpty ? Icons.mic : Icons.send, color: Colors.white, size: 18),
                 ),
               ),
             ],
@@ -659,6 +815,11 @@ class _ChatPageState extends State<ChatPage> {
     final time = _formatTime(msg['timestamp'] ?? msg['created_at'] ?? '');
     final isDeleted = msg['is_deleted'] == true;
     final isEdited = msg['edited_at'] != null;
+    final msgType = msg['message_type'] ?? 'text';
+    final voiceUrl = msg['voice_url'];
+    final imageUrl = msg['image_url'];
+    final fileUrl = msg['file_url'];
+    final fileName = msg['file_name'] ?? 'file';
 
     return Align(
       alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
@@ -694,14 +855,37 @@ class _ChatPageState extends State<ChatPage> {
                       color: Colors.white.withOpacity(0.75),
                     )),
                   ),
-                Text(
-                  isDeleted ? '🗑️ This message was deleted' : text,
-                  style: TextStyle(
-                    color: isDeleted ? Colors.white54 : (isOwn ? Colors.white : Color(0xFFE2E8F0)),
-                    fontSize: 14, height: 1.5,
-                    fontStyle: isDeleted ? FontStyle.italic : FontStyle.normal,
-                  ),
-                ),
+                // Message content based on type
+                if (isDeleted) Text('🗑️ This message was deleted', style: TextStyle(color: Colors.white54, fontSize: 14, fontStyle: FontStyle.italic))
+                else if (msgType == 'voice' && voiceUrl != null) GestureDetector(
+                  onTap: () => _playVoice(voiceUrl),
+                  child: Container(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(_playingUrl == voiceUrl ? Icons.stop_circle : Icons.play_circle_fill, color: isOwn ? Colors.white : _C.blue, size: 28),
+                      SizedBox(width: 8),
+                      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text('Voice Message', style: TextStyle(color: isOwn ? Colors.white : Color(0xFFE2E8F0), fontSize: 12, fontWeight: FontWeight.w600)),
+                        Text(_playingUrl == voiceUrl ? 'Playing...' : 'Tap to play', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                      ]),
+                    ])))
+                else if (msgType == 'image' && imageUrl != null) Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  ClipRRect(borderRadius: BorderRadius.circular(8),
+                    child: Image.network(imageUrl, width: 200, fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(width: 200, height: 100, color: Colors.white10, child: Icon(Icons.broken_image, color: Colors.white38)))),
+                  if (text.isNotEmpty) ...[SizedBox(height: 6), Text(text, style: TextStyle(color: isOwn ? Colors.white : Color(0xFFE2E8F0), fontSize: 14))],
+                ])
+                else if (msgType == 'file' && fileUrl != null) Container(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(Icons.insert_drive_file, color: _C.blue, size: 24),
+                    SizedBox(width: 8),
+                    Flexible(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(fileName, style: TextStyle(color: isOwn ? Colors.white : Color(0xFFE2E8F0), fontSize: 12, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text('Tap to download', style: TextStyle(color: Colors.white54, fontSize: 10)),
+                    ])),
+                  ]))
+                else Text(text, style: TextStyle(color: isOwn ? Colors.white : Color(0xFFE2E8F0), fontSize: 14, height: 1.5)),
                 SizedBox(height: 4),
                 Row(
                   mainAxisSize: MainAxisSize.min,

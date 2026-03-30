@@ -39,6 +39,9 @@ dependencies:
   ffi: ^2.1.0
   win32: ^5.15.0
   crypto: ^3.0.3  # For screenshot hash calculation
+  audioplayers: ^6.4.0  # Voice playback
+  file_picker: ^9.2.1  # File/image picker
+  mime: ^2.0.0  # MIME type detection
 
 dev_dependencies:
   flutter_test:
