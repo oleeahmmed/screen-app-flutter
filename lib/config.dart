@@ -39,6 +39,13 @@ class AppConfig {
   // Projects
   static const String projectsUrl = '$apiBaseUrl/projects/';
   
+  // Peer2Peer File Transfer
+  static const String p2pCreateSessionUrl = '$apiBaseUrl/p2p/session/create/';
+  static const String p2pJoinSessionUrl = '$apiBaseUrl/p2p/session/join/';
+  static const String p2pSessionDetailUrl = '$apiBaseUrl/p2p/session/';
+  static const String wsBaseUrl = 'ws://127.0.0.1:8000';
+  static const String p2pWsUrl = '$wsBaseUrl/ws/p2p/';
+  
   static const int screenshotInterval = 30; // seconds
 }
 

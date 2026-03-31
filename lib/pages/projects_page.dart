@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import '../services/api_service.dart';
 
 class ProjectsPage extends StatefulWidget {
@@ -190,6 +192,7 @@ class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTicke
   void _showCreateTaskInStageDialog(int stageId) {
     final nc = TextEditingController(); final dc = TextEditingController();
     String pri = 'medium'; int? assignee; String? due;
+    bool isAttReq = false; PlatformFile? pickedFile;
     showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
       backgroundColor: Color(0xFF1e293b), title: Text('Create Task', style: TextStyle(color: Colors.white)),
       content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -211,10 +214,30 @@ class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTicke
           if (picked != null) setD(() => due = "${picked.year}-${picked.month.toString().padLeft(2,'0')}-${picked.day.toString().padLeft(2,'0')}");
         }, child: Container(padding: EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
           child: Row(children: [Icon(Icons.calendar_today, size: 16, color: Colors.white38), SizedBox(width: 8), Text(due ?? 'Due date', style: TextStyle(color: due != null ? Colors.white : Colors.white30, fontSize: 13))]))),
+        SizedBox(height: 10),
+        // Attachment Required checkbox
+        Row(children: [
+          SizedBox(width: 24, height: 24, child: Checkbox(value: isAttReq, onChanged: (v) => setD(() => isAttReq = v ?? false), activeColor: Color(0xFF8B5CF6), checkColor: Colors.white)),
+          SizedBox(width: 8), Text('Attachment Required', style: TextStyle(color: Colors.white70, fontSize: 13)),
+        ]),
+        SizedBox(height: 10),
+        GestureDetector(
+          onTap: () async { final r = await FilePicker.platform.pickFiles(allowMultiple: false); if (r != null && r.files.isNotEmpty) setD(() => pickedFile = r.files.first); },
+          child: Container(width: double.infinity, padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10), border: Border.all(color: pickedFile != null ? Color(0xFF8B5CF6) : Colors.white12)),
+            child: Row(children: [
+              Icon(pickedFile != null ? Icons.check_circle : Icons.attach_file, color: pickedFile != null ? Color(0xFF22C55E) : Colors.white38, size: 20),
+              SizedBox(width: 8), Expanded(child: Text(pickedFile?.name ?? 'Attach file', style: TextStyle(color: pickedFile != null ? Colors.white : Colors.white30, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis)),
+              if (pickedFile != null) GestureDetector(onTap: () => setD(() => pickedFile = null), child: Icon(Icons.close, color: Colors.white38, size: 16)),
+            ]))),
       ])),
       actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
-        ElevatedButton(onPressed: () async { if (nc.text.trim().isEmpty) return; Navigator.pop(ctx);
-          await widget.apiService.createTask(name: nc.text.trim(), description: dc.text.trim(), priority: pri, dueDate: due, projectId: widget.projectId, stageId: stageId); _load();
+        ElevatedButton(onPressed: () async {
+          if (nc.text.trim().isEmpty) return;
+          Navigator.pop(ctx);
+          List<int>? bytes; if (pickedFile != null && pickedFile!.path != null) bytes = await File(pickedFile!.path!).readAsBytes();
+          await widget.apiService.createTask(name: nc.text.trim(), description: dc.text.trim(), priority: pri, dueDate: due, projectId: widget.projectId, stageId: stageId,
+            isAttachmentRequired: isAttReq, attachmentBytes: bytes, attachmentName: pickedFile?.name); _load();
         }, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF8B5CF6)), child: Text('Create'))],
     )));
   }
@@ -255,12 +278,40 @@ class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTicke
   }
   Widget _buildStats() {
     final s = _project!['stats'] ?? {};
-    return Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
-      _sc('${s["total_tasks"]??0}','Tasks',Color(0xFF64748B)), SizedBox(width: 6), _sc('${s["in_progress_tasks"]??0}','Active',Color(0xFF3B82F6)),
-      SizedBox(width: 6), _sc('${s["completed_tasks"]??0}','Done',Color(0xFF10B981)), SizedBox(width: 6),
-      _sc('${s["total_subtasks"]??0}','Subtasks',Color(0xFF64748B)), SizedBox(width: 6), _sc('${(_project!["completion_percentage"]??0).toInt()}%','Progress',Color(0xFF8B5CF6)),
-    ])));
+    final stageOverview = (_project!['stage_overview'] as List?) ?? [];
+    final doneStageName = s['done_stage_name'] ?? 'Done';
+    return Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
+        _sc('${s["total_tasks"]??0}','Tasks',Color(0xFF64748B)), SizedBox(width: 6),
+        _sc('${s["completed_tasks"]??0}','In $doneStageName',Color(0xFF10B981)), SizedBox(width: 6),
+        _sc('${s["total_subtasks"]??0}','Subtasks',Color(0xFF64748B)), SizedBox(width: 6),
+        _sc('${(_project!["completion_percentage"]??0).toInt()}%','Progress',Color(0xFF8B5CF6)),
+      ])),
+      // Stage Overview
+      if (stageOverview.isNotEmpty) ...[
+        SizedBox(height: 10),
+        SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: stageOverview.map((st) {
+          final tc = st['task_count'] ?? 0;
+          final sc = st['subtask_count'] ?? 0;
+          final sd = st['subtask_done'] ?? 0;
+          final clr = _hexColor(st['color'] ?? '#3B82F6');
+          return Container(margin: EdgeInsets.only(right: 6), padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(color: clr.withOpacity(0.15), borderRadius: BorderRadius.circular(8), border: Border.all(color: clr.withOpacity(0.3))),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(width: 6, height: 6, decoration: BoxDecoration(shape: BoxShape.circle, color: clr)),
+              SizedBox(width: 6),
+              Text('${st["name"]}', style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w600)),
+              SizedBox(width: 4),
+              Container(padding: EdgeInsets.symmetric(horizontal: 5, vertical: 1), decoration: BoxDecoration(color: clr.withOpacity(0.3), borderRadius: BorderRadius.circular(6)),
+                child: Text('$tc', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold))),
+              if (sc > 0) ...[SizedBox(width: 3),
+                Text('$sd/$sc', style: TextStyle(color: Colors.white38, fontSize: 9))],
+            ]));
+        }).toList())),
+      ],
+    ]));
   }
+  Color _hexColor(String hex) { hex = hex.replaceAll('#', ''); if (hex.length == 6) hex = 'FF$hex'; return Color(int.parse(hex, radix: 16)); }
   Widget _sc(String v, String l, Color c) => Container(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(10), border: Border.all(color: c.withOpacity(0.2))),
     child: Column(children: [Text(v, style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)), Text(l, style: TextStyle(color: Colors.white38, fontSize: 9))]));

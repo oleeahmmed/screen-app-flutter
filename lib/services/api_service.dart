@@ -346,12 +346,35 @@ class ApiService {
       request.headers.addAll(headers);
       request.fields['receiver_id'] = userId.toString();
       request.fields['message'] = message;
-      request.files.add(http.MultipartFile.fromBytes('file', fileBytes, filename: filename));
+      // Detect content type from filename extension
+      final ext = filename.split('.').last.toLowerCase();
+      final mimeTypes = {
+        'pdf': 'application/pdf', 'doc': 'application/msword',
+        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'xls': 'application/vnd.ms-excel',
+        'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'ppt': 'application/vnd.ms-powerpoint',
+        'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'txt': 'text/plain', 'csv': 'text/csv', 'json': 'application/json',
+        'zip': 'application/zip', 'rar': 'application/x-rar-compressed',
+        '7z': 'application/x-7z-compressed', 'gz': 'application/gzip',
+        'mp4': 'video/mp4', 'mp3': 'audio/mpeg', 'wav': 'audio/wav',
+        'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+        'gif': 'image/gif', 'webp': 'image/webp',
+      };
+      final mime = mimeTypes[ext] ?? 'application/octet-stream';
+      final parts = mime.split('/');
+      request.files.add(http.MultipartFile.fromBytes('file', fileBytes, filename: filename,
+        contentType: MediaType(parts[0], parts[1])));
       var response = await request.send().timeout(Duration(seconds: 60));
       final body = await response.stream.bytesToString();
+      print('📎 File upload response: ${response.statusCode} - $body');
       if (response.statusCode == 200 || response.statusCode == 201) return {'success': true, 'data': jsonDecode(body)};
-      return {'success': false, 'error': 'Failed: ${response.statusCode}'};
-    } catch (e) { return {'success': false, 'error': '$e'}; }
+      return {'success': false, 'error': 'Failed: ${response.statusCode} - $body'};
+    } catch (e) {
+      print('❌ File send error: $e');
+      return {'success': false, 'error': '$e'};
+    }
   }
 
   Future<Map<String, dynamic>> markMessagesRead(int senderId) async {
@@ -591,24 +614,47 @@ class ApiService {
     String? dueDate,
     int? projectId,
     int? stageId,
+    bool isAttachmentRequired = false,
+    List<int>? attachmentBytes,
+    String? attachmentName,
   }) async {
     try {
-      final body = <String, dynamic>{
-        'name': name,
-        'description': description,
-        'priority': priority,
-      };
-      if (dueDate != null) body['due_date'] = dueDate;
-      if (projectId != null) body['project'] = projectId;
-      if (stageId != null) body['stage'] = stageId;
+      if (attachmentBytes != null && attachmentName != null) {
+        // Multipart upload
+        var request = http.MultipartRequest('POST', Uri.parse(AppConfig.tasksUrl));
+        final headers = _getHeaders(); headers.remove('Content-Type');
+        request.headers.addAll(headers);
+        request.fields['name'] = name;
+        request.fields['description'] = description;
+        request.fields['priority'] = priority;
+        request.fields['is_attachment_required'] = isAttachmentRequired.toString();
+        if (dueDate != null) request.fields['due_date'] = dueDate;
+        if (projectId != null) request.fields['project'] = projectId.toString();
+        if (stageId != null) request.fields['stage'] = stageId.toString();
+        request.files.add(http.MultipartFile.fromBytes('attachment', attachmentBytes, filename: attachmentName));
+        var response = await request.send().timeout(Duration(seconds: 30));
+        final body = await response.stream.bytesToString();
+        if (response.statusCode == 200 || response.statusCode == 201) return {'success': true, 'data': jsonDecode(body)};
+        return {'success': false, 'error': 'Failed: ${response.statusCode} - $body'};
+      } else {
+        final body = <String, dynamic>{
+          'name': name,
+          'description': description,
+          'priority': priority,
+          'is_attachment_required': isAttachmentRequired,
+        };
+        if (dueDate != null) body['due_date'] = dueDate;
+        if (projectId != null) body['project'] = projectId;
+        if (stageId != null) body['stage'] = stageId;
 
-      final response = await http
-          .post(Uri.parse(AppConfig.tasksUrl), headers: _getHeaders(), body: jsonEncode(body))
-          .timeout(Duration(seconds: 10));
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final response = await http
+            .post(Uri.parse(AppConfig.tasksUrl), headers: _getHeaders(), body: jsonEncode(body))
+            .timeout(Duration(seconds: 10));
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          return {'success': true, 'data': jsonDecode(response.body)};
+        }
+        return {'success': false, 'error': 'Failed to create task: ${response.statusCode}'};
       }
-      return {'success': false, 'error': 'Failed to create task: ${response.statusCode}'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -664,22 +710,42 @@ class ApiService {
     String description = '',
     String priority = 'medium',
     String? dueDate,
+    bool isAttachmentRequired = false,
+    List<int>? attachmentBytes,
+    String? attachmentName,
   }) async {
     try {
-      final body = <String, dynamic>{
-        'summary': summary,
-        'description': description,
-        'priority': priority,
-      };
-      if (dueDate != null) body['due_date'] = dueDate;
+      if (attachmentBytes != null && attachmentName != null) {
+        var request = http.MultipartRequest('POST', Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/'));
+        final headers = _getHeaders(); headers.remove('Content-Type');
+        request.headers.addAll(headers);
+        request.fields['summary'] = summary;
+        request.fields['description'] = description;
+        request.fields['priority'] = priority;
+        request.fields['is_attachment_required'] = isAttachmentRequired.toString();
+        if (dueDate != null) request.fields['due_date'] = dueDate;
+        request.files.add(http.MultipartFile.fromBytes('attachment', attachmentBytes, filename: attachmentName));
+        var response = await request.send().timeout(Duration(seconds: 30));
+        final body = await response.stream.bytesToString();
+        if (response.statusCode == 200 || response.statusCode == 201) return {'success': true, 'data': jsonDecode(body)};
+        return {'success': false, 'error': 'Failed: ${response.statusCode} - $body'};
+      } else {
+        final body = <String, dynamic>{
+          'summary': summary,
+          'description': description,
+          'priority': priority,
+          'is_attachment_required': isAttachmentRequired,
+        };
+        if (dueDate != null) body['due_date'] = dueDate;
 
-      final response = await http
-          .post(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/'), headers: _getHeaders(), body: jsonEncode(body))
-          .timeout(Duration(seconds: 10));
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final response = await http
+            .post(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/'), headers: _getHeaders(), body: jsonEncode(body))
+            .timeout(Duration(seconds: 10));
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          return {'success': true, 'data': jsonDecode(response.body)};
+        }
+        return {'success': false, 'error': 'Failed to create subtask'};
       }
-      return {'success': false, 'error': 'Failed to create subtask'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1146,6 +1212,61 @@ class ApiService {
     } catch (e) {
       print('❌ Upload photo error: $e');
       return {'success': false, 'error': 'Upload error: $e'};
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Peer-to-Peer File Transfer APIs
+  // ═══════════════════════════════════════════════════════════════
+
+  String? get token => _token;
+
+  Future<Map<String, dynamic>> p2pCreateSession({String fileName = '', int fileSize = 0, int? receiverId}) async {
+    try {
+      final body = <String, dynamic>{
+        'file_name': fileName,
+        'file_size': fileSize,
+      };
+      if (receiverId != null) body['receiver_id'] = receiverId;
+
+      final response = await http
+          .post(Uri.parse(AppConfig.p2pCreateSessionUrl), headers: _getHeaders(), body: jsonEncode(body))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to create session: ${response.statusCode}'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> p2pJoinSession(String sessionId) async {
+    try {
+      final response = await http
+          .post(Uri.parse(AppConfig.p2pJoinSessionUrl), headers: _getHeaders(), body: jsonEncode({'session_id': sessionId}))
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      final body = jsonDecode(response.body);
+      return {'success': false, 'error': body['error'] ?? 'Failed to join'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> p2pGetSession(String sessionId) async {
+    try {
+      final response = await http
+          .get(Uri.parse('${AppConfig.p2pSessionDetailUrl}$sessionId/'), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Session not found'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
     }
   }
 }

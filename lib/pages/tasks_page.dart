@@ -2,6 +2,8 @@
 
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import '../services/api_service.dart';
 
 class TasksPage extends StatefulWidget {
@@ -71,6 +73,8 @@ class _TasksPageState extends State<TasksPage> {
     final nameCtrl = TextEditingController();
     final descCtrl = TextEditingController();
     String priority = 'medium';
+    bool isAttachmentRequired = false;
+    PlatformFile? pickedFile;
 
     showDialog(
       context: context,
@@ -87,6 +91,43 @@ class _TasksPageState extends State<TasksPage> {
                 _dialogTextField(descCtrl, 'Description', maxLines: 3),
                 SizedBox(height: 12),
                 _prioritySelector(priority, (v) => setDialogState(() => priority = v)),
+                SizedBox(height: 12),
+                // Attachment Required checkbox
+                Row(children: [
+                  SizedBox(width: 24, height: 24, child: Checkbox(
+                    value: isAttachmentRequired,
+                    onChanged: (v) => setDialogState(() => isAttachmentRequired = v ?? false),
+                    activeColor: Color(0xFF3B82F6), checkColor: Colors.white,
+                  )),
+                  SizedBox(width: 8),
+                  Text('Attachment Required', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                ]),
+                SizedBox(height: 12),
+                // File picker
+                GestureDetector(
+                  onTap: () async {
+                    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
+                    if (result != null && result.files.isNotEmpty) {
+                      setDialogState(() => pickedFile = result.files.first);
+                    }
+                  },
+                  child: Container(
+                    width: double.infinity, padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: pickedFile != null ? Color(0xFF3B82F6) : Colors.white12)),
+                    child: Row(children: [
+                      Icon(pickedFile != null ? Icons.check_circle : Icons.attach_file,
+                        color: pickedFile != null ? Color(0xFF22C55E) : Colors.white38, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(child: Text(pickedFile?.name ?? 'Attach file (optional)',
+                        style: TextStyle(color: pickedFile != null ? Colors.white : Colors.white38, fontSize: 13),
+                        maxLines: 1, overflow: TextOverflow.ellipsis)),
+                      if (pickedFile != null) GestureDetector(
+                        onTap: () => setDialogState(() => pickedFile = null),
+                        child: Icon(Icons.close, color: Colors.white38, size: 16)),
+                    ]),
+                  ),
+                ),
               ],
             ),
           ),
@@ -96,10 +137,17 @@ class _TasksPageState extends State<TasksPage> {
               onPressed: () async {
                 if (nameCtrl.text.trim().isEmpty) return;
                 Navigator.pop(ctx);
+                List<int>? bytes;
+                if (pickedFile != null && pickedFile!.path != null) {
+                  bytes = await File(pickedFile!.path!).readAsBytes();
+                }
                 await widget.apiService.createTask(
                   name: nameCtrl.text.trim(),
                   description: descCtrl.text.trim(),
                   priority: priority,
+                  isAttachmentRequired: isAttachmentRequired,
+                  attachmentBytes: bytes,
+                  attachmentName: pickedFile?.name,
                 );
                 _loadTasks();
               },
@@ -394,6 +442,8 @@ class _TaskCardState extends State<_TaskCard> {
     final summaryCtrl = TextEditingController();
     final descCtrl = TextEditingController();
     String priority = 'medium';
+    bool isAttachmentRequired = false;
+    PlatformFile? pickedFile;
 
     showDialog(
       context: context,
@@ -408,6 +458,41 @@ class _TaskCardState extends State<_TaskCard> {
               _dialogField(descCtrl, 'Description', maxLines: 2),
               SizedBox(height: 12),
               _miniPrioritySelector(priority, (v) => setDialogState(() => priority = v)),
+              SizedBox(height: 12),
+              Row(children: [
+                SizedBox(width: 24, height: 24, child: Checkbox(
+                  value: isAttachmentRequired,
+                  onChanged: (v) => setDialogState(() => isAttachmentRequired = v ?? false),
+                  activeColor: Color(0xFF3B82F6), checkColor: Colors.white,
+                )),
+                SizedBox(width: 8),
+                Text('Attachment Required', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              ]),
+              SizedBox(height: 12),
+              GestureDetector(
+                onTap: () async {
+                  final result = await FilePicker.platform.pickFiles(allowMultiple: false);
+                  if (result != null && result.files.isNotEmpty) {
+                    setDialogState(() => pickedFile = result.files.first);
+                  }
+                },
+                child: Container(
+                  width: double.infinity, padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: pickedFile != null ? Color(0xFF3B82F6) : Colors.white12)),
+                  child: Row(children: [
+                    Icon(pickedFile != null ? Icons.check_circle : Icons.attach_file,
+                      color: pickedFile != null ? Color(0xFF22C55E) : Colors.white38, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(child: Text(pickedFile?.name ?? 'Attach file (optional)',
+                      style: TextStyle(color: pickedFile != null ? Colors.white : Colors.white38, fontSize: 13),
+                      maxLines: 1, overflow: TextOverflow.ellipsis)),
+                    if (pickedFile != null) GestureDetector(
+                      onTap: () => setDialogState(() => pickedFile = null),
+                      child: Icon(Icons.close, color: Colors.white38, size: 16)),
+                  ]),
+                ),
+              ),
             ]),
           ),
           actions: [
@@ -416,11 +501,18 @@ class _TaskCardState extends State<_TaskCard> {
               onPressed: () async {
                 if (summaryCtrl.text.trim().isEmpty) return;
                 Navigator.pop(ctx);
+                List<int>? bytes;
+                if (pickedFile != null && pickedFile!.path != null) {
+                  bytes = await File(pickedFile!.path!).readAsBytes();
+                }
                 await widget.apiService.createSubTask(
                   widget.task['id'],
                   summary: summaryCtrl.text.trim(),
                   description: descCtrl.text.trim(),
                   priority: priority,
+                  isAttachmentRequired: isAttachmentRequired,
+                  attachmentBytes: bytes,
+                  attachmentName: pickedFile?.name,
                 );
                 _loadSubtasks();
                 widget.onRefresh();

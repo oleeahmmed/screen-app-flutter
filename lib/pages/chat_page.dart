@@ -266,7 +266,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       final bytes = await file.readAsBytes();
       final r = await widget.apiService.sendFileMessage(_selectedUser['id'], bytes, pf.name);
       setState(() => _isSending = false);
-      if (r['success']) { _refreshMessages(); } else { _showError('Failed to send file'); }
+      if (r['success']) { _refreshMessages(); } else { _showError(r['error'] ?? 'Failed to send file'); }
     }
   }
 
