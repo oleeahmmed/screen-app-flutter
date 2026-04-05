@@ -1,9 +1,9 @@
-// config.dart — build-time overrides: --dart-define=API_ORIGIN=https://api.example.com
+// config.dart — build-time overrides: --dart-define=API_ORIGIN=http://127.0.0.1:8000
 
 class AppConfig {
   static const String _apiOrigin = String.fromEnvironment(
     'API_ORIGIN',
-    defaultValue: 'http://127.0.0.1:8000',
+    defaultValue: 'https://aims.igenhr.com',
   );
 
   static const int screenshotInterval = int.fromEnvironment(
