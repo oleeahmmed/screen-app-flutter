@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
+import '../app_session.dart';
 import '../services/api_service.dart';
 
 class LoginPage extends StatefulWidget {
@@ -81,6 +82,29 @@ class _LoginPageState extends State<LoginPage> {
       await prefs.setString('subscription_plan', data['subscription']?['plan'] ?? '');
       await prefs.setString('subscription_status', data['subscription']?['status'] ?? '');
       await prefs.setBool('access_granted', data['access_granted'] ?? false);
+      final emp = data['employee'];
+      final consent = emp?['screenshot_monitoring_consent'] == true;
+      await prefs.setBool('screenshot_monitoring_consent', consent);
+      AppSession.setConsent(consent);
+      int intVal(dynamic v, int d) {
+        if (v is int) return v;
+        if (v is String) return int.tryParse(v) ?? d;
+        return d;
+      }
+      final sv = intVal(data['data_privacy_notice_version'], AppConfig.dataPrivacyNoticeVersion);
+      await prefs.setInt('data_privacy_notice_server_version', sv);
+      if (emp is Map) {
+        await prefs.setInt(
+          'data_privacy_notice_accepted_version',
+          intVal(emp['data_privacy_notice_accepted_version'], 0),
+        );
+      } else {
+        await prefs.setInt('data_privacy_notice_accepted_version', sv);
+      }
+      final p = data['profile_photo']?.toString();
+      if (p != null && p.isNotEmpty) {
+        await prefs.setString('profile_photo_url', p);
+      }
       
       print('💾 User data saved to SharedPreferences');
       

@@ -2,7 +2,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
+import '../app_session.dart';
 import '../services/api_service.dart';
 import '../services/screenshot_service.dart';
 import '../services/user_data_service.dart';
@@ -11,11 +13,13 @@ class DashboardPage extends StatefulWidget {
   final ApiService apiService;
   final String username;
   final ScreenshotService? screenshotService;
+  final int refreshToken;
 
   const DashboardPage({
     required this.apiService,
     required this.username,
     this.screenshotService,
+    this.refreshToken = 0,
   });
 
   @override
@@ -69,9 +73,25 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   @override
+  void didUpdateWidget(covariant DashboardPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshToken != widget.refreshToken) {
+      _syncConsentFromPrefs();
+    }
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _recordUserActivity();
+    _syncConsentFromPrefs();
+  }
+
+  Future<void> _syncConsentFromPrefs() async {
+    final p = await SharedPreferences.getInstance();
+    final c = p.getBool('screenshot_monitoring_consent') ?? false;
+    AppSession.setConsent(c);
+    if (mounted) setState(() {});
   }
 
   void _recordUserActivity() {
@@ -118,11 +138,16 @@ class _DashboardPageState extends State<DashboardPage> {
             _isClockedIn = true;
             _clockInTime = DateTime.now();
           });
-          
-          // Start screenshot capture on checkin (silently)
-          widget.screenshotService?.startCapture();
-          
-          _showSnackBar('✓ Checked in successfully', Colors.green);
+
+          if (AppSession.mayCaptureScreenshots) {
+            widget.screenshotService?.startCapture();
+            _showSnackBar('✓ Checked in — screenshot monitoring active', Colors.green);
+          } else {
+            _showSnackBar(
+              '✓ Checked in — screenshots off (enable under Me → Profile)',
+              Colors.amber.shade700,
+            );
+          }
         } else {
           // Show detailed error message
           final errorMsg = result['error'] ?? 'Check-in failed';
@@ -230,6 +255,27 @@ class _DashboardPageState extends State<DashboardPage> {
                         ),
                       ),
                       Icon(Icons.menu, color: Colors.white, size: 24),
+                    ],
+                  ),
+                  SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _statusChip(
+                        _isClockedIn ? 'Clocked in' : 'Clocked out',
+                        _isClockedIn ? const Color(0xFF22C55E) : Colors.white24,
+                      ),
+                      _statusChip(
+                        AppSession.mayCaptureScreenshots
+                            ? 'Screenshots allowed'
+                            : 'Screenshots off',
+                        AppSession.mayCaptureScreenshots
+                            ? const Color(0xFF2DD4BF)
+                            : const Color(0xFFF59E0B),
+                      ),
+                      if (widget.screenshotService?.isRunning == true)
+                        _statusChip('Live capture', const Color(0xFF6366F1)),
                     ],
                   ),
                   SizedBox(height: 16),
@@ -450,6 +496,25 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _statusChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.22),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.45)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );

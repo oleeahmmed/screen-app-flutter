@@ -29,6 +29,33 @@ class ApiService {
     };
   }
 
+  Map<String, String> _authHeaderOnly() {
+    return {
+      if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
+    };
+  }
+
+  /// DRF JSON: `{ "error": "..." }` or field errors `{"summary":["..."]}`.
+  String _parseApiErrorBody(String body, int code) {
+    try {
+      final d = jsonDecode(body);
+      if (d is Map<String, dynamic>) {
+        final e = d['error'] ?? d['detail'];
+        if (e != null) return e is String ? e : e.toString();
+        final buf = StringBuffer();
+        d.forEach((k, v) {
+          if (v is List) {
+            buf.write('$k: ${v.join(", ")} ');
+          } else if (v != null) {
+            buf.write('$k: $v ');
+          }
+        });
+        if (buf.isNotEmpty) return buf.toString().trim();
+      }
+    } catch (_) {}
+    return 'Request failed ($code)';
+  }
+
   Future<Map<String, dynamic>> login(String email, String password) async {
     try {
       print('🔐 Logging in with: $email');
@@ -220,14 +247,109 @@ class ApiService {
             Uri.parse('${AppConfig.tasksUrl}$taskId/toggle/'),
             headers: _getHeaders(),
           )
-          .timeout(Duration(seconds: 10));
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
-      return {'success': false, 'error': 'Failed to toggle task'};
+      var err = 'Failed to toggle task';
+      try {
+        final d = jsonDecode(response.body);
+        if (d is Map && d['error'] != null) err = d['error'].toString();
+      } catch (_) {}
+      return {'success': false, 'error': err};
     } catch (e) {
       return {'success': false, 'error': 'Toggle error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getTaskAttachments(int taskId) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse('${AppConfig.tasksUrl}$taskId/attachments/'),
+            headers: _getHeaders(),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'data': data is List ? data : <dynamic>[]};
+      }
+      return {'success': false, 'error': 'Failed to load attachments'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadTaskAttachment(
+    int taskId,
+    List<int> bytes,
+    String filename,
+  ) async {
+    try {
+      final uri = Uri.parse('${AppConfig.tasksUrl}$taskId/attachments/');
+      final request = http.MultipartRequest('POST', uri);
+      request.headers.addAll(_authHeaderOnly());
+      request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+      final streamed = await request.send().timeout(const Duration(seconds: 120));
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      var err = 'Upload failed';
+      try {
+        final d = jsonDecode(response.body);
+        if (d is Map && d['error'] != null) err = d['error'].toString();
+      } catch (_) {}
+      return {'success': false, 'error': err};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getSubTaskAttachments(int taskId, int subtaskId) async {
+    try {
+      final url =
+          '${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/attachments/';
+      final response = await http
+          .get(Uri.parse(url), headers: _getHeaders())
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'data': data is List ? data : <dynamic>[]};
+      }
+      return {'success': false, 'error': 'Failed to load attachments'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadSubTaskAttachment(
+    int taskId,
+    int subtaskId,
+    List<int> bytes,
+    String filename,
+  ) async {
+    try {
+      final uri = Uri.parse(
+        '${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/attachments/',
+      );
+      final request = http.MultipartRequest('POST', uri);
+      request.headers.addAll(_authHeaderOnly());
+      request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+      final streamed = await request.send().timeout(const Duration(seconds: 120));
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      var err = 'Upload failed';
+      try {
+        final d = jsonDecode(response.body);
+        if (d is Map && d['error'] != null) err = d['error'].toString();
+      } catch (_) {}
+      return {'success': false, 'error': err};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
     }
   }
 
@@ -669,7 +791,14 @@ class ApiService {
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
-      return {'success': false, 'error': 'Failed to update task'};
+      try {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        final err = body['error'] ?? body['detail'];
+        if (err != null) {
+          return {'success': false, 'error': err is String ? err : err.toString()};
+        }
+      } catch (_) {}
+      return {'success': false, 'error': 'Failed to update task (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -684,7 +813,14 @@ class ApiService {
       if (response.statusCode == 204 || response.statusCode == 200) {
         return {'success': true};
       }
-      return {'success': false, 'error': 'Failed to delete task'};
+      try {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        final err = body['error'] ?? body['detail'];
+        if (err != null) {
+          return {'success': false, 'error': err is String ? err : err.toString()};
+        }
+      } catch (_) {}
+      return {'success': false, 'error': 'Failed to delete task (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -709,6 +845,8 @@ class ApiService {
     required String summary,
     String description = '',
     String priority = 'medium',
+    String status = 'to_do',
+    int? assigneeId,
     String? dueDate,
     bool isAttachmentRequired = false,
     List<int>? attachmentBytes,
@@ -722,21 +860,25 @@ class ApiService {
         request.fields['summary'] = summary;
         request.fields['description'] = description;
         request.fields['priority'] = priority;
+        request.fields['status'] = status;
         request.fields['is_attachment_required'] = isAttachmentRequired.toString();
         if (dueDate != null) request.fields['due_date'] = dueDate;
+        if (assigneeId != null) request.fields['assignee_id'] = assigneeId.toString();
         request.files.add(http.MultipartFile.fromBytes('attachment', attachmentBytes, filename: attachmentName));
         var response = await request.send().timeout(Duration(seconds: 30));
         final body = await response.stream.bytesToString();
         if (response.statusCode == 200 || response.statusCode == 201) return {'success': true, 'data': jsonDecode(body)};
-        return {'success': false, 'error': 'Failed: ${response.statusCode} - $body'};
+        return {'success': false, 'error': _parseApiErrorBody(body, response.statusCode)};
       } else {
         final body = <String, dynamic>{
           'summary': summary,
           'description': description,
           'priority': priority,
+          'status': status,
           'is_attachment_required': isAttachmentRequired,
         };
         if (dueDate != null) body['due_date'] = dueDate;
+        if (assigneeId != null) body['assignee_id'] = assigneeId;
 
         final response = await http
             .post(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/'), headers: _getHeaders(), body: jsonEncode(body))
@@ -744,7 +886,7 @@ class ApiService {
         if (response.statusCode == 200 || response.statusCode == 201) {
           return {'success': true, 'data': jsonDecode(response.body)};
         }
-        return {'success': false, 'error': 'Failed to create subtask'};
+        return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
       }
     } catch (e) {
       return {'success': false, 'error': '$e'};
@@ -759,7 +901,14 @@ class ApiService {
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
-      return {'success': false, 'error': 'Failed to update subtask'};
+      try {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        final err = body['error'] ?? body['detail'];
+        if (err != null) {
+          return {'success': false, 'error': err is String ? err : err.toString()};
+        }
+      } catch (_) {}
+      return {'success': false, 'error': 'Failed to update subtask (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -782,12 +931,20 @@ class ApiService {
   Future<Map<String, dynamic>> toggleSubTask(int taskId, int subtaskId) async {
     try {
       final response = await http
-          .post(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/toggle/'), headers: _getHeaders())
-          .timeout(Duration(seconds: 10));
+          .post(
+            Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/toggle/'),
+            headers: _getHeaders(),
+          )
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
-      return {'success': false, 'error': 'Failed to toggle subtask'};
+      var err = 'Failed to toggle subtask';
+      try {
+        final d = jsonDecode(response.body);
+        if (d is Map && d['error'] != null) err = d['error'].toString();
+      } catch (_) {}
+      return {'success': false, 'error': err};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -866,15 +1023,87 @@ class ApiService {
   }
 
   // ─── Project APIs ───
-  Future<Map<String, dynamic>> getProjects() async {
+  Future<Map<String, dynamic>> getProjectFiltersMeta() async {
     try {
       final response = await http
-          .get(Uri.parse(AppConfig.projectsUrl), headers: _getHeaders())
+          .get(Uri.parse(AppConfig.projectsMetaUrl), headers: _getHeaders())
           .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body) as Map<String, dynamic>};
+      }
+      return {'success': false, 'error': 'Failed to load filter options'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  /// Query params mirror web monitor: archived, customer_id, user_id, project_department_id, status, priority, search, sort.
+  Future<Map<String, dynamic>> getProjects({
+    bool archived = false,
+    int? customerId,
+    int? userId,
+    int? projectDepartmentId,
+    String? status,
+    String? priority,
+    String? search,
+    String sort = 'newest',
+  }) async {
+    try {
+      final params = <String, String>{'sort': sort};
+      if (archived) params['archived'] = '1';
+      if (customerId != null) params['customer_id'] = '$customerId';
+      if (userId != null) params['user_id'] = '$userId';
+      if (projectDepartmentId != null) {
+        params['project_department_id'] = '$projectDepartmentId';
+      }
+      if (status != null && status.isNotEmpty) params['status'] = status;
+      if (priority != null && priority.isNotEmpty) params['priority'] = priority;
+      if (search != null && search.trim().isNotEmpty) params['search'] = search.trim();
+
+      final uri = Uri.parse(AppConfig.projectsUrl).replace(queryParameters: params);
+      final response = await http
+          .get(uri, headers: _getHeaders())
+          .timeout(Duration(seconds: 15));
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
       return {'success': false, 'error': 'Failed to load projects'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> archiveProject(int projectId) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.projectArchiveUrl(projectId)),
+            headers: _getHeaders(),
+            body: jsonEncode({}),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': response.body};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> restoreProject(int projectId) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.projectRestoreUrl(projectId)),
+            headers: _getHeaders(),
+            body: jsonEncode({}),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': response.body};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -998,10 +1227,19 @@ class ApiService {
   Future<Map<String, dynamic>> moveTask(int taskId, int stageId) async {
     try {
       final response = await http
-          .post(Uri.parse('${AppConfig.tasksUrl}$taskId/move/'), headers: _getHeaders(), body: jsonEncode({'stage_id': stageId}))
-          .timeout(Duration(seconds: 10));
+          .post(
+            Uri.parse('${AppConfig.tasksUrl}$taskId/move/'),
+            headers: _getHeaders(),
+            body: jsonEncode({'stage_id': stageId}),
+          )
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) return {'success': true};
-      return {'success': false, 'error': 'Failed to move task'};
+      var err = 'Failed to move task';
+      try {
+        final d = jsonDecode(response.body);
+        if (d is Map && d['error'] != null) err = d['error'].toString();
+      } catch (_) {}
+      return {'success': false, 'error': err};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1020,6 +1258,30 @@ class ApiService {
         return {'success': false, 'data': jsonDecode(response.body), 'error': 'Access denied'};
       }
       return {'success': false, 'error': 'Access check failed: ${response.statusCode}'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  /// Accept current data & monitoring notice (JWT). Sets server-side accepted version + optional screenshot consent.
+  Future<Map<String, dynamic>> acceptPrivacyNotice({bool screenshotMonitoringConsent = true}) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.privacyNoticeAcceptUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({'screenshot_monitoring_consent': screenshotMonitoringConsent}),
+          )
+          .timeout(const Duration(seconds: 15));
+      final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+      if (response.statusCode == 200 && raw is Map) {
+        return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+      }
+      final errMap = raw is Map ? raw : null;
+      return {
+        'success': false,
+        'error': errMap != null ? (errMap['error'] ?? errMap['detail'] ?? 'Request failed') : 'Request failed',
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1144,6 +1406,35 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> patchUserProfile(Map<String, dynamic> body) async {
+    try {
+      final response = await http
+          .patch(
+            Uri.parse(AppConfig.profileUrl),
+            headers: _getHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      String err = 'Update failed (${response.statusCode})';
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map && decoded['error'] != null) {
+          err = '${decoded['error']}';
+        } else if (decoded is Map && decoded['detail'] != null) {
+          err = '${decoded['detail']}';
+        }
+      } catch (_) {
+        if (response.body.isNotEmpty) err = response.body;
+      }
+      return {'success': false, 'error': err};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> updateUserProfile({
     required String email,
     String? firstName,
@@ -1185,7 +1476,7 @@ class ApiService {
         Uri.parse(AppConfig.uploadPhotoUrl),
       );
 
-      request.headers.addAll(_getHeaders());
+      request.headers.addAll(_authHeaderOnly());
       
       // Add file
       request.files.add(

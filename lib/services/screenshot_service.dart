@@ -10,6 +10,8 @@ import 'package:win32/win32.dart';
 import 'package:ffi/ffi.dart';
 import 'api_service.dart';
 import 'activity_detection_service.dart';
+import '../config.dart';
+import '../app_session.dart';
 
 class ScreenshotService {
   final ApiService apiService;
@@ -47,8 +49,8 @@ class ScreenshotService {
     _debugLog('🚀 Win32 API Silent Screenshot service started');
     _debugLog('📸 Will capture all displays every 30 seconds using PowerShell');
 
-    // Screenshot capture every 30 seconds
-    _screenshotTimer = Timer.periodic(Duration(seconds: 30), (_) async {
+    final interval = AppConfig.screenshotInterval.clamp(15, 600);
+    _screenshotTimer = Timer.periodic(Duration(seconds: interval), (_) async {
       _debugLog('⏰ Timer triggered - capturing with PowerShell...');
       await _captureWithPowerShell();
     });
@@ -65,7 +67,11 @@ class ScreenshotService {
 
   Future<void> _captureWithPowerShell() async {
     if (!_isRunning) return;
-    
+    if (!AppSession.mayCaptureScreenshots) {
+      _debugLog('⏸️ Screenshot capture skipped (no user consent)');
+      return;
+    }
+
     try {
       _captureCount++;
       _debugLog('📸 Capture #$_captureCount - Using PowerShell silent capture...');

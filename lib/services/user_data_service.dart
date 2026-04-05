@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class UserDataService {
   // Get all user data
-  static Future<Map<String, String>> getUserData() async {
+  static Future<Map<String, dynamic>> getUserData() async {
     final prefs = await SharedPreferences.getInstance();
     
     return {
@@ -19,6 +19,11 @@ class UserDataService {
       'company_name': prefs.getString('company_name') ?? '',
       'subscription_plan': prefs.getString('subscription_plan') ?? '',
       'subscription_status': prefs.getString('subscription_status') ?? '',
+      'profile_photo_url': prefs.getString('profile_photo_url') ?? '',
+      'screenshot_monitoring_consent':
+          prefs.getBool('screenshot_monitoring_consent') ?? false,
+      'notification_sound_enabled':
+          prefs.getBool('notification_sound_enabled') ?? true,
     };
   }
   
@@ -120,9 +125,9 @@ class UserDataService {
     final data = await getUserData();
     print('👤 Current User Data:');
     data.forEach((key, value) {
-      if (value.isNotEmpty && key != 'auth_token' && key != 'refresh_token') {
-        print('  $key: $value');
-      }
+      if (key == 'auth_token' || key == 'refresh_token') return;
+      if (value is String && value.isEmpty) return;
+      print('  $key: $value');
     });
     
     final isAdmin = await UserDataService.isAdmin();

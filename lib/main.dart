@@ -1,77 +1,82 @@
-// main.dart - Main App with Fixed Window Size
-
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
+
+import 'app_session.dart';
 import 'config.dart';
+import 'theme/app_theme.dart';
 import 'services/api_service.dart';
 import 'services/screenshot_service.dart';
+import 'services/notification_sound.dart';
 import 'pages/login_page.dart';
 import 'pages/dashboard_page.dart';
-import 'pages/tasks_page.dart';
-import 'pages/projects_page.dart';
+import 'pages/work_hub_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/notifications_page.dart';
+import 'pages/profile_page.dart';
 import 'pages/peer2peer_page.dart';
+import 'widgets/privacy_notice_dialog.dart';
+
+int _intFromDynamic(dynamic v, int fallback) {
+  if (v is int) return v;
+  if (v is String) return int.tryParse(v) ?? fallback;
+  return fallback;
+}
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  AppSession.screenshotIntervalSeconds = AppConfig.screenshotInterval;
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp();
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'iGenHR',
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-      ),
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.dark(),
       home: const MainScreen(),
     );
   }
 }
 
 class MainScreen extends StatefulWidget {
-  const MainScreen();
+  const MainScreen({super.key});
 
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
 class _MainScreenState extends State<MainScreen> {
-  late ApiService _apiService;
-  late ScreenshotService _screenshotService;
+  late final ApiService _apiService = ApiService();
+  late final ScreenshotService _screenshotService = ScreenshotService(_apiService);
   bool _isLoggedIn = false;
   String _username = '';
   int _currentIndex = 0;
   bool _isLoading = true;
   int _unreadNotifs = 0;
+  int? _prevUnreadForSound;
+  int _homeRefreshToken = 0;
 
   @override
   void initState() {
     super.initState();
-    _apiService = ApiService();
-    _screenshotService = ScreenshotService(_apiService);
     _initializeApp();
-    _setWindowSize();
-  }
-  
-  Future<void> _initializeApp() async {
-    // Initialize API service with saved token
-    await _apiService.initToken();
-    // Check login status
-    await _checkLoginStatus();
-  }
-
-  void _setWindowSize() {
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        print('🖥️ Desktop app - Window size: 620x720');
+        debugPrint('Desktop build — API: ${AppConfig.apiBaseUrl}');
       });
     }
+  }
+
+  Future<void> _initializeApp() async {
+    await _apiService.initToken();
+    final prefs = await SharedPreferences.getInstance();
+    AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
+    await _checkLoginStatus();
   }
 
   Future<void> _checkLoginStatus() async {
@@ -80,29 +85,36 @@ class _MainScreenState extends State<MainScreen> {
     final username = prefs.getString('username');
     final accessGranted = prefs.getBool('access_granted') ?? false;
 
-    print('🔍 Checking login status...');
-    print('  Token exists: ${token != null && token.isNotEmpty}');
-    print('  Username: $username');
-    print('  Access granted: $accessGranted');
-
     if (token != null && username != null && token.isNotEmpty) {
       _apiService.setToken(token);
-      
-      // Verify token is still valid by calling access-check API
       try {
         final result = await _apiService.accessCheck();
         if (result['success']) {
           final data = result['data'];
           if (data['access_granted'] == true) {
-            // Update stored user data from server response
             if (data['user'] != null) {
               await prefs.setString('user_id', data['user']['id']?.toString() ?? '');
               await prefs.setString('email', data['user']['email'] ?? '');
               await prefs.setString('full_name', data['user']['full_name'] ?? username);
             }
             if (data['employee'] != null) {
-              await prefs.setString('designation', data['employee']['designation'] ?? '');
-              await prefs.setBool('is_admin', data['employee']['is_admin'] ?? false);
+              final emp = data['employee'];
+              await prefs.setString('designation', emp['designation'] ?? '');
+              await prefs.setBool('is_admin', emp['is_admin'] ?? false);
+              final c = emp['screenshot_monitoring_consent'] == true;
+              await prefs.setBool('screenshot_monitoring_consent', c);
+              AppSession.setConsent(c);
+              await prefs.setInt(
+                'data_privacy_notice_accepted_version',
+                _intFromDynamic(emp['data_privacy_notice_accepted_version'], 0),
+              );
+            }
+            await prefs.setInt(
+              'data_privacy_notice_server_version',
+              _intFromDynamic(data['data_privacy_notice_version'], AppConfig.dataPrivacyNoticeVersion),
+            );
+            if (data['profile_photo'] != null) {
+              await prefs.setString('profile_photo_url', data['profile_photo'].toString());
             }
             if (data['company'] != null) {
               await prefs.setString('company_id', data['company']['id']?.toString() ?? '');
@@ -113,89 +125,130 @@ class _MainScreenState extends State<MainScreen> {
               await prefs.setString('subscription_status', data['subscription']['status'] ?? '');
             }
             await prefs.setBool('access_granted', true);
-            
+            if (!mounted) return;
             setState(() {
               _isLoggedIn = true;
               _username = username;
               _isLoading = false;
             });
-            print('✅ Token valid, user data refreshed: $username');
             _pollNotifCount();
-            return;
-          } else {
-            // Access denied - clear data and go to login
-            print('❌ Access denied: ${data['message']}');
-            await prefs.clear();
-            setState(() => _isLoading = false);
+            if (data['employee'] != null) {
+              _schedulePrivacyNoticeDialog();
+            } else {
+              final sv = _intFromDynamic(
+                data['data_privacy_notice_version'],
+                AppConfig.dataPrivacyNoticeVersion,
+              );
+              await prefs.setInt('data_privacy_notice_server_version', sv);
+              await prefs.setInt('data_privacy_notice_accepted_version', sv);
+            }
             return;
           }
-        } else {
-          // Token expired or invalid - clear and go to login
-          print('❌ Token invalid/expired, redirecting to login');
           await prefs.clear();
+          if (!mounted) return;
           setState(() => _isLoading = false);
           return;
         }
+        await prefs.clear();
+        if (!mounted) return;
+        setState(() => _isLoading = false);
       } catch (e) {
-        // Network error - use cached data if access was granted before
-        print('⚠️ Network error during access check: $e');
         if (accessGranted) {
+          AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
+          if (!mounted) return;
           setState(() {
             _isLoggedIn = true;
             _username = username;
             _isLoading = false;
           });
-          print('✅ Using cached login data: $username');
           _pollNotifCount();
           return;
         }
         await prefs.clear();
+        if (!mounted) return;
         setState(() => _isLoading = false);
-        return;
       }
     } else {
-      print('❌ No saved login found');
+      if (!mounted) return;
       setState(() => _isLoading = false);
     }
   }
 
   Future<void> _handleLoginSuccess(String username, String token) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_token', token);
-    await prefs.setString('username', username);
-
+    await SharedPreferences.getInstance().then((p) async {
+      await p.setString('auth_token', token);
+      await p.setString('username', username);
+    });
+    if (!mounted) return;
     setState(() {
       _isLoggedIn = true;
       _username = username;
       _currentIndex = 0;
     });
-    
-    // Screenshot will start when user clicks "Clock In" button
-    print('✅ Login successful');
     _pollNotifCount();
+    _schedulePrivacyNoticeDialog();
   }
 
-  void _pollNotifCount() async {
+  /// Show first-run style dialog when server notice version is newer than accepted.
+  void _schedulePrivacyNoticeDialog() {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !_isLoggedIn) return;
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      final av = prefs.getInt('data_privacy_notice_accepted_version') ?? 0;
+      final sv = prefs.getInt('data_privacy_notice_server_version') ?? AppConfig.dataPrivacyNoticeVersion;
+      if (av >= sv) return;
+      if (!mounted) return;
+      await showPrivacyNoticeDialog(context: context, apiService: _apiService);
+    });
+  }
+
+  Future<void> _pollNotifCount() async {
+    if (!_isLoggedIn || !mounted) return;
     final r = await _apiService.getNotificationUnreadCount();
-    if (r['success'] && mounted) setState(() => _unreadNotifs = r['data']?['unread_count'] ?? 0);
-    // Poll every 30s
-    Future.delayed(Duration(seconds: 30), () { if (_isLoggedIn && mounted) _pollNotifCount(); });
+    if (!r['success'] || !mounted) {
+      Future.delayed(const Duration(seconds: 30), _pollNotifCount);
+      return;
+    }
+    final n = r['data']?['unread_count'] as int? ?? 0;
+    final prefs = await SharedPreferences.getInstance();
+    final soundOn = prefs.getBool('notification_sound_enabled') ?? true;
+    if (_prevUnreadForSound != null && n > _prevUnreadForSound! && soundOn) {
+      NotificationSound.playPing();
+    }
+    _prevUnreadForSound = n;
+    setState(() => _unreadNotifs = n);
+    Future.delayed(const Duration(seconds: 30), _pollNotifCount);
   }
 
   Future<void> _handleLogout() async {
-    final prefs = await SharedPreferences.getInstance();
-    
-    // Clear all saved user data
-    await prefs.clear();
-    
-    print('🚪 User logged out - all data cleared');
-
+    await SharedPreferences.getInstance().then((p) => p.clear());
+    AppSession.setConsent(false);
+    _screenshotService.stopCapture();
+    if (!mounted) return;
     setState(() {
       _isLoggedIn = false;
       _username = '';
       _currentIndex = 0;
+      _prevUnreadForSound = null;
     });
-    _screenshotService.stopCapture();
+  }
+
+  void _openP2P() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (ctx) => Scaffold(
+          appBar: AppBar(
+            title: const Text('Peer transfer'),
+            leading: IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: () => Navigator.pop(ctx),
+            ),
+          ),
+          body: Peer2PeerPage(apiService: _apiService),
+        ),
+      ),
+    );
   }
 
   @override
@@ -203,22 +256,9 @@ class _MainScreenState extends State<MainScreen> {
     if (_isLoading) {
       return Scaffold(
         body: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Color(int.parse('0xFF2563eb')),
-                Color(int.parse('0xFF1e40af')),
-                Color(int.parse('0xFF1e3a5f')),
-                Color(int.parse('0xFF0f172a')),
-              ],
-            ),
-          ),
-          child: Center(
-            child: CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation(Colors.white),
-            ),
+          decoration: AppTheme.screenGradient(),
+          child: const Center(
+            child: CircularProgressIndicator(color: AppTheme.primaryBright),
           ),
         ),
       );
@@ -239,115 +279,74 @@ class _MainScreenState extends State<MainScreen> {
             apiService: _apiService,
             username: _username,
             screenshotService: _screenshotService,
+            refreshToken: _homeRefreshToken,
           ),
-          TasksPage(apiService: _apiService),
-          ProjectsPage(apiService: _apiService),
+          WorkHubPage(apiService: _apiService),
           ChatPage(apiService: _apiService),
-          Peer2PeerPage(apiService: _apiService),
           NotificationsPage(apiService: _apiService),
+          ProfilePage(
+            apiService: _apiService,
+            onOpenP2P: _openP2P,
+            onLogout: _handleLogout,
+          ),
         ],
       ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(int.parse('0xFF0f172a')).withOpacity(0.98),
-              Color(int.parse('0xFF0a1223')),
-            ],
-          ),
-          border: Border(
-            top: BorderSide(
-              color: Colors.white.withOpacity(0.05),
-            ),
-          ),
-        ),
-        child: Padding(
-          padding: EdgeInsets.only(bottom: 6, top: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _buildNavItem(0, Icons.work, 'Work', Color(int.parse('0xFF10B981'))),
-              _buildNavItem(1, Icons.checklist, 'Tasks', Color(int.parse('0xFFF59E0B'))),
-              _buildNavItem(2, Icons.folder_copy, 'Projects', Color(int.parse('0xFF8B5CF6'))),
-              _buildNavItem(3, Icons.chat, 'Chat', Color(int.parse('0xFF3B82F6'))),
-              _buildNavItem(4, Icons.swap_horiz, 'P2P', Color(int.parse('0xFF06B6D4'))),
-              _buildNotifNavItem(),
-              GestureDetector(
-                onTap: _handleLogout,
-                child: Padding(
-                  padding: EdgeInsets.all(6),
-                  child: Tooltip(
-                    message: 'Logout',
-                    child: Icon(Icons.logout, color: Colors.white54, size: 20),
-                  ),
+      bottomNavigationBar: AppTheme.glassBlur(
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+            child: NavigationBar(
+              selectedIndex: _currentIndex,
+              backgroundColor: Colors.transparent,
+              surfaceTintColor: Colors.transparent,
+              shadowColor: Colors.transparent,
+              elevation: 0,
+              indicatorColor: AppTheme.primary.withValues(alpha: 0.22),
+              onDestinationSelected: (i) {
+                setState(() {
+                  _currentIndex = i;
+                  if (i == 0) _homeRefreshToken++;
+                });
+                if (i == 3) _pollNotifCount();
+              },
+              destinations: [
+                const NavigationDestination(
+                  icon: Icon(Icons.home_outlined),
+                  selectedIcon: Icon(Icons.home_rounded),
+                  label: 'Home',
                 ),
-              ),
-            ],
+                const NavigationDestination(
+                  icon: Icon(Icons.work_outline_rounded),
+                  selectedIcon: Icon(Icons.work_rounded),
+                  label: 'Work',
+                ),
+                const NavigationDestination(
+                  icon: Icon(Icons.chat_bubble_outline_rounded),
+                  selectedIcon: Icon(Icons.chat_rounded),
+                  label: 'Chat',
+                ),
+                NavigationDestination(
+                  icon: Badge(
+                    isLabelVisible: _unreadNotifs > 0,
+                    label: Text(_unreadNotifs > 9 ? '9+' : '$_unreadNotifs'),
+                    child: const Icon(Icons.notifications_outlined),
+                  ),
+                  selectedIcon: Badge(
+                    isLabelVisible: _unreadNotifs > 0,
+                    label: Text(_unreadNotifs > 9 ? '9+' : '$_unreadNotifs'),
+                    child: const Icon(Icons.notifications_rounded),
+                  ),
+                  label: 'Alerts',
+                ),
+                const NavigationDestination(
+                  icon: Icon(Icons.person_outline_rounded),
+                  selectedIcon: Icon(Icons.person_rounded),
+                  label: 'Me',
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNotifNavItem() {
-    final isActive = _currentIndex == 5;
-    final color = Color(0xFFF59E0B);
-    return GestureDetector(
-      onTap: () { setState(() => _currentIndex = 5); _pollNotifCount(); },
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: isActive ? color.withOpacity(0.2) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: isActive ? Border.all(color: color.withOpacity(0.5), width: 1) : null,
-        ),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Stack(children: [
-            Icon(Icons.notifications, color: isActive ? color : Colors.white54, size: 20),
-            if (_unreadNotifs > 0) Positioned(right: 0, top: 0,
-              child: Container(width: 14, height: 14, decoration: BoxDecoration(color: Color(0xFFEF4444), shape: BoxShape.circle, border: Border.all(color: Color(0xFF0f172a), width: 1.5)),
-                child: Center(child: Text(_unreadNotifs > 9 ? '9+' : '$_unreadNotifs', style: TextStyle(color: Colors.white, fontSize: 7, fontWeight: FontWeight.w800))))),
-          ]),
-          SizedBox(height: 2),
-          Text('Alerts', style: TextStyle(color: isActive ? color : Colors.white54, fontWeight: isActive ? FontWeight.w600 : FontWeight.w500, fontSize: 10)),
-        ]),
-      ),
-    );
-  }
-
-  Widget _buildNavItem(int index, IconData icon, String label, Color color) {
-    final isActive = _currentIndex == index;
-    return GestureDetector(
-      onTap: () => setState(() => _currentIndex = index),
-      child: Container(
-        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: isActive ? color.withOpacity(0.2) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: isActive
-              ? Border.all(color: color.withOpacity(0.5), width: 1)
-              : null,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              color: isActive ? color : Colors.white54,
-              size: 20,
-            ),
-            SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                color: isActive ? color : Colors.white54,
-                fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
-                fontSize: 10,
-              ),
-            ),
-          ],
         ),
       ),
     );

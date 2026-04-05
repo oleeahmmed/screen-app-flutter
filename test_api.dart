@@ -9,15 +9,16 @@ void main() async {
   // Test login
   print('1️⃣ Testing login endpoint...');
   try {
-    final response = await http.post(
-      Uri.parse('https://att.igenhr.com/api/token/'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': 'test@example.com',
-        'password': 'testpass123'
-      }),
-      timeout: Duration(seconds: 10),
-    );
+    final response = await http
+        .post(
+          Uri.parse('https://att.igenhr.com/api/token/'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'email': 'test@example.com',
+            'password': 'testpass123'
+          }),
+        )
+        .timeout(const Duration(seconds: 10));
 
     print('Status: ${response.statusCode}');
     print('Response: ${response.body}\n');
@@ -31,14 +32,15 @@ void main() async {
 
       // Test check-in with token
       print('2️⃣ Testing check-in endpoint...');
-      final checkInResponse = await http.post(
-        Uri.parse('https://att.igenhr.com/api/attendance/checkin/'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${data['access']}'
-        },
-        timeout: Duration(seconds: 10),
-      );
+      final checkInResponse = await http
+          .post(
+            Uri.parse('https://att.igenhr.com/api/attendance/checkin/'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ${data['access']}'
+            },
+          )
+          .timeout(const Duration(seconds: 10));
 
       print('Status: ${checkInResponse.statusCode}');
       print('Response: ${checkInResponse.body}\n');

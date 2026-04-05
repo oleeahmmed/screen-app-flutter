@@ -1,31 +1,146 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/task_status_dropdown.dart';
+
+/// Drag-and-drop payload for moving tasks between stages (Kanban).
+class TaskDragPayload {
+  final int taskId;
+  /// `null` = task had no stage (unassigned).
+  final int? sourceStageId;
+
+  TaskDragPayload({required this.taskId, this.sourceStageId});
+}
 
 class ProjectsPage extends StatefulWidget {
   final ApiService apiService;
-  const ProjectsPage({required this.apiService});
+  /// When true (Work hub tab), no full-screen gradient — matches web "list inside app shell".
+  final bool embeddedInParent;
+
+  const ProjectsPage({
+    required this.apiService,
+    this.embeddedInParent = false,
+  });
+
   @override
   State<ProjectsPage> createState() => _ProjectsPageState();
 }
 
 class _ProjectsPageState extends State<ProjectsPage> {
   List<dynamic> _projects = [];
+  Map<String, dynamic>? _meta;
   bool _isLoading = true;
-  String _search = '';
+  bool _archived = false;
+  String _sort = 'newest';
+  int? _customerId;
+  int? _userId;
+  int? _projectDeptId;
+  String _status = '';
+  String _priority = '';
+  late final TextEditingController _searchCtrl;
+  Timer? _searchDebounce;
+
   @override
-  void initState() { super.initState(); _loadProjects(); }
+  void initState() {
+    super.initState();
+    _searchCtrl = TextEditingController();
+    _loadMeta();
+    _loadProjects();
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadMeta() async {
+    final r = await widget.apiService.getProjectFiltersMeta();
+    if (r['success'] == true && mounted) {
+      setState(() => _meta = r['data'] as Map<String, dynamic>?);
+    }
+  }
+
   Future<void> _loadProjects() async {
     setState(() => _isLoading = true);
-    final r = await widget.apiService.getProjects();
-    if (r['success'] && mounted) setState(() { _projects = r['data'] ?? []; _isLoading = false; });
-    else if (mounted) setState(() => _isLoading = false);
+    final r = await widget.apiService.getProjects(
+      archived: _archived,
+      customerId: _customerId,
+      userId: _userId,
+      projectDepartmentId: _projectDeptId,
+      status: _status.isEmpty ? null : _status,
+      priority: _priority.isEmpty ? null : _priority,
+      search: _searchCtrl.text.trim().isEmpty ? null : _searchCtrl.text.trim(),
+      sort: _sort,
+    );
+    if (!mounted) return;
+    if (r['success'] == true) {
+      setState(() {
+        _projects = (r['data'] as List?)?.cast<dynamic>() ?? [];
+        _isLoading = false;
+      });
+    } else {
+      setState(() => _isLoading = false);
+      final err = r['error'];
+      if (mounted && err != null) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$err')));
+      }
+    }
   }
-  List<dynamic> get _filtered {
-    if (_search.isEmpty) return _projects;
-    final q = _search.toLowerCase();
-    return _projects.where((p) => (p['name'] ?? '').toString().toLowerCase().contains(q)).toList();
+
+  void _scheduleSearchReload() {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 450), () {
+      if (mounted) _loadProjects();
+    });
+  }
+
+  void _setArchived(bool v) {
+    if (_archived == v) return;
+    setState(() => _archived = v);
+    _loadProjects();
+  }
+
+  void _resetFilters() {
+    setState(() {
+      _customerId = null;
+      _userId = null;
+      _projectDeptId = null;
+      _status = '';
+      _priority = '';
+      _sort = 'newest';
+      _searchCtrl.clear();
+    });
+    _loadProjects();
+  }
+
+  static int? _metaInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse('$v');
+  }
+
+  List<Map<String, dynamic>> get _customers {
+    final raw = _meta?['customers'];
+    if (raw is! List) return [];
+    return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  List<Map<String, dynamic>> get _employees {
+    final raw = _meta?['employees'];
+    if (raw is! List) return [];
+    return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  List<Map<String, dynamic>> get _projectDepts {
+    final raw = _meta?['project_departments'];
+    if (raw is! List) return [];
+    return raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
   Color _stc(String s) { switch(s){ case 'active': return Color(0xFF10B981); case 'on_hold': return Color(0xFFF59E0B); case 'completed': return Color(0xFF8B5CF6); case 'cancelled': return Color(0xFFEF4444); default: return Color(0xFF3B82F6); } }
   Color _prc(String p) { switch(p){ case 'high': case 'critical': return Color(0xFFEF4444); case 'medium': return Color(0xFF3B82F6); default: return Color(0xFF64748B); } }
@@ -44,50 +159,489 @@ class _ProjectsPageState extends State<ProjectsPage> {
 Widget _dtf(TextEditingController c, String h, {int ml=1}) => TextField(controller: c, maxLines: ml, style: TextStyle(color: Colors.white),
     decoration: InputDecoration(hintText: h, hintStyle: TextStyle(color: Colors.white30), filled: true, fillColor: Colors.white.withOpacity(0.06),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)));
+  InputDecoration _searchDecoration() {
+    return InputDecoration(
+      hintText: 'Search name, description, client…',
+      hintStyle: TextStyle(
+        color: widget.embeddedInParent ? AppTheme.textMuted : Colors.white30,
+      ),
+      prefixIcon: Icon(
+        Icons.search,
+        color: widget.embeddedInParent ? AppTheme.textMuted : Colors.white30,
+        size: 20,
+      ),
+      filled: true,
+      fillColor: widget.embeddedInParent
+          ? AppTheme.surface2.withValues(alpha: 0.45)
+          : Colors.white.withOpacity(0.06),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+      contentPadding: const EdgeInsets.symmetric(vertical: 12),
+    );
+  }
+
+  Widget _filterDropdown<T>({
+    required T? value,
+    required String hint,
+    required List<DropdownMenuItem<T?>> items,
+    required void Function(T?) onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: DropdownButtonFormField<T?>(
+        value: value,
+        isExpanded: true,
+        decoration: _searchDecoration(),
+        dropdownColor: widget.embeddedInParent ? AppTheme.surface2 : const Color(0xFF1e293b),
+        style: TextStyle(
+          color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
+          fontSize: 14,
+        ),
+        hint: Text(
+          hint,
+          style: TextStyle(
+            color: widget.embeddedInParent ? AppTheme.textMuted : Colors.white54,
+            fontSize: 14,
+          ),
+        ),
+        items: items,
+        onChanged: onChanged,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final filtered = _filtered;
+    final padH = widget.embeddedInParent ? 16.0 : 24.0;
+    final list = _isLoading
+        ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright))
+        : _projects.isEmpty
+            ? Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.folder_open, size: 64, color: AppTheme.textMuted.withValues(alpha: 0.35)),
+                    const SizedBox(height: 12),
+                    Text(
+                      _archived ? 'No archived projects' : 'No projects yet',
+                      style: TextStyle(color: AppTheme.textMuted, fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              )
+            : LayoutBuilder(
+                builder: (ctx, c) {
+                  final cross = c.maxWidth >= 560 ? 2 : 1;
+                  return GridView.builder(
+                    padding: EdgeInsets.fromLTRB(padH, 0, padH, 24),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: cross,
+                      mainAxisSpacing: 14,
+                      crossAxisSpacing: 14,
+                      childAspectRatio: cross == 2 ? 1.15 : 1.35,
+                    ),
+                    itemCount: _projects.length,
+                    itemBuilder: (ctx, i) => _projectCard(_projects[i]),
+                  );
+                },
+              );
+
+    final header = Padding(
+      padding: EdgeInsets.fromLTRB(padH, widget.embeddedInParent ? 4 : 20, padH, 12),
+      child: Row(
+        children: [
+          Icon(Icons.folder_open, color: const Color(0xFFA78BFA), size: 28),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _archived ? 'Archived projects' : 'All projects',
+                  style: TextStyle(
+                    fontSize: widget.embeddedInParent ? 20 : 24,
+                    fontWeight: FontWeight.bold,
+                    color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
+                  ),
+                ),
+                Text(
+                  '${_projects.length} project${_projects.length == 1 ? '' : 's'}',
+                  style: TextStyle(
+                    color: widget.embeddedInParent ? AppTheme.textMuted : Colors.white38,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (!_archived)
+            Material(
+              color: AppTheme.primary,
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                onTap: _showCreateProjectDialog,
+                borderRadius: BorderRadius.circular(12),
+                child: const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: Icon(Icons.add, color: Colors.white, size: 20),
+                ),
+              ),
+            ),
+          if (!_archived) const SizedBox(width: 8),
+          Material(
+            color: AppTheme.surface2.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              onTap: _loadProjects,
+              borderRadius: BorderRadius.circular(12),
+              child: const Padding(
+                padding: EdgeInsets.all(10),
+                child: Icon(Icons.refresh_rounded, color: AppTheme.textMuted, size: 20),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    final archiveChips = Padding(
+      padding: EdgeInsets.symmetric(horizontal: padH),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          ChoiceChip(
+            label: const Text('Active'),
+            selected: !_archived,
+            onSelected: (_) => _setArchived(false),
+            selectedColor: AppTheme.primary.withValues(alpha: 0.35),
+            labelStyle: TextStyle(
+              color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
+              fontSize: 13,
+            ),
+          ),
+          ChoiceChip(
+            label: const Text('Archived'),
+            selected: _archived,
+            onSelected: (_) => _setArchived(true),
+            selectedColor: AppTheme.primary.withValues(alpha: 0.35),
+            labelStyle: TextStyle(
+              color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    final searchField = Padding(
+      padding: EdgeInsets.symmetric(horizontal: padH),
+      child: TextField(
+        controller: _searchCtrl,
+        onChanged: (_) => _scheduleSearchReload(),
+        style: TextStyle(
+          color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
+          fontSize: 14,
+        ),
+        decoration: _searchDecoration(),
+      ),
+    );
+
+    final filtersPanel = Padding(
+      padding: EdgeInsets.symmetric(horizontal: padH),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: Text(
+            'Filters',
+            style: TextStyle(
+              color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white70,
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+            ),
+          ),
+          children: [
+            _filterDropdown<int>(
+              value: _customerId,
+              hint: 'Client',
+              items: [
+                const DropdownMenuItem<int?>(value: null, child: Text('All clients')),
+                ..._customers.map(
+                  (c) => DropdownMenuItem<int?>(
+                    value: _metaInt(c['id']),
+                    child: Text('${c['name'] ?? ''}', overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+              ],
+              onChanged: (v) {
+                setState(() => _customerId = v);
+                _loadProjects();
+              },
+            ),
+            _filterDropdown<int>(
+              value: _userId,
+              hint: 'Team member',
+              items: [
+                const DropdownMenuItem<int?>(value: null, child: Text('Anyone')),
+                ..._employees.map(
+                  (e) => DropdownMenuItem<int?>(
+                    value: _metaInt(e['user_id']),
+                    child: Text('${e['full_name'] ?? ''}', overflow: TextOverflow.ellipsis),
+                  ),
+                ),
+              ],
+              onChanged: (v) {
+                setState(() => _userId = v);
+                _loadProjects();
+              },
+            ),
+            _filterDropdown<int>(
+              value: _projectDeptId,
+              hint: 'Project department',
+              items: [
+                const DropdownMenuItem<int?>(value: null, child: Text('All departments')),
+                ..._projectDepts.map(
+                  (d) => DropdownMenuItem<int?>(
+                    value: _metaInt(d['id']),
+                    child: Text(
+                      '${d['project_name'] ?? ''} · ${d['name'] ?? ''}',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ],
+              onChanged: (v) {
+                setState(() => _projectDeptId = v);
+                _loadProjects();
+              },
+            ),
+            _filterDropdown<String>(
+              value: _status.isEmpty ? null : _status,
+              hint: 'Status',
+              items: const [
+                DropdownMenuItem<String?>(value: null, child: Text('Any status')),
+                DropdownMenuItem(value: 'planning', child: Text('Planning')),
+                DropdownMenuItem(value: 'active', child: Text('Active')),
+                DropdownMenuItem(value: 'on_hold', child: Text('On hold')),
+                DropdownMenuItem(value: 'completed', child: Text('Completed')),
+                DropdownMenuItem(value: 'cancelled', child: Text('Cancelled')),
+              ],
+              onChanged: (v) {
+                setState(() => _status = v ?? '');
+                _loadProjects();
+              },
+            ),
+            _filterDropdown<String>(
+              value: _priority.isEmpty ? null : _priority,
+              hint: 'Priority',
+              items: const [
+                DropdownMenuItem<String?>(value: null, child: Text('Any priority')),
+                DropdownMenuItem(value: 'low', child: Text('Low')),
+                DropdownMenuItem(value: 'medium', child: Text('Medium')),
+                DropdownMenuItem(value: 'high', child: Text('High')),
+                DropdownMenuItem(value: 'critical', child: Text('Critical')),
+              ],
+              onChanged: (v) {
+                setState(() => _priority = v ?? '');
+                _loadProjects();
+              },
+            ),
+            _filterDropdown<String>(
+              value: _sort,
+              hint: 'Sort',
+              items: const [
+                DropdownMenuItem(value: 'newest', child: Text('Newest first')),
+                DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
+                DropdownMenuItem(value: 'name_asc', child: Text('Name A–Z')),
+                DropdownMenuItem(value: 'name_desc', child: Text('Name Z–A')),
+                DropdownMenuItem(value: 'progress_desc', child: Text('Progress high → low')),
+                DropdownMenuItem(value: 'progress_asc', child: Text('Progress low → high')),
+              ],
+              onChanged: (v) {
+                if (v == null) return;
+                setState(() => _sort = v);
+                _loadProjects();
+              },
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: _resetFilters,
+                child: Text(
+                  'Reset filters',
+                  style: TextStyle(
+                    color: widget.embeddedInParent ? AppTheme.primary : const Color(0xFFA78BFA),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        header,
+        archiveChips,
+        const SizedBox(height: 8),
+        searchField,
+        const SizedBox(height: 8),
+        filtersPanel,
+        const SizedBox(height: 8),
+        Expanded(child: list),
+      ],
+    );
+
+    if (widget.embeddedInParent) {
+      return body;
+    }
+
     return Container(
-      decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF2563eb), Color(0xFF1e40af), Color(0xFF1e3a5f), Color(0xFF0f172a)])),
-      child: SafeArea(child: Column(children: [
-        Padding(padding: EdgeInsets.fromLTRB(24, 20, 24, 12), child: Row(children: [
-          Icon(Icons.folder_open, color: Color(0xFF8B5CF6), size: 28), SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Projects', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
-            Text('${_projects.length} projects', style: TextStyle(color: Colors.white38, fontSize: 12)),
-          ])),
-          GestureDetector(onTap: _showCreateProjectDialog, child: Container(padding: EdgeInsets.all(10), decoration: BoxDecoration(color: Color(0xFF8B5CF6), borderRadius: BorderRadius.circular(12)), child: Icon(Icons.add, color: Colors.white, size: 20))),
-          SizedBox(width: 8),
-          GestureDetector(onTap: _loadProjects, child: Container(padding: EdgeInsets.all(10), decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12)), child: Icon(Icons.refresh, color: Colors.white54, size: 20))),
-        ])),
-        Padding(padding: EdgeInsets.symmetric(horizontal: 24), child: TextField(onChanged: (v) => setState(() => _search = v), style: TextStyle(color: Colors.white, fontSize: 14),
-          decoration: InputDecoration(hintText: 'Search projects...', hintStyle: TextStyle(color: Colors.white30), prefixIcon: Icon(Icons.search, color: Colors.white30, size: 20),
-            filled: true, fillColor: Colors.white.withOpacity(0.06), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none), contentPadding: EdgeInsets.symmetric(vertical: 12)))),
-        SizedBox(height: 16),
-        Expanded(child: _isLoading ? Center(child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation(Colors.white)))
-          : filtered.isEmpty ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.folder_open, size: 64, color: Colors.white24), SizedBox(height: 12), Text('No Projects Yet', style: TextStyle(color: Colors.white54, fontSize: 18, fontWeight: FontWeight.bold))]))
-          : ListView.builder(padding: EdgeInsets.symmetric(horizontal: 24), itemCount: filtered.length, itemBuilder: (ctx, i) => _projectCard(filtered[i]))),
-      ])),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFF2563eb),
+            Color(0xFF1e40af),
+            Color(0xFF1e3a5f),
+            Color(0xFF0f172a),
+          ],
+        ),
+      ),
+      child: SafeArea(child: body),
     );
   }
   Widget _projectCard(dynamic p) {
     final comp = (p['completion_percentage'] ?? 0).toDouble();
-    final st = p['status'] ?? 'planning'; final pri = p['priority'] ?? 'medium';
+    final st = p['status'] ?? 'planning';
+    final pri = p['priority'] ?? 'medium';
+    final pid = p['id'] is int ? p['id'] as int : (p['id'] as num).toInt();
+    final canArchive = p['can_archive'] == true;
+    final isArc = p['is_archived'] == true;
+    final muted = widget.embeddedInParent ? AppTheme.textMuted : Colors.white38;
+    final descColor = widget.embeddedInParent ? AppTheme.textMuted.withValues(alpha: 0.9) : Colors.white38;
     return GestureDetector(
-      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _ProjectDetailPage(apiService: widget.apiService, projectId: p['id'], projectName: p['name'] ?? ''))).then((_) => _loadProjects()),
-      child: Container(margin: EdgeInsets.only(bottom: 16), padding: EdgeInsets.all(18),
-        decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(18), border: Border.all(color: Colors.white.withOpacity(0.08))),
+      onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => ProjectDetailView(
+                apiService: widget.apiService,
+                projectId: pid,
+                projectName: p['name']?.toString() ?? '',
+              ),
+            ),
+          ).then((_) => _loadProjects()),
+      child: Container(
+        margin: EdgeInsets.zero,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: widget.embeddedInParent
+              ? AppTheme.surface2.withValues(alpha: 0.55)
+              : Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: widget.embeddedInParent
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.white.withOpacity(0.08),
+          ),
+        ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Container(width: 44, height: 44, decoration: BoxDecoration(color: Color(0xFF8B5CF6).withOpacity(0.2), borderRadius: BorderRadius.circular(12)), child: Icon(Icons.folder_open, color: Color(0xFF8B5CF6), size: 22)),
-            SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(p['name'] ?? '', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-              Text(p['project_manager'] ?? '', style: TextStyle(color: Colors.white38, fontSize: 11)),
-            ])),
-            Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: _prc(pri))),
-          ]),
-          if ((p['description'] ?? '').toString().isNotEmpty) ...[SizedBox(height: 10), Text(p['description'], style: TextStyle(color: Colors.white38, fontSize: 12), maxLines: 2, overflow: TextOverflow.ellipsis)],
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Color(0xFF8B5CF6).withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.folder_open, color: Color(0xFF8B5CF6), size: 22),
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      p['name'] ?? '',
+                      style: TextStyle(
+                        color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if ((p['customer_name'] ?? '').toString().isNotEmpty)
+                      Text(
+                        '${p['customer_name']}',
+                        style: TextStyle(color: muted, fontSize: 11),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    Text(
+                      p['project_manager'] ?? '',
+                      style: TextStyle(color: muted, fontSize: 11),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              if (canArchive)
+                PopupMenuButton<String>(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  icon: Icon(Icons.more_vert, color: muted, size: 22),
+                  color: widget.embeddedInParent ? AppTheme.surface2 : const Color(0xFF1e293b),
+                  onSelected: (v) async {
+                    if (v == 'archive') {
+                      final r = await widget.apiService.archiveProject(pid);
+                      if (!mounted) return;
+                      if (r['success'] == true) {
+                        _loadProjects();
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('${r['error']}')),
+                        );
+                      }
+                    } else if (v == 'restore') {
+                      final r = await widget.apiService.restoreProject(pid);
+                      if (!mounted) return;
+                      if (r['success'] == true) {
+                        _loadProjects();
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('${r['error']}')),
+                        );
+                      }
+                    }
+                  },
+                  itemBuilder: (ctx) => [
+                    if (!isArc)
+                      const PopupMenuItem(value: 'archive', child: Text('Archive')),
+                    if (isArc) const PopupMenuItem(value: 'restore', child: Text('Restore')),
+                  ],
+                ),
+              Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: _prc(pri))),
+            ],
+          ),
+          if ((p['description'] ?? '').toString().isNotEmpty) ...[
+            SizedBox(height: 10),
+            Text(
+              p['description'],
+              style: TextStyle(color: descColor, fontSize: 12),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
           SizedBox(height: 12),
           Row(children: [
             Container(padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: _stc(st).withOpacity(0.15), borderRadius: BorderRadius.circular(8), border: Border.all(color: _stc(st).withOpacity(0.3))),
@@ -103,19 +657,35 @@ Widget _dtf(TextEditingController c, String h, {int ml=1}) => TextField(controll
             Icon(Icons.checklist, size: 12, color: Colors.white30), SizedBox(width: 3), Text('${p['total_tasks'] ?? 0} tasks', style: TextStyle(color: Colors.white38, fontSize: 10)),
             SizedBox(width: 12), Icon(Icons.account_tree, size: 12, color: Colors.white30), SizedBox(width: 3), Text('${p['total_subtasks'] ?? 0} subtasks', style: TextStyle(color: Colors.white38, fontSize: 10)),
           ]),
-        ])),
+        ],
+      ),
+    ),
     );
   }
 }
 
-class _ProjectDetailPage extends StatefulWidget {
-  final ApiService apiService; final int projectId; final String projectName;
-  const _ProjectDetailPage({required this.apiService, required this.projectId, required this.projectName});
+class ProjectDetailView extends StatefulWidget {
+  final ApiService apiService;
+  final int projectId;
+  final String projectName;
+  /// When true (e.g. Work hub), hide back button — user switches project from parent menu.
+  final bool embedded;
+  /// Called after successful delete while [embedded] (parent should clear project selection).
+  final VoidCallback? onEmbeddedProjectRemoved;
+
+  const ProjectDetailView({
+    required this.apiService,
+    required this.projectId,
+    required this.projectName,
+    this.embedded = false,
+    this.onEmbeddedProjectRemoved,
+  });
+
   @override
-  State<_ProjectDetailPage> createState() => _ProjectDetailPageState();
+  State<ProjectDetailView> createState() => _ProjectDetailViewState();
 }
 
-class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTickerProviderStateMixin {
+class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTickerProviderStateMixin {
   Map<String, dynamic>? _project; bool _isLoading = true;
   late TabController _tabCtrl; DateTime _calMonth = DateTime.now();
   @override
@@ -158,20 +728,46 @@ class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTicke
       actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: Text('Cancel')), TextButton(onPressed: () => Navigator.pop(c, true), child: Text('Delete', style: TextStyle(color: Colors.red)))]));
     if (ok == true) { await widget.apiService.deleteStage(widget.projectId, sid); _load(); }
   }
-  void _deleteTask(int tid) async {
-    final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(backgroundColor: Color(0xFF1e293b),
-      title: Text('Delete Task?', style: TextStyle(color: Colors.white)), content: Text('All subtasks deleted too.', style: TextStyle(color: Colors.white54)),
-      actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: Text('Cancel')), TextButton(onPressed: () => Navigator.pop(c, true), child: Text('Delete', style: TextStyle(color: Colors.red)))]));
-    if (ok == true) { await widget.apiService.deleteTask(tid); _load(); }
+
+  Future<void> _toggleTaskComplete(dynamic t) async {
+    final r = await widget.apiService.toggleTask(t['id'] as int);
+    if (!mounted) return;
+    if (r['success'] == true) {
+      _load();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(r['error']?.toString() ?? 'Could not update task')),
+      );
+    }
   }
-  void _showMoveTaskDialog(dynamic task) {
-    showDialog(context: context, builder: (ctx) => AlertDialog(backgroundColor: Color(0xFF1e293b), title: Text('Move Task', style: TextStyle(color: Colors.white)),
-      content: Column(mainAxisSize: MainAxisSize.min, children: _stages.map((s) => ListTile(
-        leading: Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: _parseHex(s['color'] ?? '#3B82F6'))),
-        title: Text(s['name'] ?? '', style: TextStyle(color: Colors.white)),
-        onTap: () async { Navigator.pop(ctx); await widget.apiService.moveTask(task['id'], s['id']); _load(); },
-      )).toList())));
+
+  Future<void> _deleteTask(dynamic t) async {
+    final name = t['name']?.toString() ?? 'this task';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: Color(0xFF1e293b),
+        title: Text('Delete task?', style: TextStyle(color: Colors.white)),
+        content: Text('Delete "$name"? This cannot be undone.', style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: Text('Delete', style: TextStyle(color: Colors.red))),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final r = await widget.apiService.deleteTask(t['id'] as int);
+    if (!mounted) return;
+    if (r['success'] == true) {
+      _load();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Task deleted')));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(r['error']?.toString() ?? 'Could not delete task')),
+      );
+    }
   }
+
   void _showEditProjectDialog() {
     final nc = TextEditingController(text: _project?['name'] ?? '');
     final dc = TextEditingController(text: _project?['description'] ?? '');
@@ -187,7 +783,15 @@ class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTicke
     final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(backgroundColor: Color(0xFF1e293b),
       title: Text('Delete Project?', style: TextStyle(color: Colors.white)),
       actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: Text('Cancel')), TextButton(onPressed: () => Navigator.pop(c, true), child: Text('Delete', style: TextStyle(color: Colors.red)))]));
-    if (ok == true) { await widget.apiService.deleteProject(widget.projectId); if (mounted) Navigator.pop(context); }
+    if (ok == true) {
+      await widget.apiService.deleteProject(widget.projectId);
+      if (!mounted) return;
+      if (widget.embedded && widget.onEmbeddedProjectRemoved != null) {
+        widget.onEmbeddedProjectRemoved!();
+      } else {
+        Navigator.pop(context);
+      }
+    }
   }
   void _showCreateTaskInStageDialog(int stageId) {
     final nc = TextEditingController(); final dc = TextEditingController();
@@ -247,16 +851,35 @@ class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTicke
       decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFF2563eb), Color(0xFF1e40af), Color(0xFF1e3a5f), Color(0xFF0f172a)])),
       child: SafeArea(child: _isLoading ? Center(child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation(Colors.white)))
         : _project == null ? Center(child: Text('Failed to load', style: TextStyle(color: Colors.white54)))
-        : Column(children: [_buildHeader(), _buildStats(), SizedBox(height: 8),
-            TabBar(controller: _tabCtrl, indicatorColor: Color(0xFF8B5CF6), labelColor: Colors.white, unselectedLabelColor: Colors.white38, tabs: [Tab(text: 'Board'), Tab(text: 'Calendar')]),
-            Expanded(child: TabBarView(controller: _tabCtrl, children: [_buildBoard(), _buildCalendar()]))])),
+        : Column(children: [
+            _buildHeader(),
+            _buildStats(),
+            const SizedBox(height: 8),
+            _buildBoardToolbar(),
+            TabBar(
+              controller: _tabCtrl,
+              indicatorColor: Color(0xFF8B5CF6),
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white38,
+              tabs: const [Tab(text: 'Board'), Tab(text: 'Calendar')],
+            ),
+            Expanded(
+              child: TabBarView(
+                controller: _tabCtrl,
+                children: [_buildBoard(), _buildCalendar()],
+              ),
+            ),
+          ])),
     ));
   }
   Widget _buildHeader() {
     final p = _project!; final comp = (p['completion_percentage'] ?? 0).toDouble();
     return Padding(padding: EdgeInsets.fromLTRB(16, 12, 16, 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
-        GestureDetector(onTap: () => Navigator.pop(context), child: Icon(Icons.arrow_back, color: Colors.white54, size: 22)), SizedBox(width: 10),
+        if (!widget.embedded)
+          GestureDetector(onTap: () => Navigator.pop(context), child: Icon(Icons.arrow_back, color: Colors.white54, size: 22)),
+        if (!widget.embedded) SizedBox(width: 10),
+        if (widget.embedded) ...[Icon(Icons.hub_outlined, color: Colors.white38, size: 22), SizedBox(width: 10)],
         Container(width: 40, height: 40, decoration: BoxDecoration(color: Color(0xFF8B5CF6).withOpacity(0.2), borderRadius: BorderRadius.circular(10)), child: Icon(Icons.folder_open, color: Color(0xFF8B5CF6), size: 20)),
         SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -276,6 +899,52 @@ class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTicke
       ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: comp / 100, backgroundColor: Colors.white.withOpacity(0.1), valueColor: AlwaysStoppedAnimation(Color(0xFF8B5CF6)), minHeight: 4)),
     ]));
   }
+
+  Widget _buildBoardToolbar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.04),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF8B5CF6).withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF8B5CF6).withOpacity(0.35)),
+              ),
+              child: const Icon(Icons.view_column, size: 18, color: Color(0xFFC4B5FD)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Project tasks',
+                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Board or calendar — same data as the web. Drag the ⋮⋮ handle or long-press a card, then drop on a stage column.',
+                    style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10, height: 1.35),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildStats() {
     final s = _project!['stats'] ?? {};
     final stageOverview = (_project!['stage_overview'] as List?) ?? [];
@@ -316,62 +985,414 @@ class _ProjectDetailPageState extends State<_ProjectDetailPage> with SingleTicke
     decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(10), border: Border.all(color: c.withOpacity(0.2))),
     child: Column(children: [Text(v, style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)), Text(l, style: TextStyle(color: Colors.white38, fontSize: 9))]));
   Widget _buildBoard() {
-    final stages = _stages; final unassigned = (_project!['unassigned_tasks'] as List?) ?? [];
-    if (stages.isEmpty && unassigned.isEmpty) return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Icon(Icons.view_column, size: 64, color: Colors.white24), SizedBox(height: 12), Text('No stages yet', style: TextStyle(color: Colors.white54, fontSize: 16)), SizedBox(height: 12),
-      ElevatedButton.icon(onPressed: _showAddStageDialog, icon: Icon(Icons.add, size: 18), label: Text('Add Stage'), style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF8B5CF6)))]));
-    return ListView(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8), children: [
-      ...stages.map((s) => _stageSection(s)),
-      if (unassigned.isNotEmpty) _stageSection({'name': 'No Stage', 'color': '#64748B', 'tasks': unassigned, 'id': null}),
-      SizedBox(height: 80)]);
+    final stages = _stages;
+    final unassigned = (_project!['unassigned_tasks'] as List?) ?? [];
+    if (stages.isEmpty && unassigned.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.view_column, size: 64, color: Colors.white24),
+            SizedBox(height: 12),
+            Text('No stages yet', style: TextStyle(color: Colors.white54, fontSize: 16)),
+            SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: _showAddStageDialog,
+              icon: Icon(Icons.add, size: 18),
+              label: Text('Add Stage'),
+              style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF8B5CF6)),
+            ),
+            SizedBox(height: 14),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                'Long-press a task, drag onto another column to move (same as web).',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white30, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final h = constraints.maxHeight.isFinite && constraints.maxHeight > 140
+            ? constraints.maxHeight
+            : 400.0;
+        return Scrollbar(
+          thumbVisibility: true,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.fromLTRB(12, 8, 12, 16),
+            children: [
+              ...stages.map(
+                (s) => SizedBox(
+                  width: 302,
+                  height: h,
+                  child: _stageColumnDnD(s),
+                ),
+              ),
+              if (unassigned.isNotEmpty)
+                SizedBox(
+                  width: 302,
+                  height: h,
+                  child: _unassignedKanbanColumn(List<dynamic>.from(unassigned)),
+                ),
+            ],
+          ),
+        );
+      },
+    );
   }
-  Widget _stageSection(dynamic stage) {
-    final tasks = (stage['tasks'] as List?) ?? []; final color = _parseHex(stage['color'] ?? '#3B82F6'); final stageId = stage['id'];
-    return Container(margin: EdgeInsets.only(bottom: 14), decoration: BoxDecoration(color: Colors.white.withOpacity(0.04), borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.white.withOpacity(0.06))),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(padding: EdgeInsets.fromLTRB(12, 10, 4, 6), child: Row(children: [
-          Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)), SizedBox(width: 8),
-          Expanded(child: Text((stage['name'] ?? '').toString().toUpperCase(), style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1))),
-          Container(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(10)),
-            child: Text('${tasks.length}', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold))),
-          if (stageId != null) ...[SizedBox(width: 4),
-            PopupMenuButton<String>(icon: Icon(Icons.more_vert, color: Colors.white30, size: 18), color: Color(0xFF1e293b), padding: EdgeInsets.zero,
-              onSelected: (v) { if (v=='add_task') _showCreateTaskInStageDialog(stageId); else if (v=='delete') _deleteStage(stageId, stage['name'] ?? ''); },
-              itemBuilder: (_) => [
-                PopupMenuItem(value: 'add_task', child: Row(children: [Icon(Icons.add_task, color: Color(0xFF10B981), size: 16), SizedBox(width: 8), Text('Add Task', style: TextStyle(color: Colors.white, fontSize: 13))])),
-                PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete, color: Colors.redAccent, size: 16), SizedBox(width: 8), Text('Delete Stage', style: TextStyle(color: Colors.redAccent, fontSize: 13))]))])],
-        ])),
-        ...tasks.map((t) => _taskCard(t, color)),
-        if (tasks.isEmpty) Padding(padding: EdgeInsets.only(left: 30, bottom: 12), child: Text('No tasks', style: TextStyle(color: Colors.white24, fontSize: 11))),
-      ]));
+
+  bool _sameStage(TaskDragPayload d, int targetStageId) =>
+      d.sourceStageId != null && d.sourceStageId == targetStageId;
+
+  Future<void> _onTaskDropOnStage(TaskDragPayload data, int targetStageId) async {
+    if (_sameStage(data, targetStageId)) return;
+    final r = await widget.apiService.moveTask(data.taskId, targetStageId);
+    if (!mounted) return;
+    if (r['success'] == true) {
+      _load();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(r['error']?.toString() ?? 'Could not move task')),
+      );
+    }
   }
-  Widget _taskCard(dynamic t, Color stageColor) {
+
+  Widget _stageColumnDnD(dynamic stage) {
+    final stageId = stage['id'] as int;
+    final tasks = (stage['tasks'] as List?) ?? [];
+    final color = _parseHex(stage['color'] ?? '#3B82F6');
+    return DragTarget<TaskDragPayload>(
+      onWillAcceptWithDetails: (details) => !_sameStage(details.data, stageId),
+      onAcceptWithDetails: (details) => _onTaskDropOnStage(details.data, stageId),
+      builder: (context, candidate, rejected) {
+        final hi = candidate.isNotEmpty;
+        return Container(
+          margin: EdgeInsets.only(right: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(hi ? 0.1 : 0.04),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: hi ? Color(0xFF34D399) : Colors.white.withOpacity(0.06),
+              width: hi ? 2 : 1,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _kanbanStageHeader(stage, color, stageId, tasks.length),
+              Expanded(
+                child: tasks.isEmpty
+                    ? Center(
+                        child: Text(
+                          'Drag tasks here',
+                          style: TextStyle(color: Colors.white24, fontSize: 11),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: EdgeInsets.only(bottom: 12),
+                        itemCount: tasks.length,
+                        itemBuilder: (ctx, i) => _draggableTaskWrap(tasks[i], color, stageId),
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _kanbanStageHeader(dynamic stage, Color color, int stageId, int taskCount) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 10, 4, 6),
+      child: Row(
+        children: [
+          Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              (stage['name'] ?? '').toString().toUpperCase(),
+              style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1),
+            ),
+          ),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(10)),
+            child: Text('$taskCount', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          ),
+          SizedBox(width: 2),
+          Tooltip(
+            message: 'Add task to this stage',
+            child: IconButton(
+              onPressed: () => _showCreateTaskInStageDialog(stageId),
+              icon: Icon(Icons.add_task, color: Color(0xFF10B981), size: 20),
+              padding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              constraints: BoxConstraints.tightFor(width: 32, height: 32),
+            ),
+          ),
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert, color: Colors.white30, size: 18),
+            color: Color(0xFF1e293b),
+            padding: EdgeInsets.zero,
+            onSelected: (v) {
+              if (v == 'add_task') _showCreateTaskInStageDialog(stageId);
+              if (v == 'delete') _deleteStage(stageId, stage['name'] ?? '');
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'add_task',
+                child: Row(children: [Icon(Icons.add_task, color: Color(0xFF10B981), size: 16), SizedBox(width: 8), Text('Add Task', style: TextStyle(color: Colors.white, fontSize: 13))]),
+              ),
+              PopupMenuItem(
+                value: 'delete',
+                child: Row(children: [Icon(Icons.delete, color: Colors.redAccent, size: 16), SizedBox(width: 8), Text('Delete Stage', style: TextStyle(color: Colors.redAccent, fontSize: 13))]),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _unassignedKanbanColumn(List<dynamic> tasks) {
+    final color = _parseHex('#64748B');
+    return Container(
+      margin: EdgeInsets.only(right: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(12, 10, 12, 6),
+            child: Row(
+              children: [
+                Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'NO STAGE',
+                    style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1),
+                  ),
+                ),
+                Text('${tasks.length}', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: EdgeInsets.only(bottom: 12),
+              itemCount: tasks.length,
+              itemBuilder: (ctx, i) => _draggableTaskWrap(tasks[i], color, null),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _draggableTaskWrap(dynamic t, Color stageColor, int? sourceStageId) {
+    final payload = TaskDragPayload(taskId: t['id'] as int, sourceStageId: sourceStageId);
+    final feedbackCard = Material(
+      color: Colors.transparent,
+      elevation: 8,
+      shadowColor: Colors.black54,
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
+        width: 268,
+        child: Opacity(
+          opacity: 0.95,
+          child: _taskCard(t, stageColor, withSideMargin: false),
+        ),
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Draggable<TaskDragPayload>(
+            data: payload,
+            feedback: feedbackCard,
+            childWhenDragging: Opacity(
+              opacity: 0.35,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Icon(Icons.drag_indicator, size: 22, color: Colors.white24),
+              ),
+            ),
+            child: Tooltip(
+              message: 'Drag to another stage (like web)',
+              child: Padding(
+                padding: const EdgeInsets.only(right: 4, top: 8),
+                child: Icon(Icons.drag_indicator, size: 24, color: Colors.white.withOpacity(0.45)),
+              ),
+            ),
+          ),
+          Expanded(
+            child: LongPressDraggable<TaskDragPayload>(
+              data: payload,
+              feedback: feedbackCard,
+              childWhenDragging: Opacity(
+                opacity: 0.38,
+                child: _taskCard(t, stageColor, withSideMargin: false),
+              ),
+              child: _taskCard(t, stageColor, withSideMargin: false),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _taskCard(dynamic t, Color stageColor, {bool withSideMargin = true}) {
     final sc = t['subtask_count'] ?? 0; final cs = t['completed_subtask_count'] ?? 0; final pr = (t['subtask_progress'] ?? 0).toDouble();
-    return InkWell(
-      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _TaskSubtasksPage(
-        apiService: widget.apiService, taskId: t['id'], taskName: t['name'] ?? '', taskDesc: t['description'] ?? '', employees: _employees, isManager: _isManager))).then((_) => _load()),
-      child: Container(margin: EdgeInsets.symmetric(horizontal: 10, vertical: 4), padding: EdgeInsets.all(14),
-        decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12), border: Border(left: BorderSide(color: t['priority']=='high' ? Color(0xFFEF4444) : stageColor, width: 3))),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Container(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: _pc(t['priority'] ?? 'medium').withOpacity(0.15), borderRadius: BorderRadius.circular(4)),
-              child: Text((t['priority'] ?? 'medium').toString().toUpperCase(), style: TextStyle(color: _pc(t['priority'] ?? 'medium'), fontSize: 9, fontWeight: FontWeight.w700))),
-            Spacer(),
-            PopupMenuButton<String>(icon: Icon(Icons.more_horiz, color: Colors.white30, size: 18), color: Color(0xFF1e293b), padding: EdgeInsets.zero,
-              onSelected: (v) { if (v=='move') _showMoveTaskDialog(t); else if (v=='delete') _deleteTask(t['id']); },
-              itemBuilder: (_) => [
-                PopupMenuItem(value: 'move', child: Row(children: [Icon(Icons.swap_horiz, color: Color(0xFF3B82F6), size: 16), SizedBox(width: 8), Text('Move to Stage', style: TextStyle(color: Colors.white, fontSize: 13))])),
-                PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete, color: Colors.redAccent, size: 16), SizedBox(width: 8), Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 13))]))])]),
-          SizedBox(height: 6), Text(t['name'] ?? '', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600)),
-          if ((t['description'] ?? '').toString().isNotEmpty) ...[SizedBox(height: 4), Text(t['description'], style: TextStyle(color: Colors.white30, fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis)],
-          if (sc > 0) ...[SizedBox(height: 10), Row(children: [Text('Subtasks: $cs/$sc', style: TextStyle(color: Colors.white38, fontSize: 10)), Spacer(), Text('${pr.toInt()}%', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold))]),
-            SizedBox(height: 4), ClipRRect(borderRadius: BorderRadius.circular(3), child: LinearProgressIndicator(value: pr / 100, backgroundColor: Colors.white.withOpacity(0.08), valueColor: AlwaysStoppedAnimation(Color(0xFF8B5CF6)), minHeight: 3))],
-          SizedBox(height: 8),
-          Row(children: [
-            if (t['user_name'] != null) ...[CircleAvatar(radius: 10, backgroundColor: Color(0xFF334155), child: Text((t['user_name'] ?? '?')[0].toUpperCase(), style: TextStyle(color: Colors.white, fontSize: 9))),
-              SizedBox(width: 6), Text(t['user_name'] ?? '', style: TextStyle(color: Colors.white30, fontSize: 10))],
-            Spacer(), Text('subtasks >', style: TextStyle(color: Color(0xFF8B5CF6), fontSize: 9, fontWeight: FontWeight.w600)),
-            if (t['due_date'] != null) ...[SizedBox(width: 8), Icon(Icons.schedule, size: 10, color: Colors.white24), SizedBox(width: 3), Text(t['due_date'] ?? '', style: TextStyle(color: Colors.white24, fontSize: 10))]])])));
+    final done = t['completed'] == true;
+    final canDelete = t['can_delete'] == true;
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: withSideMargin ? 10 : 0, vertical: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => _TaskSubtasksPage(
+          apiService: widget.apiService, taskId: t['id'], taskName: t['name'] ?? '', taskDesc: t['description'] ?? '', employees: _employees, isManager: _isManager))).then((_) => _load()),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            decoration: AppTheme.glassPanel(borderRadius: 12),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(width: 3, color: stageColor),
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.all(14),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        TaskStatusDropdown(
+                          key: ValueKey<String>('kt_${t['id']}_${t['status']}_${t['completed']}'),
+                          taskId: t['id'] as int,
+                          task: t,
+                          apiService: widget.apiService,
+                          onUpdated: _load,
+                          compact: true,
+                        ),
+                        SizedBox(height: 6),
+                        SizedBox(
+                          width: double.infinity,
+                          child: done
+                              ? OutlinedButton.icon(
+                                  onPressed: () => _toggleTaskComplete(t),
+                                  icon: Icon(Icons.replay_rounded, size: 16, color: Color(0xFFFBBF24)),
+                                  label: Text('Restore', style: TextStyle(color: Color(0xFFFBBF24), fontSize: 12, fontWeight: FontWeight.w600)),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: EdgeInsets.symmetric(vertical: 8),
+                                    side: BorderSide(color: Color(0xFFFBBF24).withOpacity(0.5)),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                )
+                              : FilledButton.icon(
+                                  onPressed: () => _toggleTaskComplete(t),
+                                  icon: Icon(Icons.check_circle_outline_rounded, size: 16, color: Colors.white),
+                                  label: Text('Mark complete', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: Color(0xFF10B981).withOpacity(0.9),
+                                    foregroundColor: Colors.white,
+                                    padding: EdgeInsets.symmetric(vertical: 8),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                ),
+                        ),
+                        SizedBox(height: 6),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                t['name'] ?? '',
+                                style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600, decoration: done ? TextDecoration.lineThrough : null),
+                              ),
+                            ),
+                            SizedBox(width: 8),
+                            TaskStatusBadge(task: t),
+                          ],
+                        ),
+                        if ((t['description'] ?? '').toString().isNotEmpty) ...[SizedBox(height: 4), Text(t['description'], style: TextStyle(color: Colors.white30, fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis)],
+                        if (sc > 0) ...[SizedBox(height: 10), Row(children: [Text('Subtasks: $cs/$sc', style: TextStyle(color: Colors.white38, fontSize: 10)), Spacer(), Text('${pr.toInt()}%', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold))]),
+                          SizedBox(height: 4), ClipRRect(borderRadius: BorderRadius.circular(3), child: LinearProgressIndicator(value: pr / 100, backgroundColor: Colors.white.withOpacity(0.08), valueColor: AlwaysStoppedAnimation(Color(0xFF8B5CF6)), minHeight: 3))],
+                        SizedBox(height: 8),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                if (t['user_name'] != null) ...[
+                                  CircleAvatar(
+                                    radius: 10,
+                                    backgroundColor: Color(0xFF334155),
+                                    child: Text((t['user_name'] ?? '?')[0].toUpperCase(), style: TextStyle(color: Colors.white, fontSize: 9)),
+                                  ),
+                                  SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      t['user_name'] ?? '',
+                                      style: TextStyle(color: Colors.white30, fontSize: 10),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                                if (canDelete)
+                                  IconButton(
+                                    icon: Icon(Icons.delete_outline, size: 16, color: Colors.white38),
+                                    padding: EdgeInsets.zero,
+                                    visualDensity: VisualDensity.compact,
+                                    constraints: BoxConstraints.tightFor(width: 28, height: 28),
+                                    tooltip: 'Delete task',
+                                    onPressed: () => _deleteTask(t),
+                                  ),
+                              ],
+                            ),
+                            SizedBox(height: 4),
+                            Row(
+                              children: [
+                                Text('subtasks >', style: TextStyle(color: Color(0xFF8B5CF6), fontSize: 9, fontWeight: FontWeight.w600)),
+                                if (t['due_date'] != null) ...[
+                                  Spacer(),
+                                  Icon(Icons.schedule, size: 10, color: Colors.white24),
+                                  SizedBox(width: 3),
+                                  Flexible(
+                                    child: Text(
+                                      t['due_date'] ?? '',
+                                      style: TextStyle(color: Colors.white24, fontSize: 10),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.right,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ],
+                        ),
+                      ]),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
   Widget _buildCalendar() {
     final y = _calMonth.year; final m = _calMonth.month;
@@ -489,7 +1510,17 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
     if (r['success'] && mounted) setState(() { _subtasks = r['data'] ?? []; _isLoading = false; });
     else if (mounted) setState(() => _isLoading = false);
   }
-  Future<void> _toggle(int id) async { await widget.apiService.toggleSubTask(widget.taskId, id); _load(); }
+  Future<void> _toggle(int id) async {
+    final r = await widget.apiService.toggleSubTask(widget.taskId, id);
+    if (!mounted) return;
+    if (r['success'] == true) {
+      _load();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(r['error']?.toString() ?? 'Could not update subtask')),
+      );
+    }
+  }
   Future<void> _del(int id, String s) async {
     final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(backgroundColor: Color(0xFF1e293b),
       title: Text('Delete "$s"?', style: TextStyle(color: Colors.white)),
@@ -497,42 +1528,167 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
     if (ok == true) { await widget.apiService.deleteSubTask(widget.taskId, id); _load(); }
   }
   Color _pc(String p) { switch(p){ case 'high': return Color(0xFFEF4444); case 'medium': return Color(0xFFF59E0B); default: return Color(0xFF10B981); } }
-  Color _stc(String s) { switch(s){ case 'in_progress': return Color(0xFF3B82F6); case 'done': return Color(0xFF10B981); default: return Color(0xFF94A3B8); } }
   Widget _tf(TextEditingController c, String h, {int ml=1}) => TextField(controller: c, maxLines: ml, style: TextStyle(color: Colors.white),
     decoration: InputDecoration(hintText: h, hintStyle: TextStyle(color: Colors.white30), filled: true, fillColor: Colors.white.withOpacity(0.06),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)));
   void _showDialog({dynamic st}) {
-    final sc = TextEditingController(text: st?['summary'] ?? ''); final dc = TextEditingController(text: st?['description'] ?? '');
-    String pri = st?['priority'] ?? 'medium'; String status = st?['status'] ?? 'to_do'; int? assignee = st?['assignee']; final isEdit = st != null;
-    showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
-      backgroundColor: Color(0xFF1e293b), title: Text(isEdit ? 'Edit SubTask' : 'Add SubTask', style: TextStyle(color: Colors.white)),
-      content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        _tf(sc, 'Summary *'), SizedBox(height: 10), _tf(dc, 'Description', ml: 3), SizedBox(height: 10),
-        Row(children: ['low','medium','high'].map((p) { final s = pri == p; final c = _pc(p);
-          return Expanded(child: GestureDetector(onTap: () => setD(() => pri = p), child: Container(margin: EdgeInsets.symmetric(horizontal: 3), padding: EdgeInsets.symmetric(vertical: 8),
-            decoration: BoxDecoration(color: s ? c.withOpacity(0.3) : Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(8), border: Border.all(color: s ? c : Colors.white12)),
-            child: Text(p[0].toUpperCase()+p.substring(1), textAlign: TextAlign.center, style: TextStyle(color: s ? c : Colors.white54, fontSize: 10, fontWeight: FontWeight.w600))))); }).toList()),
-        SizedBox(height: 10),
-        Row(children: ['to_do','in_progress','done'].map((k) { final s = status == k; final c = _stc(k); final lb = k == 'to_do' ? 'To Do' : k == 'in_progress' ? 'Active' : 'Done';
-          return Expanded(child: GestureDetector(onTap: () => setD(() => status = k), child: Container(margin: EdgeInsets.symmetric(horizontal: 3), padding: EdgeInsets.symmetric(vertical: 8),
-            decoration: BoxDecoration(color: s ? c.withOpacity(0.3) : Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(8), border: Border.all(color: s ? c : Colors.white12)),
-            child: Text(lb, textAlign: TextAlign.center, style: TextStyle(color: s ? c : Colors.white54, fontSize: 9, fontWeight: FontWeight.w600))))); }).toList()),
-        if (widget.employees.isNotEmpty) ...[SizedBox(height: 10),
-          Container(padding: EdgeInsets.symmetric(horizontal: 12), decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
-            child: DropdownButtonHideUnderline(child: DropdownButton<int?>(isExpanded: true, value: assignee, hint: Text('Assign to...', style: TextStyle(color: Colors.white30, fontSize: 13)), dropdownColor: Color(0xFF1e293b),
-              items: [DropdownMenuItem<int?>(value: null, child: Text('Unassigned', style: TextStyle(color: Colors.white54, fontSize: 13))),
-                ...widget.employees.map((e) => DropdownMenuItem<int?>(value: e['id'], child: Text(e['full_name'] ?? '', style: TextStyle(color: Colors.white, fontSize: 13))))],
-              onChanged: (v) => setD(() => assignee = v))))],
-      ])),
-      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
-        ElevatedButton(onPressed: () async { if (sc.text.trim().isEmpty) return; Navigator.pop(ctx);
-          if (isEdit) { final data = <String, dynamic>{'summary': sc.text.trim(), 'description': dc.text.trim(), 'priority': pri, 'status': status};
-            if (assignee != null) data['assignee_id'] = assignee;
-            await widget.apiService.updateSubTask(widget.taskId, st['id'], data);
-          } else { await widget.apiService.createSubTask(widget.taskId, summary: sc.text.trim(), description: dc.text.trim(), priority: pri); }
-          _load();
-        }, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF8B5CF6)), child: Text('Save'))],
-    )));
+    final sc = TextEditingController(text: st?['summary'] ?? '');
+    final dc = TextEditingController(text: st?['description'] ?? '');
+    String pri = st?['priority'] ?? 'medium';
+    String status = st?['status'] ?? 'to_do';
+    int? assignee = st?['assignee'];
+    final isEdit = st != null;
+    final messenger = ScaffoldMessenger.of(context);
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: AppTheme.surface2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: Colors.white.withOpacity(0.1))),
+          title: Text(isEdit ? 'Edit SubTask' : 'Add SubTask', style: TextStyle(color: AppTheme.textPrimary)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _tf(sc, 'Summary *'),
+                SizedBox(height: 10),
+                _tf(dc, 'Description', ml: 3),
+                SizedBox(height: 10),
+                Row(
+                  children: ['low', 'medium', 'high'].map((p) {
+                    final sel = pri == p;
+                    final c = _pc(p);
+                    return Expanded(
+                      child: GestureDetector(
+                        onTap: () => setD(() => pri = p),
+                        child: Container(
+                          margin: EdgeInsets.symmetric(horizontal: 3),
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: sel ? c.withOpacity(0.3) : Colors.white.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: sel ? c : Colors.white12),
+                          ),
+                          child: Text(
+                            p[0].toUpperCase() + p.substring(1),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: sel ? c : Colors.white54, fontSize: 10, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                SizedBox(height: 12),
+                Text('Status', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.w600)),
+                SizedBox(height: 6),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: ['to_do', 'in_progress', 'done'].contains(status) ? status : 'to_do',
+                      isExpanded: true,
+                      dropdownColor: AppTheme.surface2,
+                      icon: Icon(Icons.expand_more_rounded, color: AppTheme.textMuted),
+                      style: TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+                      items: const [
+                        DropdownMenuItem(value: 'to_do', child: Text('To do')),
+                        DropdownMenuItem(value: 'in_progress', child: Text('In progress')),
+                        DropdownMenuItem(value: 'done', child: Text('Done')),
+                      ],
+                      onChanged: (v) => setD(() => status = v ?? 'to_do'),
+                    ),
+                  ),
+                ),
+                if (widget.employees.isNotEmpty) ...[
+                  SizedBox(height: 10),
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<int?>(
+                        isExpanded: true,
+                        value: assignee,
+                        hint: Text('Assign to...', style: TextStyle(color: Colors.white30, fontSize: 13)),
+                        dropdownColor: AppTheme.surface2,
+                        items: [
+                          DropdownMenuItem<int?>(value: null, child: Text('Unassigned', style: TextStyle(color: Colors.white54, fontSize: 13))),
+                          ...widget.employees.map(
+                            (e) => DropdownMenuItem<int?>(
+                              value: e['id'] as int?,
+                              child: Text(e['full_name'] ?? e['username'] ?? '', style: TextStyle(color: Colors.white, fontSize: 13)),
+                            ),
+                          ),
+                        ],
+                        onChanged: (v) => setD(() => assignee = v),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogCtx), child: Text('Cancel', style: TextStyle(color: AppTheme.primaryBright))),
+            FilledButton(
+              onPressed: () async {
+                if (sc.text.trim().isEmpty) {
+                  messenger.showSnackBar(const SnackBar(content: Text('Enter a summary')));
+                  return;
+                }
+                final nav = Navigator.of(dialogCtx);
+                if (isEdit) {
+                  final data = <String, dynamic>{
+                    'summary': sc.text.trim(),
+                    'description': dc.text.trim(),
+                    'priority': pri,
+                    'status': status,
+                  };
+                  if (assignee != null) data['assignee_id'] = assignee;
+                  final r = await widget.apiService.updateSubTask(widget.taskId, st['id'] as int, data);
+                  if (!mounted) return;
+                  if (r['success'] == true) {
+                    nav.pop();
+                    _load();
+                  } else {
+                    messenger.showSnackBar(SnackBar(content: Text(r['error']?.toString() ?? 'Could not save')));
+                  }
+                } else {
+                  final r = await widget.apiService.createSubTask(
+                    widget.taskId,
+                    summary: sc.text.trim(),
+                    description: dc.text.trim(),
+                    priority: pri,
+                    status: status,
+                    assigneeId: assignee,
+                  );
+                  if (!mounted) return;
+                  if (r['success'] == true) {
+                    nav.pop();
+                    _load();
+                  } else {
+                    messenger.showSnackBar(SnackBar(content: Text(r['error']?.toString() ?? 'Could not create subtask')));
+                  }
+                }
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
   @override
   Widget build(BuildContext context) {
@@ -568,8 +1724,7 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
     decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(12), border: Border.all(color: c.withOpacity(0.2))),
     child: Column(children: [Text(v, style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)), Text(l, style: TextStyle(color: Colors.white38, fontSize: 10))])));
   Widget _stCard(dynamic st) {
-    final isDone = st['completed'] == true; final status = st['status'] ?? 'to_do'; final pri = st['priority'] ?? 'medium';
-    final sl = {'to_do': 'To Do', 'in_progress': 'In Progress', 'done': 'Done'};
+    final isDone = st['completed'] == true;
     return Container(margin: EdgeInsets.only(bottom: 12), padding: EdgeInsets.all(16),
       decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(14), border: Border.all(color: Colors.white.withOpacity(0.08))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -578,8 +1733,7 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
             decoration: BoxDecoration(borderRadius: BorderRadius.circular(4), border: Border.all(color: isDone ? Color(0xFF10B981) : Colors.white38, width: 2), color: isDone ? Color(0xFF10B981) : Colors.transparent),
             child: isDone ? Icon(Icons.check, size: 14, color: Colors.white) : null)),
           SizedBox(width: 8),
-          Container(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2), decoration: BoxDecoration(color: _pc(pri).withOpacity(0.15), borderRadius: BorderRadius.circular(4), border: Border.all(color: _pc(pri).withOpacity(0.3))),
-            child: Text(pri.toUpperCase(), style: TextStyle(color: _pc(pri), fontSize: 9, fontWeight: FontWeight.w700))),
+          SubtaskStatusBadge(subtask: st),
           Spacer(),
           GestureDetector(onTap: () => _showDialog(st: st), child: Container(padding: EdgeInsets.all(6), decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(6)), child: Icon(Icons.edit, size: 14, color: Colors.white38))),
           SizedBox(width: 6),
@@ -589,14 +1743,47 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
         Text(st['summary'] ?? '', style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600, decoration: isDone ? TextDecoration.lineThrough : null)),
         if ((st['description'] ?? '').toString().isNotEmpty) ...[SizedBox(height: 6), Text(st['description'], style: TextStyle(color: Colors.white30, fontSize: 12), maxLines: 2, overflow: TextOverflow.ellipsis)],
         SizedBox(height: 10),
+        SubtaskStatusDropdown(
+          key: ValueKey<String>('pss_${st['id']}_${st['status']}_${st['completed']}'),
+          taskId: widget.taskId,
+          subtaskId: st['id'] as int,
+          subtask: st,
+          apiService: widget.apiService,
+          onUpdated: _load,
+        ),
+        SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: isDone
+              ? OutlinedButton.icon(
+                  onPressed: () => _toggle(st['id'] as int),
+                  icon: Icon(Icons.replay_rounded, size: 16, color: Color(0xFFFBBF24)),
+                  label: Text('Restore', style: TextStyle(color: Color(0xFFFBBF24), fontSize: 12, fontWeight: FontWeight.w600)),
+                  style: OutlinedButton.styleFrom(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    side: BorderSide(color: Color(0xFFFBBF24).withOpacity(0.5)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                )
+              : FilledButton.icon(
+                  onPressed: () => _toggle(st['id'] as int),
+                  icon: Icon(Icons.check_circle_outline_rounded, size: 16, color: Colors.white),
+                  label: Text('Mark complete', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Color(0xFF10B981).withOpacity(0.9),
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+        ),
+        SizedBox(height: 10),
         Row(children: [
           if (st['assignee_name'] != null) ...[CircleAvatar(radius: 10, backgroundColor: Color(0xFF334155), child: Text((st['assignee_name'] ?? '?')[0].toUpperCase(), style: TextStyle(color: Colors.white, fontSize: 9))),
             SizedBox(width: 6), Text(st['assignee_name'] ?? '', style: TextStyle(color: Colors.white38, fontSize: 11))]
           else Text('Unassigned', style: TextStyle(color: Colors.white24, fontSize: 11)),
           Spacer(),
-          if (st['due_date'] != null) ...[Icon(Icons.schedule, size: 11, color: Colors.white24), SizedBox(width: 3), Text(st['due_date'], style: TextStyle(color: Colors.white24, fontSize: 10)), SizedBox(width: 8)],
-          Container(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: _stc(status).withOpacity(0.15), borderRadius: BorderRadius.circular(6), border: Border.all(color: _stc(status).withOpacity(0.3))),
-            child: Text(sl[status] ?? status, style: TextStyle(color: _stc(status), fontSize: 9, fontWeight: FontWeight.w700))),
+          if (st['due_date'] != null) ...[Icon(Icons.schedule, size: 11, color: Colors.white24), SizedBox(width: 3), Text(st['due_date'], style: TextStyle(color: Colors.white24, fontSize: 10))],
         ]),
       ]));
   }
