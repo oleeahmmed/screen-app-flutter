@@ -2,9 +2,58 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/task_status_dropdown.dart';
+
+int? _parseUserId(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse(v.toString());
+}
+
+/// Dedupes employees by id; if [currentUserId] is set but not in the project list, adds one menu row (API user id).
+List<DropdownMenuItem<int?>> buildTaskAssigneeDropdownItems(
+  List<dynamic> employees,
+  Map<String, dynamic> task,
+  int? currentUserId,
+) {
+  const unassignedStyle = TextStyle(color: Colors.white54, fontSize: 13);
+  const itemStyle = TextStyle(color: Colors.white, fontSize: 13);
+  final seen = <int>{};
+  final items = <DropdownMenuItem<int?>>[
+    DropdownMenuItem<int?>(value: null, child: Text('Unassigned', style: unassignedStyle)),
+  ];
+  for (final e in employees) {
+    final id = _parseUserId(e['id']);
+    if (id == null || seen.contains(id)) continue;
+    seen.add(id);
+    items.add(DropdownMenuItem<int?>(
+      value: id,
+      child: Text(e['full_name'] ?? e['username'] ?? '$id', style: itemStyle),
+    ));
+  }
+  if (currentUserId != null && !seen.contains(currentUserId)) {
+    final label = task['user_name']?.toString().trim();
+    items.add(DropdownMenuItem<int?>(
+      value: currentUserId,
+      child: Text(
+        (label != null && label.isNotEmpty) ? label : 'User #$currentUserId',
+        style: itemStyle.copyWith(color: const Color(0xFFe2e8f0)),
+      ),
+    ));
+  }
+  return items;
+}
+
+int? coerceAssigneeDropdownValue(int? desired, List<DropdownMenuItem<int?>> items) {
+  final allowed = items.map((e) => e.value).toSet();
+  if (desired == null) return null;
+  if (allowed.contains(desired)) return desired;
+  return null;
+}
 
 /// Drag-and-drop payload for moving tasks between stages (Kanban).
 class TaskDragPayload {
@@ -153,7 +202,14 @@ class _ProjectsPageState extends State<ProjectsPage> {
       actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
         ElevatedButton(onPressed: () async { if (nc.text.trim().isEmpty) return; Navigator.pop(ctx);
           await widget.apiService.createProject(name: nc.text.trim(), description: dc.text.trim()); _loadProjects();
-        }, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF8B5CF6)), child: Text('Create'))],
+        }, style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF7C3AED),
+                foregroundColor: Colors.white,
+                disabledForegroundColor: Colors.white70,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ), child: Text('Create'))],
     ));
   }
 Widget _dtf(TextEditingController c, String h, {int ml=1}) => TextField(controller: c, maxLines: ml, style: TextStyle(color: Colors.white),
@@ -688,10 +744,16 @@ class ProjectDetailView extends StatefulWidget {
 class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTickerProviderStateMixin {
   Map<String, dynamic>? _project; bool _isLoading = true;
   late TabController _tabCtrl; DateTime _calMonth = DateTime.now();
+  /// Horizontal Kanban board scroll — must be shared with [Scrollbar] for dragging/sync.
+  final ScrollController _boardHScrollController = ScrollController();
   @override
   void initState() { super.initState(); _tabCtrl = TabController(length: 2, vsync: this); _load(); }
   @override
-  void dispose() { _tabCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _boardHScrollController.dispose();
+    _tabCtrl.dispose();
+    super.dispose();
+  }
   Future<void> _load() async {
     setState(() => _isLoading = true);
     final r = await widget.apiService.getProjectDetail(widget.projectId);
@@ -719,7 +781,14 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
       actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
         ElevatedButton(onPressed: () async { if (nc.text.trim().isEmpty) return; Navigator.pop(ctx);
           await widget.apiService.createStage(widget.projectId, name: nc.text.trim(), color: color); _load();
-        }, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF8B5CF6)), child: Text('Add'))],
+        }, style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF7C3AED),
+                foregroundColor: Colors.white,
+                disabledForegroundColor: Colors.white70,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ), child: Text('Add'))],
     )));
   }
   void _deleteStage(int sid, String name) async {
@@ -768,6 +837,774 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     }
   }
 
+  Future<void> _uploadTaskFileFromKanban(dynamic t) async {
+    final taskId = t['id'] as int;
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false, withData: true);
+    if (result == null || result.files.isEmpty) return;
+    final f = result.files.first;
+    List<int>? bytes = f.bytes?.toList();
+    if (bytes == null && f.path != null) bytes = await File(f.path!).readAsBytes();
+    if (bytes == null || f.name.isEmpty) return;
+    final up = await widget.apiService.uploadTaskAttachment(taskId, bytes, f.name);
+    if (!mounted) return;
+    if (up['success'] == true) {
+      _load();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File uploaded')));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(up['error']?.toString() ?? 'Upload failed')),
+      );
+    }
+  }
+
+  Future<void> _showEditTaskKanban(dynamic t) async {
+    final taskId = t['id'] as int;
+    final r = await widget.apiService.getTask(taskId);
+    if (!mounted) return;
+    Map<String, dynamic> task;
+    if (r['success'] == true && r['data'] != null) {
+      task = Map<String, dynamic>.from(r['data'] as Map);
+    } else {
+      task = <String, dynamic>{
+        'name': t['name'] ?? '',
+        'description': t['description'] ?? '',
+        'due_date': t['due_date'],
+        'priority': t['priority'] ?? 'medium',
+        'user': t['user_id'],
+        'is_attachment_required': t['is_attachment_required'] == true,
+      };
+    }
+    final nc = TextEditingController(text: task['name']?.toString() ?? '');
+    final dc = TextEditingController(text: task['description']?.toString() ?? '');
+    final dueC = TextEditingController(text: (task['due_date'] ?? '').toString());
+    String pri = (task['priority'] ?? 'medium').toString();
+    if (!['low', 'medium', 'high'].contains(pri)) pri = 'medium';
+    final rawAssignee = _parseUserId(task['user']) ?? _parseUserId(task['user_id']);
+    final assigneeMenuItems = buildTaskAssigneeDropdownItems(_employees, task, rawAssignee);
+    int? assignee = coerceAssigneeDropdownValue(rawAssignee, assigneeMenuItems);
+    bool attReq = task['is_attachment_required'] == true;
+    final messenger = ScaffoldMessenger.of(context);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: Color(0xFF1e293b),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('Edit task', style: TextStyle(color: Colors.white)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _tf(nc, 'Task name *'),
+                SizedBox(height: 10),
+                _tf(dc, 'Description', ml: 3),
+                SizedBox(height: 10),
+                _tf(dueC, 'Due date (YYYY-MM-DD)', ml: 1),
+                SizedBox(height: 10),
+                Row(
+                  children: ['low', 'medium', 'high'].map((p) {
+                    final sel = pri == p;
+                    final c = _pc(p);
+                    return Expanded(
+                      child: GestureDetector(
+                        onTap: () => setD(() => pri = p),
+                        child: Container(
+                          margin: EdgeInsets.symmetric(horizontal: 3),
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: sel ? c.withOpacity(0.3) : Colors.white.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: sel ? c : Colors.white12),
+                          ),
+                          child: Text(
+                            p[0].toUpperCase() + p.substring(1),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: sel ? c : Colors.white54, fontSize: 10, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                SizedBox(height: 12),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: Checkbox(
+                        value: attReq,
+                        onChanged: (v) => setD(() => attReq = v ?? false),
+                        activeColor: Color(0xFF8B5CF6),
+                        checkColor: Colors.white,
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Attachment required to complete',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+                if (assigneeMenuItems.length > 1) ...[
+                  SizedBox(height: 10),
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<int?>(
+                        isExpanded: true,
+                        value: assignee,
+                        hint: Text('Assign to...', style: TextStyle(color: Colors.white30, fontSize: 13)),
+                        dropdownColor: Color(0xFF1e293b),
+                        items: assigneeMenuItems,
+                        onChanged: (v) => setD(() => assignee = v),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogCtx), child: Text('Cancel', style: TextStyle(color: Colors.white54))),
+            ElevatedButton(
+              onPressed: () async {
+                if (nc.text.trim().isEmpty) {
+                  messenger.showSnackBar(const SnackBar(content: Text('Enter a task name')));
+                  return;
+                }
+                final body = <String, dynamic>{
+                  'name': nc.text.trim(),
+                  'description': dc.text.trim(),
+                  'priority': pri,
+                  'is_attachment_required': attReq,
+                };
+                final d = dueC.text.trim();
+                if (d.isNotEmpty) body['due_date'] = d;
+                if (assignee != null) body['assignee_id'] = assignee;
+                final nav = Navigator.of(dialogCtx);
+                final res = await widget.apiService.updateTask(taskId, body);
+                if (!mounted) return;
+                if (res['success'] == true) {
+                  nav.pop();
+                  _load();
+                } else {
+                  messenger.showSnackBar(SnackBar(content: Text(res['error']?.toString() ?? 'Could not save')));
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF7C3AED),
+                foregroundColor: Colors.white,
+                disabledForegroundColor: Colors.white70,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _fmtTaskField(dynamic v) {
+    if (v == null) return '—';
+    final s = v.toString();
+    return s.isEmpty ? '—' : s;
+  }
+
+  String _formatFileSize(dynamic bytes) {
+    if (bytes == null) return '';
+    final n = int.tryParse(bytes.toString());
+    if (n == null || n <= 0) return '';
+    if (n < 1024) return '$n B';
+    if (n < 1024 * 1024) return '${(n / 1024).toStringAsFixed(1)} KB';
+    return '${(n / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  bool _isImageFileName(String name) {
+    final l = name.toLowerCase();
+    return l.endsWith('.png') ||
+        l.endsWith('.jpg') ||
+        l.endsWith('.jpeg') ||
+        l.endsWith('.gif') ||
+        l.endsWith('.webp') ||
+        l.endsWith('.bmp');
+  }
+
+  Future<void> _openAttachmentUrl(String? url) async {
+    if (url == null || url.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not open file')));
+    }
+  }
+
+  void _previewAttachment(BuildContext context, String? url, String fileName) {
+    if (url == null || url.isEmpty) return;
+    if (_isImageFileName(fileName)) {
+      showDialog<void>(
+        context: context,
+        builder: (ctx) {
+          final h = MediaQuery.of(ctx).size.height * 0.82;
+          final w = MediaQuery.of(ctx).size.width * 0.95;
+          return Dialog(
+            backgroundColor: const Color(0xFF0f172a),
+            insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: SizedBox(
+                width: w,
+                height: h,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      color: const Color(0xFF1e293b),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.image_outlined, color: Color(0xFFA78BFA), size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              fileName,
+                              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded, color: Colors.white54),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: InteractiveViewer(
+                        minScale: 0.4,
+                        maxScale: 5,
+                        child: Center(
+                          child: Image.network(
+                            url,
+                            fit: BoxFit.contain,
+                            loadingBuilder: (c, child, p) {
+                              if (p == null) return child;
+                              return const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(48),
+                                  child: CircularProgressIndicator(color: Color(0xFF8B5CF6)),
+                                ),
+                              );
+                            },
+                            errorBuilder: (c, e, s) => const Padding(
+                              padding: EdgeInsets.all(32),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.broken_image_outlined, color: Colors.white38, size: 48),
+                                  SizedBox(height: 8),
+                                  Text('Could not load preview', style: TextStyle(color: Colors.white54)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    } else {
+      _openAttachmentUrl(url);
+    }
+  }
+
+  Widget _taskDetailKvRow(String label, String value, {bool dense = false}) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: dense ? 8 : 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 118,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.45),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                height: 1.35,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: const TextStyle(color: Colors.white, fontSize: 13, height: 1.4),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _taskDetailSectionTitle(String title, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 12),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF8B5CF6).withOpacity(0.2),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 16, color: const Color(0xFFA78BFA)),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _taskDetailPanel({required List<Widget> children}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: children),
+    );
+  }
+
+  Widget _buildTaskAttachmentTile(BuildContext dialogCtx, dynamic att) {
+    final name = att['file_name']?.toString() ?? 'file';
+    final url = att['file_url']?.toString();
+    final sizeStr = _formatFileSize(att['file_size']);
+    final uploaded = att['uploaded_by_name']?.toString();
+    final isImg = _isImageFileName(name);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+        color: Colors.white.withOpacity(0.03),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 8, offset: const Offset(0, 2)),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (isImg && url != null && url.isNotEmpty)
+            GestureDetector(
+              onTap: () => _previewAttachment(dialogCtx, url, name),
+              child: AspectRatio(
+                aspectRatio: 16 / 9,
+                child: Image.network(
+                  url,
+                  fit: BoxFit.cover,
+                  loadingBuilder: (c, w, p) {
+                    if (p == null) return w;
+                    return Container(
+                      color: Colors.black26,
+                      child: const Center(child: CircularProgressIndicator(color: Color(0xFF8B5CF6), strokeWidth: 2)),
+                    );
+                  },
+                  errorBuilder: (c, e, s) => Container(
+                    color: Colors.white.withOpacity(0.06),
+                    child: const Center(
+                      child: Icon(Icons.hide_image_outlined, color: Colors.white24, size: 40),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  isImg ? Icons.image_outlined : Icons.insert_drive_file_outlined,
+                  color: const Color(0xFFA78BFA),
+                  size: 22,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (sizeStr.isNotEmpty || (uploaded != null && uploaded.isNotEmpty))
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            [if (sizeStr.isNotEmpty) sizeStr, if (uploaded != null && uploaded.isNotEmpty) '· $uploaded']
+                                .join(' '),
+                            style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: url == null || url.isEmpty ? null : () => _previewAttachment(dialogCtx, url, name),
+                  icon: const Icon(Icons.visibility_outlined, size: 16, color: Color(0xFF93C5FD)),
+                  label: const Text('Preview', style: TextStyle(color: Color(0xFF93C5FD), fontSize: 11, fontWeight: FontWeight.w600)),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: url == null || url.isEmpty ? null : () => _openAttachmentUrl(url),
+                  icon: const Icon(Icons.download_outlined, size: 16, color: Color(0xFF34D399)),
+                  label: const Text('Open', style: TextStyle(color: Color(0xFF34D399), fontSize: 11, fontWeight: FontWeight.w600)),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildTaskDetailContent(
+    BuildContext dialogCtx,
+    Map<String, dynamic> task,
+    List<dynamic> attachments,
+  ) {
+    final chips = <Widget>[
+      _chip(_fmtTaskField(task['status']), const Color(0xFF3B82F6)),
+      _chip(_fmtTaskField(task['priority']), const Color(0xFFF59E0B)),
+      if (task['completed'] == true) _chip('Done', const Color(0xFF10B981)),
+    ];
+
+    final shown = {
+      'id', 'name', 'description', 'task_type', 'status', 'priority', 'completed',
+      'project', 'project_name', 'stage', 'stage_name', 'user', 'user_id', 'user_name',
+      'company', 'company_name', 'date', 'due_date', 'estimated_hours', 'actual_hours',
+      'is_attachment_required', 'has_attachments', 'attachment_count',
+      'subtask_count', 'completed_subtask_count', 'subtask_progress',
+      'review_status', 'review_comment', 'submitted_at', 'reviewed_at',
+      'created_at', 'updated_at', 'completed_at',
+    };
+
+    final extra = <Widget>[];
+    for (final e in task.entries) {
+      if (shown.contains(e.key)) continue;
+      extra.add(_taskDetailKvRow(e.key, _fmtTaskField(e.value), dense: true));
+    }
+
+    return [
+      Wrap(spacing: 8, runSpacing: 8, children: chips),
+      const SizedBox(height: 8),
+      _taskDetailSectionTitle('Overview', Icons.article_outlined),
+      _taskDetailPanel(
+        children: [
+          _taskDetailKvRow('ID', _fmtTaskField(task['id'])),
+          _taskDetailKvRow('Name', _fmtTaskField(task['name'])),
+          _taskDetailKvRow('Description', _fmtTaskField(task['description'])),
+          _taskDetailKvRow('Task type', _fmtTaskField(task['task_type'])),
+        ],
+      ),
+      _taskDetailSectionTitle('Placement', Icons.folder_outlined),
+      _taskDetailPanel(
+        children: [
+          _taskDetailKvRow('Project', _fmtTaskField(task['project_name'] ?? task['project'])),
+          _taskDetailKvRow('Stage', _fmtTaskField(task['stage_name'] ?? task['stage'])),
+          _taskDetailKvRow('Company', _fmtTaskField(task['company_name'] ?? task['company'])),
+        ],
+      ),
+      _taskDetailSectionTitle('People & time', Icons.people_outline_rounded),
+      _taskDetailPanel(
+        children: [
+          _taskDetailKvRow('Assignee', _fmtTaskField(task['user_name'] ?? task['user_id'] ?? task['user'])),
+          _taskDetailKvRow('Date', _fmtTaskField(task['date'])),
+          _taskDetailKvRow('Due date', _fmtTaskField(task['due_date'])),
+          _taskDetailKvRow('Est. hours', _fmtTaskField(task['estimated_hours'])),
+          _taskDetailKvRow('Actual hours', _fmtTaskField(task['actual_hours'])),
+        ],
+      ),
+      _taskDetailSectionTitle('Attachments policy', Icons.policy_outlined),
+      _taskDetailPanel(
+        children: [
+          _taskDetailKvRow('Required', _fmtTaskField(task['is_attachment_required'])),
+          _taskDetailKvRow('Has files', _fmtTaskField(task['has_attachments'])),
+          _taskDetailKvRow('Count', _fmtTaskField(task['attachment_count'])),
+        ],
+      ),
+      _taskDetailSectionTitle('Subtasks', Icons.checklist_rounded),
+      _taskDetailPanel(
+        children: [
+          _taskDetailKvRow(
+            'Progress',
+            '${_fmtTaskField(task['completed_subtask_count'])} / ${_fmtTaskField(task['subtask_count'])} · ${_fmtTaskField(task['subtask_progress'])}%',
+          ),
+        ],
+      ),
+      _taskDetailSectionTitle('Review', Icons.rate_review_outlined),
+      _taskDetailPanel(
+        children: [
+          _taskDetailKvRow('Status', _fmtTaskField(task['review_status'])),
+          _taskDetailKvRow('Comment', _fmtTaskField(task['review_comment'])),
+          _taskDetailKvRow('Submitted', _fmtTaskField(task['submitted_at'])),
+          _taskDetailKvRow('Reviewed', _fmtTaskField(task['reviewed_at'])),
+        ],
+      ),
+      _taskDetailSectionTitle('Files', Icons.attach_file_rounded),
+      if (attachments.isEmpty)
+        _taskDetailPanel(
+          children: [
+            Text(
+              'No files uploaded yet.',
+              style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 12),
+            ),
+          ],
+        )
+      else
+        ...attachments.map((a) => _buildTaskAttachmentTile(dialogCtx, a)),
+      _taskDetailSectionTitle('Record', Icons.schedule_rounded),
+      _taskDetailPanel(
+        children: [
+          _taskDetailKvRow('Created', _fmtTaskField(task['created_at'])),
+          _taskDetailKvRow('Updated', _fmtTaskField(task['updated_at'])),
+          _taskDetailKvRow('Completed at', _fmtTaskField(task['completed_at'])),
+        ],
+      ),
+      if (extra.isNotEmpty) ...[
+        _taskDetailSectionTitle('Extra fields', Icons.more_horiz_rounded),
+        _taskDetailPanel(children: extra),
+      ],
+    ];
+  }
+
+  Widget _chip(String text, Color accent) {
+    if (text == '—') return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: accent.withOpacity(0.18),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: accent.withOpacity(0.45)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(color: accent.withOpacity(0.95), fontSize: 11, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
+  Future<void> _showTaskViewKanban(dynamic t) async {
+    final taskId = t['id'] as int;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withOpacity(0.55),
+      builder: (c) => Center(
+        child: Card(
+          elevation: 16,
+          color: const Color(0xFF1e293b),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: const Padding(
+            padding: EdgeInsets.all(32),
+            child: CircularProgressIndicator(color: Color(0xFF8B5CF6), strokeWidth: 2.5),
+          ),
+        ),
+      ),
+    );
+    Map<String, dynamic> task;
+    List<dynamic> attachments = [];
+    try {
+      final results = await Future.wait([
+        widget.apiService.getTask(taskId),
+        widget.apiService.getTaskAttachments(taskId),
+      ]);
+      final r = results[0];
+      final rAtt = results[1];
+      if (!mounted) return;
+      if (r['success'] == true && r['data'] != null) {
+        task = Map<String, dynamic>.from(r['data'] as Map);
+      } else {
+        task = Map<String, dynamic>.from(t as Map);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(r['error']?.toString() ?? 'Showing saved card data')),
+          );
+        }
+      }
+      if (rAtt['success'] == true) {
+        final raw = rAtt['data'];
+        attachments = raw is List ? List<dynamic>.from(raw) : <dynamic>[];
+      }
+    } finally {
+      if (mounted) Navigator.of(context).pop();
+    }
+    if (!mounted) return;
+
+    final title = _fmtTaskField(task['name']);
+    final maxH = MediaQuery.of(context).size.height * 0.9;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 22),
+        child: SizedBox(
+          width: 460,
+          height: maxH,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22),
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF1e293b), Color(0xFF0f172a)],
+              ),
+              border: Border.all(color: Colors.white.withOpacity(0.1)),
+              boxShadow: [
+                BoxShadow(color: const Color(0xFF7C3AED).withOpacity(0.15), blurRadius: 28, offset: const Offset(0, 12)),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding: const EdgeInsets.fromLTRB(18, 18, 12, 16),
+                  decoration: BoxDecoration(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        const Color(0xFF7C3AED).withOpacity(0.45),
+                        const Color(0xFF2563EB).withOpacity(0.22),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.task_alt_rounded, color: Colors.white, size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'TASK DETAILS',
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.65),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 1.1,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                height: 1.25,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => Navigator.pop(dialogCtx),
+                        icon: Icon(Icons.close_rounded, color: Colors.white.withOpacity(0.7), size: 22),
+                        tooltip: 'Close',
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(18, 8, 18, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: _buildTaskDetailContent(dialogCtx, task, attachments),
+                      ),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(dialogCtx),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF8B5CF6),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('Close', style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showEditProjectDialog() {
     final nc = TextEditingController(text: _project?['name'] ?? '');
     final dc = TextEditingController(text: _project?['description'] ?? '');
@@ -776,7 +1613,14 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
       actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel')),
         ElevatedButton(onPressed: () async { if (nc.text.trim().isEmpty) return; Navigator.pop(ctx);
           await widget.apiService.updateProject(widget.projectId, {'name': nc.text.trim(), 'description': dc.text.trim()}); _load();
-        }, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF8B5CF6)), child: Text('Save'))],
+        }, style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF7C3AED),
+                foregroundColor: Colors.white,
+                disabledForegroundColor: Colors.white70,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ), child: Text('Save'))],
     ));
   }
   void _deleteProject() async {
@@ -797,20 +1641,53 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     final nc = TextEditingController(); final dc = TextEditingController();
     String pri = 'medium'; int? assignee; String? due;
     bool isAttReq = false; PlatformFile? pickedFile;
+    final createAssigneeItems = buildTaskAssigneeDropdownItems(_employees, {}, null);
     showDialog(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setD) => AlertDialog(
       backgroundColor: Color(0xFF1e293b), title: Text('Create Task', style: TextStyle(color: Colors.white)),
       content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
         _tf(nc, 'Task Name *'), SizedBox(height: 10), _tf(dc, 'Description', ml: 2), SizedBox(height: 10),
-        Row(children: ['low','medium','high'].map((p) { final s = pri == p; final c = _pc(p);
-          return Expanded(child: GestureDetector(onTap: () => setD(() => pri = p), child: Container(margin: EdgeInsets.symmetric(horizontal: 3), padding: EdgeInsets.symmetric(vertical: 8),
-            decoration: BoxDecoration(color: s ? c.withOpacity(0.3) : Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(8), border: Border.all(color: s ? c : Colors.white12)),
-            child: Text(p[0].toUpperCase()+p.substring(1), textAlign: TextAlign.center, style: TextStyle(color: s ? c : Colors.white54, fontSize: 11, fontWeight: FontWeight.w600))))); }).toList()),
-        if (_employees.isNotEmpty) ...[SizedBox(height: 10),
-          Container(padding: EdgeInsets.symmetric(horizontal: 12), decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
-            child: DropdownButtonHideUnderline(child: DropdownButton<int?>(isExpanded: true, value: assignee, hint: Text('Assign to...', style: TextStyle(color: Colors.white30, fontSize: 13)), dropdownColor: Color(0xFF1e293b),
-              items: [DropdownMenuItem<int?>(value: null, child: Text('Unassigned', style: TextStyle(color: Colors.white54, fontSize: 13))),
-                ..._employees.map((e) => DropdownMenuItem<int?>(value: e['id'], child: Text(e['full_name'] ?? e['username'] ?? '', style: TextStyle(color: Colors.white, fontSize: 13))))],
-              onChanged: (v) => setD(() => assignee = v))))],
+        Row(
+          children: ['low', 'medium', 'high'].map((p) {
+            final s = pri == p;
+            final c = _pc(p);
+            return Expanded(
+              child: GestureDetector(
+                onTap: () => setD(() => pri = p),
+                child: Container(
+                  margin: EdgeInsets.symmetric(horizontal: 3),
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(
+                    color: s ? c.withOpacity(0.3) : Colors.white.withOpacity(0.05),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: s ? c : Colors.white12),
+                  ),
+                  child: Text(
+                    p[0].toUpperCase() + p.substring(1),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: s ? c : Colors.white54, fontSize: 11, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+        if (createAssigneeItems.length > 1) ...[
+          SizedBox(height: 10),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int?>(
+                isExpanded: true,
+                value: assignee,
+                hint: Text('Assign to...', style: TextStyle(color: Colors.white30, fontSize: 13)),
+                dropdownColor: Color(0xFF1e293b),
+                items: createAssigneeItems,
+                onChanged: (v) => setD(() => assignee = v),
+              ),
+            ),
+          ),
+        ],
         SizedBox(height: 10),
         GestureDetector(onTap: () async {
           final picked = await showDatePicker(context: ctx, initialDate: DateTime.now(), firstDate: DateTime(2024), lastDate: DateTime(2030),
@@ -842,7 +1719,14 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
           List<int>? bytes; if (pickedFile != null && pickedFile!.path != null) bytes = await File(pickedFile!.path!).readAsBytes();
           await widget.apiService.createTask(name: nc.text.trim(), description: dc.text.trim(), priority: pri, dueDate: due, projectId: widget.projectId, stageId: stageId,
             isAttachmentRequired: isAttReq, attachmentBytes: bytes, attachmentName: pickedFile?.name); _load();
-        }, style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF8B5CF6)), child: Text('Create'))],
+        }, style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF7C3AED),
+                foregroundColor: Colors.white,
+                disabledForegroundColor: Colors.white70,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ), child: Text('Create'))],
     )));
   }
   @override
@@ -1000,7 +1884,14 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
               onPressed: _showAddStageDialog,
               icon: Icon(Icons.add, size: 18),
               label: Text('Add Stage'),
-              style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF8B5CF6)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFF7C3AED),
+                foregroundColor: Colors.white,
+                disabledForegroundColor: Colors.white70,
+                elevation: 0,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
             ),
             SizedBox(height: 14),
             Padding(
@@ -1021,8 +1912,15 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
             ? constraints.maxHeight
             : 400.0;
         return Scrollbar(
+          controller: _boardHScrollController,
           thumbVisibility: true,
+          trackVisibility: true,
+          interactive: true,
+          thickness: 8,
+          radius: const Radius.circular(8),
           child: ListView(
+            controller: _boardHScrollController,
+            primary: false,
             scrollDirection: Axis.horizontal,
             padding: EdgeInsets.fromLTRB(12, 8, 12, 16),
             children: [
@@ -1284,6 +2182,56 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                           onUpdated: _load,
                           compact: true,
                         ),
+                        SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Wrap(
+                                spacing: 6,
+                                runSpacing: 4,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed: () => _showTaskViewKanban(t),
+                                    icon: Icon(Icons.visibility_outlined, size: 15, color: Color(0xFF93C5FD)),
+                                    label: Text('View', style: TextStyle(color: Color(0xFF93C5FD), fontSize: 11, fontWeight: FontWeight.w700)),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      side: BorderSide(color: Color(0xFF3B82F6).withOpacity(0.55)),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _showEditTaskKanban(t),
+                                    icon: Icon(Icons.edit_outlined, size: 15, color: Color(0xFFA78BFA)),
+                                    label: Text('Edit', style: TextStyle(color: Color(0xFFA78BFA), fontSize: 11, fontWeight: FontWeight.w700)),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      side: BorderSide(color: Color(0xFF8B5CF6).withOpacity(0.5)),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _uploadTaskFileFromKanban(t),
+                                    icon: Icon(Icons.upload_file_rounded, size: 15, color: Color(0xFF34D399)),
+                                    label: Text('Upload file', style: TextStyle(color: Color(0xFF34D399), fontSize: 11, fontWeight: FontWeight.w700)),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      side: BorderSide(color: Color(0xFF10B981).withOpacity(0.45)),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                         SizedBox(height: 6),
                         SizedBox(
                           width: double.infinity,
@@ -1498,17 +2446,284 @@ class _TaskSubtasksPage extends StatefulWidget {
   State<_TaskSubtasksPage> createState() => _TaskSubtasksPageState();
 }
 class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
-  List<dynamic> _subtasks = []; bool _isLoading = true;
+  List<dynamic> _subtasks = [];
+  bool _isLoading = true;
+  Map<String, dynamic>? _taskDetail;
+  List<dynamic> _taskAttachments = [];
   int get _total => _subtasks.length;
   int get _done => _subtasks.where((s) => s['completed'] == true).length;
   double get _progress => _total == 0 ? 0 : (_done / _total) * 100;
+  String get _displayName => (_taskDetail?['name'] ?? widget.taskName).toString();
+  String get _displayDesc => (_taskDetail?['description'] ?? widget.taskDesc).toString();
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    _load();
+  }
+
   Future<void> _load() async {
     setState(() => _isLoading = true);
+    final rTask = await widget.apiService.getTask(widget.taskId);
     final r = await widget.apiService.getSubTasks(widget.taskId);
-    if (r['success'] && mounted) setState(() { _subtasks = r['data'] ?? []; _isLoading = false; });
-    else if (mounted) setState(() => _isLoading = false);
+    final rAtt = await widget.apiService.getTaskAttachments(widget.taskId);
+    if (!mounted) return;
+    if (rTask['success'] == true && rTask['data'] != null) {
+      _taskDetail = Map<String, dynamic>.from(rTask['data'] as Map);
+    }
+    if (r['success'] == true) {
+      _subtasks = r['data'] ?? [];
+    }
+    if (rAtt['success'] == true) {
+      final raw = rAtt['data'];
+      _taskAttachments = raw is List ? List<dynamic>.from(raw) : <dynamic>[];
+    }
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _openUrl(String? url) async {
+    if (url == null || url.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not open link')));
+    }
+  }
+
+  Future<void> _pickAndUploadTaskFile() async {
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false, withData: true);
+    if (result == null || result.files.isEmpty) return;
+    final f = result.files.first;
+    List<int>? bytes = f.bytes?.toList();
+    if (bytes == null && f.path != null) bytes = await File(f.path!).readAsBytes();
+    if (bytes == null || f.name.isEmpty) return;
+    final up = await widget.apiService.uploadTaskAttachment(widget.taskId, bytes, f.name);
+    if (!mounted) return;
+    if (up['success'] == true) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File uploaded')));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(up['error']?.toString() ?? 'Upload failed')),
+      );
+    }
+  }
+
+  Future<void> _uploadSubtaskFile(dynamic st) async {
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false, withData: true);
+    if (result == null || result.files.isEmpty) return;
+    final f = result.files.first;
+    List<int>? bytes = f.bytes?.toList();
+    if (bytes == null && f.path != null) bytes = await File(f.path!).readAsBytes();
+    if (bytes == null) return;
+    final up = await widget.apiService.uploadSubTaskAttachment(
+      widget.taskId,
+      st['id'] as int,
+      bytes,
+      f.name,
+    );
+    if (!mounted) return;
+    if (up['success'] == true) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File uploaded')));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(up['error']?.toString() ?? 'Upload failed')),
+      );
+    }
+  }
+
+  Future<void> _showSubtaskFiles(dynamic st) async {
+    final id = st['id'] as int;
+    final res = await widget.apiService.getSubTaskAttachments(widget.taskId, id);
+    final list = (res['success'] == true) ? (res['data'] as List<dynamic>? ?? []) : <dynamic>[];
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  st['summary']?.toString() ?? 'Subtask',
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (list.isEmpty)
+                  const Text('No files yet', style: TextStyle(color: AppTheme.textMuted))
+                else
+                  ...list.map(
+                    (a) => ListTile(
+                      leading: const Icon(Icons.attach_file, color: AppTheme.primaryBright),
+                      title: Text(
+                        a['file_name']?.toString() ?? 'file',
+                        style: const TextStyle(color: AppTheme.textPrimary),
+                      ),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _openUrl(a['file_url']?.toString());
+                      },
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    await _uploadSubtaskFile(st);
+                  },
+                  icon: const Icon(Icons.upload_file),
+                  label: const Text('Upload file'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showEditTaskDialog() {
+    final t = _taskDetail;
+    final taskMap = t ?? <String, dynamic>{};
+    final nc = TextEditingController(text: _displayName);
+    final dc = TextEditingController(text: _displayDesc.isEmpty ? '' : _displayDesc);
+    final dueC = TextEditingController(text: (t?['due_date'] ?? '').toString());
+    String pri = (t?['priority'] ?? 'medium').toString();
+    if (!['low', 'medium', 'high'].contains(pri)) pri = 'medium';
+    final rawAssignee = _parseUserId(taskMap['user']) ?? _parseUserId(taskMap['user_id']);
+    final assigneeMenuItems = buildTaskAssigneeDropdownItems(widget.employees, taskMap, rawAssignee);
+    int? assignee = coerceAssigneeDropdownValue(rawAssignee, assigneeMenuItems);
+    bool attReq = t?['is_attachment_required'] == true;
+    final messenger = ScaffoldMessenger.of(context);
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: AppTheme.surface2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: Colors.white.withOpacity(0.1)),
+          ),
+          title: Text('Edit task', style: TextStyle(color: AppTheme.textPrimary)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _tf(nc, 'Task name *'),
+                SizedBox(height: 10),
+                _tf(dc, 'Description', ml: 3),
+                SizedBox(height: 10),
+                _tf(dueC, 'Due date (YYYY-MM-DD)', ml: 1),
+                SizedBox(height: 10),
+                Row(
+                  children: ['low', 'medium', 'high'].map((p) {
+                    final sel = pri == p;
+                    final c = _pc(p);
+                    return Expanded(
+                      child: GestureDetector(
+                        onTap: () => setD(() => pri = p),
+                        child: Container(
+                          margin: EdgeInsets.symmetric(horizontal: 3),
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          decoration: BoxDecoration(
+                            color: sel ? c.withOpacity(0.3) : Colors.white.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: sel ? c : Colors.white12),
+                          ),
+                          child: Text(
+                            p[0].toUpperCase() + p.substring(1),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: sel ? c : Colors.white54, fontSize: 10, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                SizedBox(height: 12),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('Attachment required to complete', style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                  value: attReq,
+                  onChanged: (v) => setD(() => attReq = v),
+                  activeThumbColor: Color(0xFF8B5CF6),
+                ),
+                if (assigneeMenuItems.length > 1) ...[
+                  SizedBox(height: 6),
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<int?>(
+                        isExpanded: true,
+                        value: assignee,
+                        hint: Text('Assign to...', style: TextStyle(color: Colors.white30, fontSize: 13)),
+                        dropdownColor: AppTheme.surface2,
+                        items: assigneeMenuItems,
+                        onChanged: (v) => setD(() => assignee = v),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogCtx), child: Text('Cancel', style: TextStyle(color: AppTheme.primaryBright))),
+            FilledButton(
+              onPressed: () async {
+                if (nc.text.trim().isEmpty) {
+                  messenger.showSnackBar(const SnackBar(content: Text('Enter a task name')));
+                  return;
+                }
+                final body = <String, dynamic>{
+                  'name': nc.text.trim(),
+                  'description': dc.text.trim(),
+                  'priority': pri,
+                  'is_attachment_required': attReq,
+                };
+                final d = dueC.text.trim();
+                if (d.isNotEmpty) {
+                  body['due_date'] = d;
+                }
+                if (assignee != null) body['assignee_id'] = assignee;
+                final nav = Navigator.of(dialogCtx);
+                final r = await widget.apiService.updateTask(widget.taskId, body);
+                if (!mounted) return;
+                if (r['success'] == true) {
+                  nav.pop();
+                  _load();
+                } else {
+                  messenger.showSnackBar(SnackBar(content: Text(r['error']?.toString() ?? 'Could not save')));
+                }
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
   Future<void> _toggle(int id) async {
     final r = await widget.apiService.toggleSubTask(widget.taskId, id);
@@ -1536,7 +2751,13 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
     final dc = TextEditingController(text: st?['description'] ?? '');
     String pri = st?['priority'] ?? 'medium';
     String status = st?['status'] ?? 'to_do';
-    int? assignee = st?['assignee'];
+    final rawAssignee = _parseUserId(st?['assignee']);
+    final assigneeMenuItems = buildTaskAssigneeDropdownItems(
+      widget.employees,
+      {'user_name': st?['assignee_name']},
+      rawAssignee,
+    );
+    int? assignee = coerceAssigneeDropdownValue(rawAssignee, assigneeMenuItems);
     final isEdit = st != null;
     final messenger = ScaffoldMessenger.of(context);
     showDialog(
@@ -1606,7 +2827,7 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
                     ),
                   ),
                 ),
-                if (widget.employees.isNotEmpty) ...[
+                if (assigneeMenuItems.length > 1) ...[
                   SizedBox(height: 10),
                   Container(
                     padding: EdgeInsets.symmetric(horizontal: 12),
@@ -1617,15 +2838,7 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
                         value: assignee,
                         hint: Text('Assign to...', style: TextStyle(color: Colors.white30, fontSize: 13)),
                         dropdownColor: AppTheme.surface2,
-                        items: [
-                          DropdownMenuItem<int?>(value: null, child: Text('Unassigned', style: TextStyle(color: Colors.white54, fontSize: 13))),
-                          ...widget.employees.map(
-                            (e) => DropdownMenuItem<int?>(
-                              value: e['id'] as int?,
-                              child: Text(e['full_name'] ?? e['username'] ?? '', style: TextStyle(color: Colors.white, fontSize: 13)),
-                            ),
-                          ),
-                        ],
+                        items: assigneeMenuItems,
                         onChanged: (v) => setD(() => assignee = v),
                       ),
                     ),
@@ -1701,15 +2914,58 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
             Container(width: 40, height: 40, decoration: BoxDecoration(color: Color(0xFF8B5CF6).withOpacity(0.2), borderRadius: BorderRadius.circular(10)), child: Icon(Icons.checklist, color: Color(0xFF8B5CF6), size: 20)),
             SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(widget.taskName, style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
-              if (widget.taskDesc.isNotEmpty) Text(widget.taskDesc, style: TextStyle(color: Colors.white30, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
+              Text(_displayName, style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
+              if (_displayDesc.isNotEmpty) Text(_displayDesc, style: TextStyle(color: Colors.white30, fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis),
             ])),
+            IconButton(
+              tooltip: 'Edit task',
+              onPressed: _showEditTaskDialog,
+              icon: Icon(Icons.edit_outlined, color: Colors.white54, size: 22),
+            ),
           ]),
           SizedBox(height: 12),
           Row(children: [_hs('$_total','Total',Color(0xFF64748B)), SizedBox(width: 10), _hs('$_done','Done',Color(0xFF10B981)), SizedBox(width: 10), _hs('${_progress.toInt()}%','Progress',Color(0xFF8B5CF6))]),
           SizedBox(height: 10),
           ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: _progress / 100, backgroundColor: Colors.white.withOpacity(0.1), valueColor: AlwaysStoppedAnimation(Color(0xFF8B5CF6)), minHeight: 4)),
         ])),
+        Padding(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.attach_file_rounded, size: 18, color: Color(0xFFA78BFA)),
+                  SizedBox(width: 8),
+                  Text('Files on this task', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  Spacer(),
+                  TextButton.icon(
+                    onPressed: _isLoading ? null : _pickAndUploadTaskFile,
+                    icon: Icon(Icons.upload_file_rounded, size: 16, color: Color(0xFF8B5CF6)),
+                    label: Text('Upload', style: TextStyle(color: Color(0xFFA78BFA), fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
+              if (_taskAttachments.isEmpty)
+                Text('No files yet — tap Upload to add.', style: TextStyle(color: Colors.white38, fontSize: 11))
+              else
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _taskAttachments.map<Widget>((a) {
+                    final name = a['file_name']?.toString() ?? 'file';
+                    return ActionChip(
+                      avatar: Icon(Icons.insert_drive_file_outlined, size: 16, color: Colors.white70),
+                      label: Text(name, overflow: TextOverflow.ellipsis),
+                      backgroundColor: Colors.white.withOpacity(0.06),
+                      labelStyle: TextStyle(color: Colors.white70, fontSize: 12),
+                      onPressed: () => _openUrl(a['file_url']?.toString()),
+                    );
+                  }).toList(),
+                ),
+            ],
+          ),
+        ),
         Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Row(children: [
           Text('SubTasks ($_total)', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)), Spacer(),
           GestureDetector(onTap: () => _showDialog(), child: Container(padding: EdgeInsets.symmetric(horizontal: 14, vertical: 8), decoration: BoxDecoration(color: Color(0xFF8B5CF6), borderRadius: BorderRadius.circular(10)),
@@ -1785,6 +3041,40 @@ class _TaskSubtasksPageState extends State<_TaskSubtasksPage> {
           Spacer(),
           if (st['due_date'] != null) ...[Icon(Icons.schedule, size: 11, color: Colors.white24), SizedBox(width: 3), Text(st['due_date'], style: TextStyle(color: Colors.white24, fontSize: 10))],
         ]),
+        SizedBox(height: 10),
+        Row(
+          children: [
+            Icon(Icons.attach_file_rounded, size: 14, color: Colors.white38),
+            SizedBox(width: 6),
+            Text(
+              '${st['attachment_count'] ?? 0} file(s)',
+              style: TextStyle(color: Colors.white38, fontSize: 11),
+            ),
+            if (st['is_attachment_required'] == true) ...[
+              SizedBox(width: 8),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Color(0xFFF59E0B).withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text('Required', style: TextStyle(color: Color(0xFFFBBF24), fontSize: 9, fontWeight: FontWeight.w600)),
+              ),
+            ],
+            Spacer(),
+            TextButton.icon(
+              onPressed: () => _uploadSubtaskFile(st),
+              icon: Icon(Icons.upload_file_rounded, size: 14, color: Color(0xFF8B5CF6)),
+              label: Text('Upload', style: TextStyle(color: Color(0xFFA78BFA), fontSize: 12, fontWeight: FontWeight.w600)),
+              style: TextButton.styleFrom(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            ),
+            TextButton(
+              onPressed: () => _showSubtaskFiles(st),
+              child: Text('View', style: TextStyle(color: Colors.white54, fontSize: 12)),
+              style: TextButton.styleFrom(padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4), minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            ),
+          ],
+        ),
       ]));
   }
 }

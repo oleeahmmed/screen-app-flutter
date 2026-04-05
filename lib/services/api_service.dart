@@ -240,6 +240,31 @@ class ApiService {
     }
   }
 
+  /// Full task detail (same fields as PATCH response) — for edit / attachments UI.
+  Future<Map<String, dynamic>> getTask(int taskId) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse('${AppConfig.tasksUrl}$taskId/'),
+            headers: _getHeaders(),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      var err = 'Failed to load task';
+      try {
+        final d = jsonDecode(response.body);
+        if (d is Map && d['error'] != null) {
+          err = d['error'].toString();
+        }
+      } catch (_) {}
+      return {'success': false, 'error': err};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> toggleTask(int taskId) async {
     try {
       final response = await http
