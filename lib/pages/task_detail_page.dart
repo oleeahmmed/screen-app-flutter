@@ -845,6 +845,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   Widget _buildTopBar(String taskKey) {
     final compact = Responsive.isMobile(context);
     final crumbs = [
+      if (widget.customerName.isNotEmpty) 'Customers',
       if (widget.customerName.isNotEmpty) widget.customerName,
       if (widget.projectName.isNotEmpty) widget.projectName,
       _titleCtrl.text.trim().isEmpty ? taskKey : _titleCtrl.text.trim(),
@@ -873,6 +874,11 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
                 onPressed: _shareTask,
                 icon: const Icon(Icons.share_outlined, color: Colors.white54, size: 20),
                 tooltip: 'Share',
+              ),
+              IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close, color: Colors.white54, size: 22),
+                tooltip: 'Close',
               ),
             ],
           ),
@@ -2069,9 +2075,9 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   BoxDecoration _cardDeco() {
     return BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.03),
+      color: AppTheme.surface2.withValues(alpha: 0.88),
       borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
     );
   }
 }

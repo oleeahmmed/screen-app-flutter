@@ -449,196 +449,201 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
 
   @override
   Widget build(BuildContext context) {
+    final maxH = MediaQuery.sizeOf(context).height * 0.88;
+
     return Dialog(
+      backgroundColor: AppTheme.surface2,
+      surfaceTintColor: Colors.transparent,
+      elevation: 24,
+      shadowColor: Colors.black.withValues(alpha: 0.6),
       insetPadding: AppTheme.dialogInsets(context),
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      child: Material(
-        color: AppTheme.surface2,
-        elevation: 0,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        clipBehavior: Clip.antiAlias,
-        child: Container(
-          constraints: BoxConstraints(
-            maxWidth: AppTheme.dialogMaxWidth(context, max: 520),
-            maxHeight: MediaQuery.sizeOf(context).height * 0.88,
-          ),
-          decoration: AppTheme.dialogPanel(borderRadius: 20),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: AppTheme.dialogMaxWidth(context, max: 520),
+          maxHeight: maxH,
+        ),
+        child: ColoredBox(
+          color: AppTheme.surface2,
           child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: AppTheme.primary.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(Icons.assignment_outlined, color: AppTheme.primaryBright, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Daily closing report',
-                          style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 18),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          widget.existingReport != null
-                              ? 'Update today\'s report'
-                              : 'Summarize today and plan tomorrow',
-                          style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: _submitting
-                        ? null
-                        : () => Navigator.of(context, rootNavigator: true).pop(false),
-                    tooltip: 'Close',
-                    icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Flexible(
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _field('What did you do today?', _whatIDid, maxLines: 4),
-                      const SizedBox(height: 12),
-                      _field('What will you do next?', _whatIWillDo, maxLines: 3),
-                      const SizedBox(height: 12),
-                      _field('Blockers (optional)', _blockers, maxLines: 2, required: false),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Dependencies (optional)',
-                        style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                      ),
-                      const SizedBox(height: 6),
-                      if (_loadingEmployees)
-                        const Padding(
-                          padding: EdgeInsets.all(8),
-                          child: Center(
-                            child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-                          ),
-                        )
-                      else if (_employees.isEmpty)
-                        Text(
-                          'No colleagues available for dependencies',
-                          style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7), fontSize: 11),
-                        )
-                      else
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: _employees.map((e) {
-                            final id = _employeeId(e);
-                            if (id == null) return const SizedBox.shrink();
-                            final selected = _dependencyIds.contains(id);
-                            return FilterChip(
-                              label: Text(_employeeLabel(e), style: const TextStyle(fontSize: 11)),
-                              selected: selected,
-                              onSelected: _submitting
-                                  ? null
-                                  : (v) => setState(() {
-                                        if (v) {
-                                          _dependencyIds.add(id);
-                                        } else {
-                                          _dependencyIds.remove(id);
-                                        }
-                                      }),
-                              selectedColor: AppTheme.primary.withValues(alpha: 0.35),
-                              checkmarkColor: Colors.white,
-                              labelStyle: TextStyle(color: selected ? Colors.white : AppTheme.textMuted),
-                              backgroundColor: Colors.white.withValues(alpha: 0.06),
-                              side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-                            );
-                          }).toList(),
-                        ),
-                      if (_error != null) ...[
-                        const SizedBox(height: 12),
-                        Text(_error!, style: const TextStyle(color: AppTheme.danger, fontSize: 12)),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  if (!widget.required)
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _submitting ? null : () => Navigator.of(context, rootNavigator: true).pop(false),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppTheme.textMuted,
-                          side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        child: const Text('Later'),
-                      ),
-                    ),
-                  if (!widget.required) const SizedBox(width: 10),
-                  Expanded(
-                    flex: widget.required ? 1 : 2,
-                    child: DecoratedBox(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
                       decoration: BoxDecoration(
+                        color: AppTheme.primary.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(12),
-                        gradient: LinearGradient(
-                          colors: [
-                            AppTheme.primary,
-                            AppTheme.primary.withValues(alpha: 0.85),
-                          ],
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppTheme.primary.withValues(alpha: 0.35),
-                            blurRadius: 12,
-                            offset: const Offset(0, 4),
+                      ),
+                      child: const Icon(Icons.assignment_outlined, color: AppTheme.primaryBright, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Daily closing report',
+                            style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 18),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.existingReport != null
+                                ? 'Update today\'s report'
+                                : 'Summarize today and plan tomorrow',
+                            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12),
                           ),
                         ],
                       ),
-                      child: FilledButton(
-                        onPressed: _submitting ? null : _submit,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          shadowColor: Colors.transparent,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        child: _submitting
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                              )
-                            : Text(
-                                widget.existingReport != null ? 'Update report' : 'Submit report',
-                                style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    IconButton(
+                      onPressed: _submitting
+                          ? null
+                          : () => Navigator.of(context, rootNavigator: true).pop(false),
+                      tooltip: 'Close',
+                      icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: ColoredBox(
+                      color: AppTheme.surface2,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _field('What did you do today?', _whatIDid, maxLines: 4),
+                          const SizedBox(height: 12),
+                          _field('What will you do next?', _whatIWillDo, maxLines: 3),
+                          const SizedBox(height: 12),
+                          _field('Blockers (optional)', _blockers, maxLines: 2, required: false),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Dependencies (optional)',
+                            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                          ),
+                          const SizedBox(height: 6),
+                          if (_loadingEmployees)
+                            const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: Center(
+                                child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                               ),
+                            )
+                          else if (_employees.isEmpty)
+                            Text(
+                              'No colleagues available for dependencies',
+                              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7), fontSize: 11),
+                            )
+                          else
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: _employees.map((e) {
+                                final id = _employeeId(e);
+                                if (id == null) return const SizedBox.shrink();
+                                final selected = _dependencyIds.contains(id);
+                                return FilterChip(
+                                  label: Text(_employeeLabel(e), style: const TextStyle(fontSize: 11)),
+                                  selected: selected,
+                                  onSelected: _submitting
+                                      ? null
+                                      : (v) => setState(() {
+                                            if (v) {
+                                              _dependencyIds.add(id);
+                                            } else {
+                                              _dependencyIds.remove(id);
+                                            }
+                                          }),
+                                  selectedColor: AppTheme.primary.withValues(alpha: 0.35),
+                                  checkmarkColor: Colors.white,
+                                  labelStyle: TextStyle(color: selected ? Colors.white : AppTheme.textMuted),
+                                  backgroundColor: AppTheme.bgDeep,
+                                  side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+                                );
+                              }).toList(),
+                            ),
+                          if (_error != null) ...[
+                            const SizedBox(height: 12),
+                            Text(_error!, style: const TextStyle(color: AppTheme.danger, fontSize: 12)),
+                          ],
+                        ],
                       ),
                     ),
                   ),
-                ],
-              ),
-            ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    if (!widget.required)
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _submitting ? null : () => Navigator.of(context, rootNavigator: true).pop(false),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.textMuted,
+                            side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text('Later'),
+                        ),
+                      ),
+                    if (!widget.required) const SizedBox(width: 10),
+                    Expanded(
+                      flex: widget.required ? 1 : 2,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          gradient: LinearGradient(
+                            colors: [
+                              AppTheme.primary,
+                              AppTheme.primary.withValues(alpha: 0.85),
+                            ],
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppTheme.primary.withValues(alpha: 0.35),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: FilledButton(
+                          onPressed: _submitting ? null : _submit,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Colors.transparent,
+                            shadowColor: Colors.transparent,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: _submitting
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                )
+                              : Text(
+                                  widget.existingReport != null ? 'Update report' : 'Submit report',
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
         ),
       ),
     );
@@ -660,7 +665,7 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
           style: const TextStyle(color: Colors.white, fontSize: 13),
           decoration: InputDecoration(
             filled: true,
-            fillColor: AppTheme.bgDeep.withValues(alpha: 0.85),
+            fillColor: AppTheme.bgDeep,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(10),

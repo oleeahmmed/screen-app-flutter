@@ -56,20 +56,12 @@ class Responsive {
   }
 
   static SliverGridDelegate projectGridDelegate(BuildContext context, {bool embedded = false}) {
-    if (embedded) {
-      return SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 300,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 1.32,
-      );
-    }
     final cross = projectGridColumns(context);
     return SliverGridDelegateWithFixedCrossAxisCount(
       crossAxisCount: cross,
-      mainAxisSpacing: 14,
-      crossAxisSpacing: 14,
-      childAspectRatio: cross == 2 ? 1.05 : 1.2,
+      mainAxisSpacing: embedded ? 12 : 14,
+      crossAxisSpacing: embedded ? 12 : 14,
+      childAspectRatio: cross >= 3 ? 0.72 : (cross == 2 ? 0.82 : 1.05),
     );
   }
 

@@ -277,7 +277,7 @@ class AppTheme {
     );
   }
 
-  static Color get modalBarrierColor => Colors.black.withValues(alpha: 0.72);
+  static Color get modalBarrierColor => Colors.black.withValues(alpha: 0.85);
 
   /// Bottom nav / sheet: blur + dark glass tint.
   static Widget glassBlur({

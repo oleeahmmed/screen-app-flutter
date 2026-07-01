@@ -70,6 +70,36 @@ String _formatShortDate(String? iso) {
   }
 }
 
+String _projectSubtitle(dynamic p) {
+  final dept = _displayStr(p['department_name']);
+  if (dept.isNotEmpty) return dept;
+  final desc = _displayStr(p['description']);
+  if (desc.isEmpty) return '';
+  final first = desc.split('\n').first.trim();
+  if (first.length <= 48) return first;
+  return '${first.substring(0, 45)}...';
+}
+
+Widget _gradientProgressBar(double pct, {double height = 6}) {
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(6),
+    child: Stack(
+      children: [
+        Container(height: height, color: Colors.white.withValues(alpha: 0.08)),
+        FractionallySizedBox(
+          widthFactor: (pct / 100).clamp(0.0, 1.0),
+          child: Container(
+            height: height,
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [AppTheme.primary, AppTheme.featureVault]),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 Color _avatarColorForName(String name) {
   const palette = [
     AppTheme.primary,
@@ -138,6 +168,8 @@ class TaskDragPayload {
 
   TaskDragPayload({required this.taskId, this.sourceStageId});
 }
+
+enum _ProjectTasksView { kanban, calendar, list }
 
 class ProjectsPage extends StatefulWidget {
   final ApiService apiService;
@@ -369,7 +401,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none)));
   InputDecoration _searchDecoration() {
     return InputDecoration(
-      hintText: 'Search name, description, client?',
+      hintText: widget.embeddedInParent ? 'Search projects…' : 'Search name, description, client…',
       hintStyle: TextStyle(
         color: widget.embeddedInParent ? AppTheme.textMuted : Colors.white30,
       ),
@@ -416,6 +448,131 @@ class _ProjectsPageState extends State<ProjectsPage> {
         ),
         items: items,
         onChanged: onChanged,
+      ),
+    );
+  }
+
+  Widget _inlineFilterDropdown<T>({
+    required T? value,
+    required String hint,
+    required List<DropdownMenuItem<T?>> items,
+    required void Function(T?) onChanged,
+  }) {
+    return DropdownButtonFormField<T?>(
+      value: value,
+      isExpanded: true,
+      isDense: true,
+      decoration: _searchDecoration().copyWith(contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8)),
+      dropdownColor: AppTheme.surface2,
+      style: TextStyle(color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white, fontSize: 13),
+      hint: Text(hint, style: const TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+      items: items,
+      onChanged: onChanged,
+    );
+  }
+
+  Widget _buildEmbeddedFilterBar(double padH) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(padH, 4, padH, 8),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final wide = c.maxWidth >= 760;
+          final search = TextField(
+            controller: _searchCtrl,
+            onChanged: (_) => _scheduleSearchReload(),
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+            decoration: _searchDecoration(),
+          );
+          final status = _inlineFilterDropdown<String>(
+            value: _status.isEmpty ? null : _status,
+            hint: 'All Status',
+            items: const [
+              DropdownMenuItem<String?>(value: null, child: Text('All Status')),
+              DropdownMenuItem(value: 'planning', child: Text('Planning')),
+              DropdownMenuItem(value: 'active', child: Text('Active')),
+              DropdownMenuItem(value: 'on_hold', child: Text('On hold')),
+              DropdownMenuItem(value: 'completed', child: Text('Completed')),
+              DropdownMenuItem(value: 'cancelled', child: Text('Cancelled')),
+            ],
+            onChanged: (v) {
+              setState(() => _status = v ?? '');
+              _loadProjects();
+            },
+          );
+          final priority = _inlineFilterDropdown<String>(
+            value: _priority.isEmpty ? null : _priority,
+            hint: 'All Priority',
+            items: const [
+              DropdownMenuItem<String?>(value: null, child: Text('All Priority')),
+              DropdownMenuItem(value: 'low', child: Text('Low')),
+              DropdownMenuItem(value: 'medium', child: Text('Medium')),
+              DropdownMenuItem(value: 'high', child: Text('High')),
+              DropdownMenuItem(value: 'critical', child: Text('Critical')),
+            ],
+            onChanged: (v) {
+              setState(() => _priority = v ?? '');
+              _loadProjects();
+            },
+          );
+          final sort = _inlineFilterDropdown<String>(
+            value: _sort,
+            hint: 'Sort',
+            items: const [
+              DropdownMenuItem(value: 'newest', child: Text('Newest first')),
+              DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
+              DropdownMenuItem(value: 'name_asc', child: Text('Name A–Z')),
+              DropdownMenuItem(value: 'name_desc', child: Text('Name Z–A')),
+              DropdownMenuItem(value: 'progress_desc', child: Text('Progress high → low')),
+              DropdownMenuItem(value: 'progress_asc', child: Text('Progress low → high')),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() => _sort = v);
+              _loadProjects();
+            },
+          );
+          if (wide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 4, child: search),
+                const SizedBox(width: 8),
+                Expanded(flex: 2, child: status),
+                const SizedBox(width: 8),
+                Expanded(flex: 2, child: priority),
+                const SizedBox(width: 8),
+                Expanded(flex: 2, child: sort),
+                const SizedBox(width: 6),
+                _iconBtn(Icons.add, AppTheme.primary, _showCreateProjectDialog),
+                _iconBtn(Icons.refresh_rounded, AppTheme.surface2.withValues(alpha: 0.65), _loadProjects),
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              search,
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(child: status),
+                  const SizedBox(width: 8),
+                  Expanded(child: priority),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(child: sort),
+                  const SizedBox(width: 8),
+                  _iconBtn(Icons.add, AppTheme.primary, _showCreateProjectDialog),
+                  const SizedBox(width: 6),
+                  _iconBtn(Icons.refresh_rounded, AppTheme.surface2.withValues(alpha: 0.65), _loadProjects),
+                ],
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -612,10 +769,10 @@ class _ProjectsPageState extends State<ProjectsPage> {
               items: const [
                 DropdownMenuItem(value: 'newest', child: Text('Newest first')),
                 DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
-                DropdownMenuItem(value: 'name_asc', child: Text('Name A???Z')),
-                DropdownMenuItem(value: 'name_desc', child: Text('Name Z???A')),
-                DropdownMenuItem(value: 'progress_desc', child: Text('Progress high ??? low')),
-                DropdownMenuItem(value: 'progress_asc', child: Text('Progress low ??? high')),
+                DropdownMenuItem(value: 'name_asc', child: Text('Name A–Z')),
+                DropdownMenuItem(value: 'name_desc', child: Text('Name Z–A')),
+                DropdownMenuItem(value: 'progress_desc', child: Text('Progress high → low')),
+                DropdownMenuItem(value: 'progress_asc', child: Text('Progress low → high')),
               ],
               onChanged: (v) {
                 if (v == null) return;
@@ -641,16 +798,22 @@ class _ProjectsPageState extends State<ProjectsPage> {
     );
 
     final scrollBody = CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(child: header),
-        SliverToBoxAdapter(child: archiveChips),
-        const SliverToBoxAdapter(child: SizedBox(height: 8)),
-        SliverToBoxAdapter(child: searchField),
-        const SliverToBoxAdapter(child: SizedBox(height: 8)),
-        SliverToBoxAdapter(child: filtersPanel),
-        const SliverToBoxAdapter(child: SizedBox(height: 6)),
-        _projectGridSliver(padH),
-      ],
+      slivers: widget.embeddedInParent
+          ? [
+              SliverToBoxAdapter(child: _buildEmbeddedFilterBar(padH)),
+              const SliverToBoxAdapter(child: SizedBox(height: 4)),
+              _projectGridSliver(padH),
+            ]
+          : [
+              SliverToBoxAdapter(child: header),
+              SliverToBoxAdapter(child: archiveChips),
+              const SliverToBoxAdapter(child: SizedBox(height: 8)),
+              SliverToBoxAdapter(child: searchField),
+              const SliverToBoxAdapter(child: SizedBox(height: 8)),
+              SliverToBoxAdapter(child: filtersPanel),
+              const SliverToBoxAdapter(child: SizedBox(height: 6)),
+              _projectGridSliver(padH),
+            ],
     );
 
     if (widget.embeddedInParent) {
@@ -748,108 +911,6 @@ class _ProjectsPageState extends State<ProjectsPage> {
     );
   }
 
-  Widget _projectCardCompact(
-    dynamic p, {
-    required VoidCallback openDetail,
-    required double comp,
-    required String st,
-    required String pri,
-    required num totalTasks,
-    required num doneTasks,
-  }) {
-    final client = _displayStr(p['customer_name']);
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surface2.withValues(alpha: 0.52),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: openDetail,
-          child: Padding(
-            padding: const EdgeInsets.all(11),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.folder_rounded, size: 15, color: AppTheme.featureVault.withValues(alpha: 0.9)),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        _displayStr(p['name']),
-                        style: AppTheme.sectionTitle.copyWith(fontSize: 13),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    _statusPill(st),
-                  ],
-                ),
-                if (client.isNotEmpty || pri.isNotEmpty) ...[
-                  const SizedBox(height: 5),
-                  Row(
-                    children: [
-                      if (client.isNotEmpty)
-                        Expanded(
-                          child: Text(
-                            client,
-                            style: AppTheme.caption.copyWith(fontSize: 10),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      if (client.isNotEmpty && pri.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: Text(
-                            '?',
-                            style: AppTheme.caption.copyWith(fontSize: 10),
-                          ),
-                        ),
-                      if (pri.isNotEmpty) _priorityPill(pri),
-                    ],
-                  ),
-                ],
-                const Spacer(),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: (comp / 100).clamp(0.0, 1.0),
-                    backgroundColor: Colors.white.withValues(alpha: 0.08),
-                    valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
-                    minHeight: 4,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Text(
-                      '$doneTasks/$totalTasks tasks',
-                      style: AppTheme.caption.copyWith(fontSize: 10),
-                    ),
-                    const Spacer(),
-                    Text(
-                      '${comp.toStringAsFixed(comp == comp.roundToDouble() ? 0 : 1)}%',
-                      style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _projectCard(dynamic p) {
     final comp = (p['completion_percentage'] ?? p['progress'] ?? 0).toDouble();
     final st = (p['status'] ?? 'planning').toString();
@@ -865,7 +926,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
     final cardBg = widget.embeddedInParent
         ? AppTheme.surface2.withValues(alpha: 0.65)
         : Colors.white.withValues(alpha: 0.06);
-    final compact = widget.embeddedInParent;
+    final subtitle = _projectSubtitle(p);
 
     void openDetail() {
       Navigator.push(
@@ -878,18 +939,6 @@ class _ProjectsPageState extends State<ProjectsPage> {
           ),
         ),
       ).then((_) => _loadProjects());
-    }
-
-    if (compact) {
-      return _projectCardCompact(
-        p,
-        openDetail: openDetail,
-        comp: comp,
-        st: st,
-        pri: pri,
-        totalTasks: totalTasks,
-        doneTasks: doneTasks,
-      );
     }
 
     return Container(
@@ -912,7 +961,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
           borderRadius: BorderRadius.circular(16),
           onTap: openDetail,
           child: Padding(
-            padding: EdgeInsets.all(compact ? 14 : 18),
+            padding: const EdgeInsets.all(18),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
@@ -935,10 +984,10 @@ class _ProjectsPageState extends State<ProjectsPage> {
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          if (!compact && _displayStr(p['description']).isNotEmpty) ...[
+                          if (subtitle.isNotEmpty) ...[
                             const SizedBox(height: 4),
                             Text(
-                              _displayStr(p['description']),
+                              subtitle,
                               style: TextStyle(color: muted, fontSize: 12),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -964,8 +1013,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
                           ),
                         ),
                         const SizedBox(height: 6),
-                        if (!compact)
-                          Container(
+                        Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
                               color: _prc(pri).withValues(alpha: 0.12),
@@ -1027,14 +1075,14 @@ class _ProjectsPageState extends State<ProjectsPage> {
                     ),
                   ],
                 ),
-                if (!compact && _displayStr(p['customer_name']).isNotEmpty) ...[
+                if (_displayStr(p['customer_name']).isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Text(
                     'Customer: ${_displayStr(p['customer_name'])}',
                     style: TextStyle(color: muted, fontSize: 12),
                   ),
                 ],
-                SizedBox(height: compact ? 10 : 14),
+                const SizedBox(height: 14),
                 Row(
                   children: [
                     Text('Progress', style: TextStyle(color: muted, fontSize: 11)),
@@ -1046,16 +1094,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
                   ],
                 ),
                 const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: LinearProgressIndicator(
-                    value: (comp / 100).clamp(0.0, 1.0),
-                    backgroundColor: Colors.white.withValues(alpha: 0.08),
-                    valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
-                    minHeight: compact ? 5 : 6,
-                  ),
-                ),
-                if (!compact) ...[
+                _gradientProgressBar(comp),
                 const SizedBox(height: 14),
                 Container(
                   padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
@@ -1127,13 +1166,6 @@ class _ProjectsPageState extends State<ProjectsPage> {
                     ),
                   ),
                 ),
-                ] else ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    '$doneTasks/$totalTasks tasks ? ${comp.toStringAsFixed(comp == comp.roundToDouble() ? 0 : 0)}%',
-                    style: TextStyle(color: muted, fontSize: 10),
-                  ),
-                ],
               ],
             ),
           ),
@@ -1169,13 +1201,24 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   bool _isLoading = true;
   bool _isRefreshing = false;
   String? _loadError;
-  late TabController _tabCtrl; DateTime _calMonth = DateTime.now();
-  /// Horizontal Kanban board scroll ??? must be shared with [Scrollbar] for dragging/sync.
+  late TabController _tabCtrl;
+  DateTime _calMonth = DateTime.now();
+  _ProjectTasksView _tasksView = _ProjectTasksView.kanban;
+  late final TextEditingController _taskSearchCtrl;
+  /// Horizontal Kanban board scroll — must be shared with [Scrollbar] for dragging/sync.
   final ScrollController _boardHScrollController = ScrollController();
+
   @override
-  void initState() { super.initState(); _tabCtrl = TabController(length: 3, vsync: this); _load(); }
+  void initState() {
+    super.initState();
+    _tabCtrl = TabController(length: 2, vsync: this);
+    _taskSearchCtrl = TextEditingController();
+    _load();
+  }
+
   @override
   void dispose() {
+    _taskSearchCtrl.dispose();
     _boardHScrollController.dispose();
     _tabCtrl.dispose();
     super.dispose();
@@ -2045,13 +2088,17 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   }
 
   void _openTaskDetailPage(dynamic t) {
+    final customer = _project?['customer'];
+    final customerName = _displayStr(_project?['customer_name']).isNotEmpty
+        ? _displayStr(_project?['customer_name'])
+        : (customer is Map ? _displayStr(customer['name']) : '');
     openTaskDetailPage(
       context,
       apiService: widget.apiService,
       taskId: t['id'] as int,
       projectId: widget.projectId,
       projectName: widget.projectName,
-      customerName: _displayStr(_project?['customer_name']),
+      customerName: customerName,
       initialTask: t is Map ? Map<String, dynamic>.from(t as Map) : null,
       employees: _employees,
       stages: _stages,
@@ -2189,157 +2236,415 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   }
   @override
   Widget build(BuildContext context) {
-    return Scaffold(body: Container(
-      decoration: AppTheme.screenGradient(),
-      child: SafeArea(child: _isLoading && _project == null ? Center(child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation(AppTheme.primaryBright)))
-        : _project == null ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(_loadError ?? 'Failed to load', style: TextStyle(color: AppTheme.textMuted), textAlign: TextAlign.center),
-            SizedBox(height: 12),
-            TextButton(onPressed: _load, child: Text('Retry', style: TextStyle(color: Colors.white))),
-          ]))
-        : Column(children: [
-            if (_isRefreshing)
-              const LinearProgressIndicator(
-                minHeight: 2,
-                backgroundColor: Colors.transparent,
-                valueColor: AlwaysStoppedAnimation(AppTheme.featureVault),
-              ),
-            _buildHeader(),
-            _buildStats(),
-            const SizedBox(height: 8),
-            _buildBoardToolbar(),
-            TabBar(
-              controller: _tabCtrl,
-              indicatorColor: AppTheme.featureVault,
-              labelColor: Colors.white,
-              unselectedLabelColor: AppTheme.textMuted,
-              tabs: const [Tab(text: 'Board'), Tab(text: 'Calendar'), Tab(text: 'Vault')],
-            ),
-            Expanded(
-              child: TabBarView(
-                controller: _tabCtrl,
-                children: [
-                  _buildBoard(),
-                  _buildCalendar(),
-                  ProjectVaultTab(apiService: widget.apiService, projectId: widget.projectId),
-                ],
-              ),
-            ),
-          ])),
-    ));
+    final stats = _project?['stats'] as Map<String, dynamic>? ?? {};
+    final totalTasks = stats['total_tasks'] ?? 0;
+    return Scaffold(
+      body: Container(
+        decoration: AppTheme.screenGradient(),
+        child: SafeArea(
+          child: _isLoading && _project == null
+              ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright))
+              : _project == null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_loadError ?? 'Failed to load', style: const TextStyle(color: AppTheme.textMuted), textAlign: TextAlign.center),
+                          const SizedBox(height: 12),
+                          TextButton(onPressed: _load, child: const Text('Retry', style: TextStyle(color: Colors.white))),
+                        ],
+                      ),
+                    )
+                  : Column(
+                      children: [
+                        if (_isRefreshing)
+                          const LinearProgressIndicator(
+                            minHeight: 2,
+                            backgroundColor: Colors.transparent,
+                            valueColor: AlwaysStoppedAnimation(AppTheme.featureVault),
+                          ),
+                        _buildHeader(),
+                        TabBar(
+                          controller: _tabCtrl,
+                          indicatorColor: AppTheme.primary,
+                          labelColor: Colors.white,
+                          unselectedLabelColor: AppTheme.textMuted,
+                          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                          tabs: [
+                            Tab(text: 'Tasks ($totalTasks)'),
+                            const Tab(text: 'Vault'),
+                          ],
+                        ),
+                        Expanded(
+                          child: TabBarView(
+                            controller: _tabCtrl,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _buildTasksToolbar(),
+                                  Expanded(child: _buildTasksContent()),
+                                ],
+                              ),
+                              ProjectVaultTab(apiService: widget.apiService, projectId: widget.projectId),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+        ),
+      ),
+    );
   }
   Widget _buildHeader() {
-    final p = _project!; final comp = (p['completion_percentage'] ?? 0).toDouble();
-    return Padding(padding: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 12, Responsive.pagePadding(context), 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [
-        if (!widget.embedded) const AppBackButton(color: AppTheme.textMuted),
-        if (!widget.embedded) const SizedBox(width: 4),
-        if (widget.embedded) ...[Icon(Icons.hub_outlined, color: AppTheme.textMuted, size: 22), SizedBox(width: 10)],
-        Container(width: 40, height: 40, decoration: BoxDecoration(color: AppTheme.featureVault.withOpacity(0.2), borderRadius: BorderRadius.circular(10)), child: Icon(Icons.folder_open, color: AppTheme.featureVault, size: 20)),
-        SizedBox(width: 10),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(_displayStr(p['name']), style: TextStyle(color: Colors.white, fontSize: Responsive.isMobile(context) ? 16 : 18, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
-          Text('${(p["status"] ?? "").toString().replaceAll("_", " ")} priority', style: TextStyle(color: AppTheme.textMuted, fontSize: 11)),
-        ])),
-        const AppQuickMenuButton(iconColor: AppTheme.textMuted, iconSize: 20),
-        PopupMenuButton<String>(icon: Icon(Icons.more_vert, color: AppTheme.textMuted, size: 22), color: AppTheme.surface2,
-          onSelected: (v) { if (v=='add_stage') _showAddStageDialog(); else if (v=='edit') _showEditProjectDialog(); else if (v=='delete') _deleteProject(); else if (v=='refresh') _load(); },
-          itemBuilder: (_) => [
-            PopupMenuItem(value: 'add_stage', child: Row(children: [Icon(Icons.view_column, color: AppTheme.featureVault, size: 18), SizedBox(width: 8), Text('Add Stage', style: TextStyle(color: Colors.white))])),
-            PopupMenuItem(value: 'edit', child: Row(children: [Icon(Icons.edit, color: AppTheme.textMuted, size: 18), SizedBox(width: 8), Text('Edit Project', style: TextStyle(color: Colors.white))])),
-            PopupMenuItem(value: 'refresh', child: Row(children: [Icon(Icons.refresh, color: AppTheme.textMuted, size: 18), SizedBox(width: 8), Text('Refresh', style: TextStyle(color: Colors.white))])),
-            if (_isManager) PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete, color: Colors.redAccent, size: 18), SizedBox(width: 8), Text('Delete Project', style: TextStyle(color: Colors.redAccent))])),
-          ]),
-      ]),
-      SizedBox(height: 10),
-      ClipRRect(borderRadius: BorderRadius.circular(4), child: LinearProgressIndicator(value: comp / 100, backgroundColor: Colors.white.withOpacity(0.1), valueColor: AlwaysStoppedAnimation(AppTheme.featureVault), minHeight: 4)),
-    ]));
-  }
+    final p = _project!;
+    final comp = (p['completion_percentage'] ?? 0).toDouble();
+    final st = (p['status'] ?? 'planning').toString();
+    final subtitle = _projectSubtitle(p);
+    final s = p['stats'] as Map<String, dynamic>? ?? {};
+    final total = (s['total_tasks'] ?? 0) as num;
+    final done = (s['completed_tasks'] ?? 0) as num;
+    final pending = (total - done).clamp(0, 999999);
+    final pad = Responsive.pagePadding(context);
 
-  Widget _buildBoardToolbar() {
+    Color statusColor(String status) {
+      switch (status) {
+        case 'active':
+          return AppTheme.success;
+        case 'planning':
+          return AppTheme.primary;
+        case 'on_hold':
+          return AppTheme.warning;
+        case 'completed':
+          return AppTheme.featureVault;
+        default:
+          return AppTheme.textMuted;
+      }
+    }
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.04),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withOpacity(0.1)),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: AppTheme.featureVault.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppTheme.featureVault.withOpacity(0.35)),
+      padding: EdgeInsets.fromLTRB(pad, 10, pad, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!widget.embedded) const AppBackButton(color: AppTheme.textMuted),
+              if (!widget.embedded) const SizedBox(width: 6),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            _displayStr(p['name']),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: Responsive.isMobile(context) ? 17 : 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: statusColor(st).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: statusColor(st).withValues(alpha: 0.35)),
+                          ),
+                          child: Text(
+                            st.replaceAll('_', ' ').toUpperCase(),
+                            style: TextStyle(color: statusColor(st), fontSize: 10, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (subtitle.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(subtitle, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+                      ),
+                  ],
+                ),
               ),
-              child: const Icon(Icons.view_column, size: 18, color: Color(0xFFC4B5FD)),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Project tasks',
-                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Board or calendar ??? same data as the web. Drag the ?????? handle or long-press a card, then drop on a stage column.',
-                    style: TextStyle(color: Colors.white.withOpacity(0.45), fontSize: 10, height: 1.35),
-                  ),
+              const AppQuickMenuButton(iconColor: AppTheme.textMuted, iconSize: 20),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert, color: AppTheme.textMuted, size: 22),
+                color: AppTheme.surface2,
+                onSelected: (v) {
+                  if (v == 'add_stage') _showAddStageDialog();
+                  else if (v == 'edit') _showEditProjectDialog();
+                  else if (v == 'delete') _deleteProject();
+                  else if (v == 'refresh') _load();
+                },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'add_stage', child: Text('Add Stage')),
+                  const PopupMenuItem(value: 'edit', child: Text('Edit Project')),
+                  const PopupMenuItem(value: 'refresh', child: Text('Refresh')),
+                  if (_isManager) const PopupMenuItem(value: 'delete', child: Text('Delete Project', style: TextStyle(color: Colors.redAccent))),
                 ],
               ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _headerStatPill('$pending', 'pending', AppTheme.warning),
+                const SizedBox(width: 8),
+                _headerStatPill('$done', 'completed', AppTheme.success),
+                const SizedBox(width: 8),
+                _headerStatPill('0', 'archived', AppTheme.textMuted),
+                const SizedBox(width: 12),
+                SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      CircularProgressIndicator(
+                        value: (comp / 100).clamp(0.0, 1.0),
+                        strokeWidth: 4,
+                        backgroundColor: Colors.white.withValues(alpha: 0.08),
+                        valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
+                      ),
+                      Text('${comp.toInt()}%', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _headerStatPill(String value, String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(value, style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.bold)),
+          const SizedBox(width: 6),
+          Text(label, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTasksToolbar() {
+    final pad = Responsive.pagePadding(context);
+    final stageCount = _stages.length;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 8, pad, 8),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final wide = c.maxWidth >= 900;
+          final search = TextField(
+            controller: _taskSearchCtrl,
+            onChanged: (_) => setState(() {}),
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+            decoration: InputDecoration(
+              hintText: 'Search tasks…',
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 13),
+              prefixIcon: Icon(Icons.search, color: Colors.white.withValues(alpha: 0.35), size: 18),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            ),
+          );
+          final viewToggle = Container(
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _viewToggle('Kanban', Icons.view_column, _ProjectTasksView.kanban),
+                _viewToggle('Calendar', Icons.calendar_month, _ProjectTasksView.calendar),
+                _viewToggle('List', Icons.view_list, _ProjectTasksView.list),
+              ],
+            ),
+          );
+          final addBtn = FilledButton.icon(
+            onPressed: _showQuickAddTask,
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('Add Task'),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTheme.success,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            ),
+          );
+          if (wide) {
+            return Row(
+              children: [
+                Expanded(flex: 3, child: search),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Archived tasks — use web monitor for full archive view'))),
+                  icon: const Icon(Icons.archive_outlined, size: 16),
+                  label: const Text('Archive'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.textMuted, side: BorderSide(color: Colors.white.withValues(alpha: 0.12))),
+                ),
+                const SizedBox(width: 8),
+                viewToggle,
+                const SizedBox(width: 8),
+                addBtn,
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _showAddStageDialog,
+                  icon: const Icon(Icons.account_tree_outlined, size: 16),
+                  label: Text('Stages ($stageCount)'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.textMuted, side: BorderSide(color: Colors.white.withValues(alpha: 0.12))),
+                ),
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              search,
+              const SizedBox(height: 8),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    viewToggle,
+                    const SizedBox(width: 8),
+                    addBtn,
+                    const SizedBox(width: 8),
+                    OutlinedButton(
+                      onPressed: _showAddStageDialog,
+                      child: Text('Stages ($stageCount)'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _viewToggle(String label, IconData icon, _ProjectTasksView mode) {
+    final active = _tasksView == mode;
+    return Material(
+      color: active ? Colors.white : Colors.transparent,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: () => setState(() => _tasksView = mode),
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: active ? AppTheme.bgDeep : AppTheme.textMuted),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: active ? AppTheme.bgDeep : AppTheme.textMuted,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildStats() {
-    final s = _project!['stats'] ?? {};
-    final stageOverview = (_project!['stage_overview'] as List?) ?? [];
-    final doneStageName = s['done_stage_name'] ?? 'Done';
-    return Padding(padding: EdgeInsets.symmetric(horizontal: 16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: [
-        _sc('${s["total_tasks"]??0}','Tasks',AppTheme.priorityLow), SizedBox(width: 6),
-        _sc('${s["completed_tasks"]??0}','In $doneStageName',AppTheme.success), SizedBox(width: 6),
-        _sc('${s["total_subtasks"]??0}','Subtasks',AppTheme.priorityLow), SizedBox(width: 6),
-        _sc('${(_project!["completion_percentage"]??0).toInt()}%','Progress',AppTheme.featureVault),
-      ])),
-      // Stage Overview
-      if (stageOverview.isNotEmpty) ...[
-        SizedBox(height: 10),
-        SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(children: stageOverview.map((st) {
-          final tc = st['task_count'] ?? 0;
-          final sc = st['subtask_count'] ?? 0;
-          final sd = st['subtask_done'] ?? 0;
-          final clr = _hexColor(st['color'] ?? '#3B82F6');
-          return Container(margin: EdgeInsets.only(right: 6), padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(color: clr.withOpacity(0.15), borderRadius: BorderRadius.circular(8), border: Border.all(color: clr.withOpacity(0.3))),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Container(width: 6, height: 6, decoration: BoxDecoration(shape: BoxShape.circle, color: clr)),
-              SizedBox(width: 6),
-              Text('${st["name"]}', style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.7), fontSize: 10, fontWeight: FontWeight.w600)),
-              SizedBox(width: 4),
-              Container(padding: EdgeInsets.symmetric(horizontal: 5, vertical: 1), decoration: BoxDecoration(color: clr.withOpacity(0.3), borderRadius: BorderRadius.circular(6)),
-                child: Text('$tc', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold))),
-              if (sc > 0) ...[SizedBox(width: 3),
-                Text('$sd/$sc', style: TextStyle(color: AppTheme.textMuted, fontSize: 9))],
-            ]));
-        }).toList())),
-      ],
-    ]));
+  void _showQuickAddTask() {
+    if (_stages.isEmpty) {
+      _showAddStageDialog();
+      return;
+    }
+    final first = _stages.first;
+    _showCreateTaskInStageDialog(first['id'] as int);
   }
-  Color _hexColor(String hex) { hex = hex.replaceAll('#', ''); if (hex.length == 6) hex = 'FF$hex'; return Color(int.parse(hex, radix: 16)); }
-  Widget _sc(String v, String l, Color c) => Container(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(10), border: Border.all(color: c.withOpacity(0.2))),
-    child: Column(children: [Text(v, style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)), Text(l, style: TextStyle(color: AppTheme.textMuted, fontSize: 9))]));
+
+  Widget _buildTasksContent() {
+    switch (_tasksView) {
+      case _ProjectTasksView.kanban:
+        return _buildBoard();
+      case _ProjectTasksView.calendar:
+        return _buildCalendar();
+      case _ProjectTasksView.list:
+        return _buildTaskListView();
+    }
+  }
+
+  bool _taskMatchesSearch(Map<String, dynamic> t) {
+    final q = _taskSearchCtrl.text.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    final blob = '${t['name']} ${t['title']} T-${t['id']}'.toLowerCase();
+    return blob.contains(q);
+  }
+
+  List<Map<String, dynamic>> _filteredTasks(List<dynamic> tasks) {
+    return tasks
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
+        .where(_taskMatchesSearch)
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _allProjectTasks() {
+    final out = <Map<String, dynamic>>[];
+    for (final s in _stages) {
+      for (final t in (s['tasks'] as List?) ?? []) {
+        if (t is Map) out.add(Map<String, dynamic>.from(t));
+      }
+    }
+    for (final t in (_project!['unassigned_tasks'] as List?) ?? []) {
+      if (t is Map) out.add(Map<String, dynamic>.from(t));
+    }
+    return out;
+  }
+
+  Widget _buildTaskListView() {
+    final tasks = _allProjectTasks().where(_taskMatchesSearch).toList();
+    if (tasks.isEmpty) {
+      return Center(
+        child: Text(
+          _taskSearchCtrl.text.trim().isEmpty ? 'No tasks yet' : 'No tasks match your search',
+          style: const TextStyle(color: AppTheme.textMuted),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+      itemCount: tasks.length,
+      itemBuilder: (ctx, i) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: _taskCard(tasks[i], AppTheme.primary),
+      ),
+    );
+  }
+
   Widget _buildBoard() {
     final stages = _stages;
     final unassigned = (_project!['unassigned_tasks'] as List?) ?? [];
@@ -2408,7 +2713,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                 SizedBox(
                   width: colW,
                   height: h,
-                  child: _unassignedKanbanColumn(List<dynamic>.from(unassigned)),
+                  child: _unassignedKanbanColumn(_filteredTasks(unassigned)),
                 ),
             ],
           ),
@@ -2438,7 +2743,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
 
   Widget _stageColumnDnD(dynamic stage) {
     final stageId = stage['id'] as int;
-    final tasks = (stage['tasks'] as List?) ?? [];
+    final tasks = _filteredTasks((stage['tasks'] as List?) ?? []);
     final color = _parseHex(stage['color'] ?? '#3B82F6');
     return DragTarget<TaskDragPayload>(
       onWillAcceptWithDetails: (details) => !_sameStage(details.data, stageId),
@@ -2552,7 +2857,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     );
   }
 
-  Widget _unassignedKanbanColumn(List<dynamic> tasks) {
+  Widget _unassignedKanbanColumn(List<Map<String, dynamic>> tasks) {
     final color = _parseHex('#64748B');
     return Container(
       margin: EdgeInsets.only(right: 12),
