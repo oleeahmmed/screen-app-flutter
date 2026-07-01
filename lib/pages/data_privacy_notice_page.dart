@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_quick_menu.dart';
 
 /// In-app copy of the monitor web “Data & privacy” notice (keep in sync when bumping version).
 class DataPrivacyNoticePage extends StatelessWidget {
@@ -10,6 +11,10 @@ class DataPrivacyNoticePage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Data & monitoring notice'),
+        actions: const [
+          AppQuickMenuButton(iconColor: Colors.white70),
+          SizedBox(width: 4),
+        ],
       ),
       body: Container(
         decoration: AppTheme.screenGradient(),

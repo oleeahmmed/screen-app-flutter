@@ -3,16 +3,28 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+import '../services/screenshot_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/responsive.dart';
+import '../widgets/hub_quick_actions.dart';
 import 'projects_page.dart';
 import 'tasks_page.dart';
+import 'daily_report_tool_page.dart';
+import 'activity_tool_page.dart';
+import 'vault_hub_page.dart';
 
-/// Web-style Work area: **Projects** list (grid) → open **Project detail** (stages, tasks, subtasks, DnD).
-/// Second tab: **My tasks** (everything assigned to you).
+/// Work hub — Projects + My tasks with collapsible quick actions.
 class WorkHubPage extends StatefulWidget {
   final ApiService apiService;
+  final ScreenshotService? screenshotService;
+  final VoidCallback? onLogout;
 
-  const WorkHubPage({super.key, required this.apiService});
+  const WorkHubPage({
+    super.key,
+    required this.apiService,
+    this.screenshotService,
+    this.onLogout,
+  });
 
   @override
   State<WorkHubPage> createState() => _WorkHubPageState();
@@ -33,106 +45,120 @@ class _WorkHubPageState extends State<WorkHubPage> with SingleTickerProviderStat
     super.dispose();
   }
 
+  void _openTool(Widget page) {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final api = widget.apiService;
+    final logout = widget.onLogout;
+    final pad = Responsive.pagePadding(context);
+
     return Container(
       decoration: AppTheme.screenGradient(),
       child: SafeArea(
+        bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-              child: Text(
-                'Work',
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      color: AppTheme.textPrimary,
-                      fontWeight: FontWeight.bold,
+              padding: EdgeInsets.fromLTRB(pad, 6, pad, 6),
+              child: HubQuickActionsCard(
+                  collapsible: true,
+                  initiallyExpanded: false,
+                  subtitle: 'Reports, activity & vault',
+                  actions: [
+                    HubQuickAction(
+                      label: 'Daily Report',
+                      icon: Icons.assignment_outlined,
+                      color: AppTheme.featureReport,
+                      onTap: () => _openTool(DailyReportToolPage(apiService: api, onLogout: logout)),
                     ),
+                    HubQuickAction(
+                      label: 'Today\'s Activity',
+                      icon: Icons.timeline_rounded,
+                      color: AppTheme.featureChat,
+                      onTap: () => _openTool(ActivityToolPage(apiService: api, onLogout: logout)),
+                    ),
+                    HubQuickAction(
+                      label: 'Vault',
+                      icon: Icons.lock_outline_rounded,
+                      color: AppTheme.featureVault,
+                      onTap: () => _openTool(VaultHubPage(apiService: api, onLogout: logout)),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          AppTheme.surface2.withValues(alpha: 0.55),
-                          AppTheme.surface.withValues(alpha: 0.42),
+              Padding(
+                padding: EdgeInsets.fromLTRB(pad, 0, pad, 8),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                        color: AppTheme.surface2.withValues(alpha: 0.45),
+                      ),
+                      child: TabBar(
+                        controller: _tabController,
+                        indicator: BoxDecoration(
+                          borderRadius: BorderRadius.circular(10),
+                          color: AppTheme.primary.withValues(alpha: 0.26),
+                          border: Border.all(color: AppTheme.primary.withValues(alpha: 0.32)),
+                        ),
+                        indicatorSize: TabBarIndicatorSize.tab,
+                        indicatorPadding: const EdgeInsets.all(5),
+                        labelColor: AppTheme.primaryBright,
+                        unselectedLabelColor: AppTheme.textMuted,
+                        dividerColor: Colors.transparent,
+                        labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                        tabs: const [
+                          Tab(
+                            height: 40,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.folder_open, size: 17),
+                                SizedBox(width: 7),
+                                Text('Projects'),
+                              ],
+                            ),
+                          ),
+                          Tab(
+                            height: 40,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.assignment_turned_in_outlined, size: 17),
+                                SizedBox(width: 7),
+                                Text('My tasks'),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.25),
-                          blurRadius: 20,
-                          offset: const Offset(0, 8),
-                        ),
-                      ],
-                    ),
-                    child: TabBar(
-                      controller: _tabController,
-                      indicator: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        color: AppTheme.primary.withValues(alpha: 0.28),
-                        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.35)),
-                      ),
-                      indicatorSize: TabBarIndicatorSize.tab,
-                      labelColor: AppTheme.primaryBright,
-                      unselectedLabelColor: AppTheme.textMuted,
-                      dividerColor: Colors.transparent,
-                      overlayColor: WidgetStateProperty.all(Colors.white10),
-                      tabs: const [
-                        Tab(
-                          height: 44,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.folder_open, size: 18),
-                              SizedBox(width: 8),
-                              Text('Projects'),
-                            ],
-                          ),
-                        ),
-                        Tab(
-                          height: 44,
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.assignment_turned_in_outlined, size: 18),
-                              SizedBox(width: 8),
-                              Text('My tasks'),
-                            ],
-                          ),
-                        ),
-                      ],
                     ),
                   ),
                 ),
               ),
-            ),
-            Expanded(
-              child: TabBarView(
-                controller: _tabController,
-                children: [
-                  ProjectsPage(
-                    apiService: widget.apiService,
-                    embeddedInParent: true,
-                  ),
-                  TasksPage(apiService: widget.apiService),
-                ],
+              Expanded(
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [
+                    ProjectsPage(
+                      apiService: widget.apiService,
+                      embeddedInParent: true,
+                    ),
+                    TasksPage(apiService: widget.apiService, embeddedInParent: true),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
     );
   }
 }

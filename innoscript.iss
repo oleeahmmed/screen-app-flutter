@@ -1,32 +1,39 @@
+; Aims Windows installer — run ISCC from this folder after `flutter build windows`.
 #define MyAppName "Aims"
-#define MyAppVersion "1.0.1"
-#define MyAppPublisher "igenhr"
+#define MyAppVersion "1.0.0"
+#define MyAppPublisher "iGenHR"
 #define MyAppExeName "aims.exe"
-#define ReleaseDir "C:\Users\Admin\Desktop\ibit\screenbundle\screen-app-flutter\build\windows\x64\runner\Release"
+#define ReleaseDir "build\windows\x64\runner\Release"
 
 [Setup]
-AppId={{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}}
+AppId={{A3F8C2E1-9B4D-4F6A-8E2C-1D5A7B9C0E3F}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
-OutputDir=.
+OutputDir=installer
 OutputBaseFilename=aims-{#MyAppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
+WizardStyle=modern
+UninstallDisplayIcon={app}\{#MyAppExeName}
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
 Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-
-[Tasks]
-Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

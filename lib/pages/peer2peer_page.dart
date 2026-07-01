@@ -1,46 +1,37 @@
-// peer2peer_page.dart — Peer-to-Peer File Transfer (WebRTC)
-// Uses REST API polling for signaling (works without Daphne/ASGI)
-// Falls back to WebSocket if available
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:path_provider/path_provider.dart';
-import '../config.dart';
-import '../services/api_service.dart';
 
-class _C {
-  static const bgDark = Color(0xFF0F172A);
-  static const bgCard = Color(0xFF1E293B);
-  static const blue = Color(0xFF3B82F6);
-  static const blueDark = Color(0xFF2563EB);
-  static const cyan = Color(0xFF06B6D4);
-  static const green = Color(0xFF22C55E);
-  static const red = Color(0xFFEF4444);
-  static const textMain = Color(0xFFF8FAFC);
-  static const textMuted = Color(0xFF94A3B8);
-  static const glassBorder = Color(0x14FFFFFF);
-  static const inputBg = Color(0x990F172A);
-  static const inputBorder = Color(0x1AFFFFFF);
-}
+import '../config.dart';
+import '../utils/ws_connect.dart';
+import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 
 class Peer2PeerPage extends StatefulWidget {
   final ApiService apiService;
-  const Peer2PeerPage({required this.apiService});
+  final bool embedded;
+
+  const Peer2PeerPage({
+    super.key,
+    required this.apiService,
+    this.embedded = false,
+  });
+
   @override
   State<Peer2PeerPage> createState() => _Peer2PeerPageState();
 }
 
-class _Peer2PeerPageState extends State<Peer2PeerPage>
-    with SingleTickerProviderStateMixin {
+class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProviderStateMixin {
   String _mode = 'home';
   String? _sessionId;
   String? _peerName;
@@ -55,21 +46,31 @@ class _Peer2PeerPageState extends State<Peer2PeerPage>
   RTCDataChannel? _dataChannel;
   WebSocketChannel? _ws;
   bool _wsAlive = false;
-  Timer? _pollTimer;
+
+  String? _myRole;
+  bool _remoteReady = false;
+  final List<Map<String, dynamic>> _pendingIce = [];
+  List<Map<String, dynamic>> _iceServers = [
+    {'urls': 'stun:stun.l.google.com:19302'},
+  ];
 
   final List<Uint8List> _rxChunks = [];
   int _expectedSize = 0;
   int _rxSize = 0;
   String _rxFileName = '';
+  bool _awaitingAccept = false;
+  bool _joinedSession = false;
 
   late AnimationController _pulseCtrl;
   final _joinCtrl = TextEditingController();
 
+  static const _chunkSize = 16384;
+  static const _highWater = 8 * 1024 * 1024;
+
   @override
   void initState() {
     super.initState();
-    _pulseCtrl = AnimationController(vsync: this, duration: Duration(seconds: 2))
-      ..repeat(reverse: true);
+    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
   }
 
   @override
@@ -81,163 +82,251 @@ class _Peer2PeerPageState extends State<Peer2PeerPage>
   }
 
   void _cleanup() {
-    _pollTimer?.cancel();
-    try { _dataChannel?.close(); } catch (_) {}
-    try { _pc?.close(); } catch (_) {}
-    try { _ws?.sink.close(); } catch (_) {}
+    try {
+      _dataChannel?.close();
+    } catch (_) {}
+    try {
+      _pc?.close();
+    } catch (_) {}
+    try {
+      _ws?.sink.close();
+    } catch (_) {}
     _dataChannel = null;
     _pc = null;
     _ws = null;
     _wsAlive = false;
+    _myRole = null;
+    _remoteReady = false;
+    _pendingIce.clear();
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // SEND FLOW
-  // ═══════════════════════════════════════════════════════════
+  Future<void> _loadIceServers() async {
+    final r = await widget.apiService.p2pGetIceServers();
+    if (r['success'] == true) {
+      final data = r['data'] as Map<String, dynamic>? ?? {};
+      final servers = data['ice_servers'] as List? ?? [];
+      if (servers.isNotEmpty) {
+        _iceServers = servers.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      }
+    }
+  }
 
   Future<void> _startSendFlow() async {
-    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false, withData: true);
     if (result == null || result.files.isEmpty) return;
     final pf = result.files.first;
-    if (pf.path == null) return;
 
-    final file = File(pf.path!);
-    _selectedFileBytes = await file.readAsBytes();
+    Uint8List? bytes = pf.bytes;
+    if (bytes == null && pf.path != null) {
+      bytes = await File(pf.path!).readAsBytes();
+    }
+    if (bytes == null || bytes.isEmpty) {
+      _showError('Could not read the selected file');
+      return;
+    }
+
+    _selectedFileBytes = bytes;
     _selectedFileName = pf.name;
-    _selectedFileSize = _selectedFileBytes!.length;
+    _selectedFileSize = bytes.length;
 
-    setState(() { _mode = 'sending'; _statusText = 'Creating session...'; });
+    setState(() {
+      _mode = 'sending';
+      _statusText = 'Creating session...';
+    });
+
+    await _loadIceServers();
 
     final resp = await widget.apiService.p2pCreateSession(
-      fileName: _selectedFileName!, fileSize: _selectedFileSize,
+      fileName: _selectedFileName!,
+      fileSize: _selectedFileSize,
     );
 
     if (!resp['success']) {
-      _showError(resp['error'] ?? 'Failed to create session');
+      _showError(resp['error']?.toString() ?? 'Failed to create session');
       setState(() => _mode = 'home');
       return;
     }
 
-    _sessionId = resp['data']['session_id'];
+    _sessionId = resp['data']['session_id']?.toString();
     setState(() => _statusText = 'Waiting for receiver...');
-    _connectSignaling(isSender: true);
+    _connectSignaling();
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // RECEIVE FLOW
-  // ═══════════════════════════════════════════════════════════
-
   Future<void> _startReceiveFlow(String sessionId) async {
-    setState(() { _mode = 'receiving'; _statusText = 'Joining...'; _sessionId = sessionId; });
+    setState(() {
+      _mode = 'receiving';
+      _statusText = 'Joining...';
+      _sessionId = sessionId;
+    _joinedSession = true;
+    });
+
+    await _loadIceServers();
 
     final resp = await widget.apiService.p2pJoinSession(sessionId);
     if (!resp['success']) {
-      _showError(resp['error'] ?? 'Failed to join');
+      _showError(resp['error']?.toString() ?? 'Failed to join');
       setState(() => _mode = 'home');
       return;
     }
 
-    _peerName = resp['data']['sender_name'];
-    _rxFileName = resp['data']['file_name'] ?? 'file';
-    _expectedSize = resp['data']['file_size'] ?? 0;
-    setState(() => _statusText = 'Connecting to $_peerName...');
-    _connectSignaling(isSender: false);
+    _peerName = resp['data']['sender_name']?.toString();
+    _rxFileName = resp['data']['file_name']?.toString() ?? 'file';
+    _expectedSize = resp['data']['file_size'] is int ? resp['data']['file_size'] as int : int.tryParse('${resp['data']['file_size']}') ?? 0;
+    setState(() => _statusText = 'Connecting to ${_peerName ?? 'sender'}...');
+    _connectSignaling();
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // SIGNALING (WebSocket with fallback)
-  // ═══════════════════════════════════════════════════════════
-
-  void _connectSignaling({required bool isSender}) {
+  void _connectSignaling() {
     final token = widget.apiService.token ?? '';
-    final wsUrl = '${AppConfig.p2pWsUrl}$_sessionId/?token=$token';
-    print('🔌 P2P connecting: $wsUrl');
+    if (_sessionId == null || token.isEmpty) return;
+    final wsUrl = AppConfig.p2pWsUrl(_sessionId!, token);
 
     try {
-      _ws = WebSocketChannel.connect(Uri.parse(wsUrl));
+      _ws = connectWs(wsUrl);
       _wsAlive = true;
 
       _ws!.stream.listen(
         (msg) {
           try {
-            _onSignal(jsonDecode(msg as String), isSender);
-          } catch (e) { print('❌ Parse: $e'); }
+            _onSignal(jsonDecode(msg as String));
+          } catch (_) {}
         },
-        onError: (e) {
-          print('❌ WS error: $e');
+        onError: (_) {
           _wsAlive = false;
           if (mounted && _mode == 'sending') {
-            setState(() => _statusText = 'Waiting for receiver... (WS reconnecting)');
+            setState(() => _statusText = 'Waiting for receiver...');
           }
         },
-        onDone: () {
-          print('🔌 WS closed');
-          _wsAlive = false;
-        },
+        onDone: () => _wsAlive = false,
       );
     } catch (e) {
-      print('❌ WS failed: $e');
       _wsAlive = false;
-      _showError('WebSocket connection failed. Make sure Django is running with Daphne (ASGI).');
+      _showError('Signaling connection failed: $e');
     }
   }
 
   void _wsSend(Map<String, dynamic> data) {
     if (_ws != null && _wsAlive) {
-      try { _ws!.sink.add(jsonEncode(data)); } catch (_) {}
+      try {
+        _ws!.sink.add(jsonEncode(data));
+      } catch (_) {}
     }
   }
 
-  Future<void> _onSignal(Map<String, dynamic> data, bool isSender) async {
+  Future<void> _onSignal(Map<String, dynamic> data) async {
     final type = data['type'] as String? ?? '';
-    print('📨 Signal: $type');
 
     switch (type) {
+      case 'room_full':
+        _showError('This transfer already has two devices connected.');
+        _cancel();
       case 'peer_joined':
-        _peerName = data['username'];
-        setState(() { _isConnected = true; _statusText = 'Peer: $_peerName'; });
-        if (isSender) {
-          await _initPc(isSender: true);
-          await _createOffer();
+        _peerName = data['username']?.toString();
+        if (mounted) {
+          setState(() {
+            _isConnected = true;
+            _statusText = 'Peer connected — negotiating...';
+          });
         }
       case 'peer_left':
-        setState(() { _isConnected = false; _statusText = 'Peer disconnected'; });
-      case 'offer':
-        await _initPc(isSender: false);
-        final s = data['sdp'];
-        await _pc!.setRemoteDescription(RTCSessionDescription(s['sdp'], s['type']));
-        final ans = await _pc!.createAnswer();
-        await _pc!.setLocalDescription(ans);
-        _wsSend({'type': 'answer', 'sdp': {'sdp': ans.sdp, 'type': ans.type}});
-      case 'answer':
-        final s = data['sdp'];
-        await _pc!.setRemoteDescription(RTCSessionDescription(s['sdp'], s['type']));
-      case 'ice_candidate':
-        final c = data['candidate'];
-        if (c != null && _pc != null) {
-          await _pc!.addCandidate(RTCIceCandidate(c['candidate'], c['sdpMid'], c['sdpMLineIndex']));
+        if (mounted) {
+          setState(() {
+            _isConnected = false;
+            _statusText = 'Peer disconnected';
+          });
         }
+      case 'role':
+        await _onRole(data['role']?.toString());
+      case 'offer':
+        await _onOffer(data['sdp'] as Map<String, dynamic>?);
+      case 'answer':
+        await _onAnswer(data['sdp'] as Map<String, dynamic>?);
+      case 'ice_candidate':
+        await _onRemoteIce(data['candidate'] as Map<String, dynamic>?);
       case 'file_info':
-        _rxFileName = data['file_name'] ?? 'file';
-        _expectedSize = data['file_size'] ?? 0;
-        if (data['sender_name'] != null) _peerName = data['sender_name'];
-        setState(() => _statusText = 'Receiving: $_rxFileName');
+        _rxFileName = data['file_name']?.toString() ?? _rxFileName;
+        _expectedSize = data['file_size'] is int ? data['file_size'] as int : int.tryParse('${data['file_size']}') ?? _expectedSize;
+        if (data['sender_name'] != null) _peerName = data['sender_name']?.toString();
+        if (mounted) setState(() => _statusText = 'Incoming: $_rxFileName');
       case 'transfer_complete':
-        setState(() { _mode = 'complete'; _progress = 1.0; _statusText = 'Transfer complete'; });
+        if (mounted) {
+          setState(() {
+            _mode = 'complete';
+            _progress = 1.0;
+            _statusText = 'Transfer complete';
+          });
+        }
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // WEBRTC
-  // ═══════════════════════════════════════════════════════════
+  Future<void> _onRole(String? role) async {
+    if (role == null || role.isEmpty) return;
+    _myRole = role;
+    await _initPc();
+    if (role == 'initiator') {
+      _dataChannel = await _pc!.createDataChannel('file', RTCDataChannelInit()..ordered = true);
+      _setupDc(isSender: true);
+      final offer = await _pc!.createOffer();
+      await _pc!.setLocalDescription(offer);
+      _wsSend({'type': 'offer', 'sdp': {'sdp': offer.sdp, 'type': offer.type}});
+    } else {
+      _pc!.onDataChannel = (ch) {
+        _dataChannel = ch;
+        _setupDc(isSender: false);
+      };
+    }
+  }
 
-  Future<void> _initPc({required bool isSender}) async {
-    _pc = await createPeerConnection({
-      'iceServers': [
-        {'urls': 'stun:stun.l.google.com:19302'},
-        {'urls': 'stun:stun1.l.google.com:19302'},
-      ],
-    });
+  Future<void> _onOffer(Map<String, dynamic>? sdp) async {
+    if (sdp == null) return;
+    if (_pc == null) await _initPc();
+    await _pc!.setRemoteDescription(RTCSessionDescription(sdp['sdp']?.toString(), sdp['type']?.toString()));
+    _remoteReady = true;
+    await _flushCandidates();
+    final answer = await _pc!.createAnswer();
+    await _pc!.setLocalDescription(answer);
+    _wsSend({'type': 'answer', 'sdp': {'sdp': answer.sdp, 'type': answer.type}});
+  }
+
+  Future<void> _onAnswer(Map<String, dynamic>? sdp) async {
+    if (sdp == null || _pc == null) return;
+    await _pc!.setRemoteDescription(RTCSessionDescription(sdp['sdp']?.toString(), sdp['type']?.toString()));
+    _remoteReady = true;
+    await _flushCandidates();
+  }
+
+  Future<void> _onRemoteIce(Map<String, dynamic>? candidate) async {
+    if (candidate == null || _pc == null) return;
+    if (_remoteReady) {
+      try {
+        await _pc!.addCandidate(RTCIceCandidate(
+          candidate['candidate']?.toString(),
+          candidate['sdpMid']?.toString(),
+          candidate['sdpMLineIndex'] is int ? candidate['sdpMLineIndex'] as int : int.tryParse('${candidate['sdpMLineIndex']}'),
+        ));
+      } catch (_) {}
+    } else {
+      _pendingIce.add(candidate);
+    }
+  }
+
+  Future<void> _flushCandidates() async {
+    if (_pc == null) return;
+    for (final c in List<Map<String, dynamic>>.from(_pendingIce)) {
+      try {
+        await _pc!.addCandidate(RTCIceCandidate(
+          c['candidate']?.toString(),
+          c['sdpMid']?.toString(),
+          c['sdpMLineIndex'] is int ? c['sdpMLineIndex'] as int : int.tryParse('${c['sdpMLineIndex']}'),
+        ));
+      } catch (_) {}
+    }
+    _pendingIce.clear();
+  }
+
+  Future<void> _initPc() async {
+    if (_pc != null) return;
+    _pc = await createPeerConnection({'iceServers': _iceServers});
 
     _pc!.onIceCandidate = (c) => _wsSend({
       'type': 'ice_candidate',
@@ -245,96 +334,169 @@ class _Peer2PeerPageState extends State<Peer2PeerPage>
     });
 
     _pc!.onIceConnectionState = (s) {
-      print('🧊 ICE: $s');
       if (s == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           s == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
-        if (mounted) setState(() => _statusText = isSender ? 'Sending...' : 'Receiving...');
+        if (mounted) {
+          setState(() => _statusText = _myRole == 'initiator' ? 'Connected — waiting for accept...' : 'Connected — receiving...');
+        }
       } else if (s == RTCIceConnectionState.RTCIceConnectionStateFailed) {
-        if (mounted) _showError('Connection failed');
+        if (mounted) _showError('Connection failed — try again or check network');
       }
     };
-
-    if (isSender) {
-      _dataChannel = await _pc!.createDataChannel('ft', RTCDataChannelInit()..ordered = true..maxRetransmits = 30);
-      _setupDc(isSender: true);
-    } else {
-      _pc!.onDataChannel = (ch) { _dataChannel = ch; _setupDc(isSender: false); };
-    }
   }
 
   void _setupDc({required bool isSender}) {
     _dataChannel!.onDataChannelState = (s) {
-      print('📡 DC: $s');
       if (s == RTCDataChannelState.RTCDataChannelOpen && isSender) {
-        _wsSend({'type': 'file_info', 'file_name': _selectedFileName, 'file_size': _selectedFileSize});
-        Future.delayed(Duration(milliseconds: 200), _sendChunks);
+        _sendMeta();
       }
     };
 
-    if (!isSender) {
-      _dataChannel!.onMessage = (RTCDataChannelMessage msg) {
-        if (msg.isBinary) {
-          _rxChunks.add(msg.binary);
-          _rxSize += msg.binary.length;
-          if (_expectedSize > 0 && mounted) {
+    _dataChannel!.onMessage = (RTCDataChannelMessage msg) {
+      if (msg.isBinary) {
+        _rxChunks.add(msg.binary);
+        _rxSize += msg.binary.length;
+        if (_expectedSize > 0 && mounted) {
+          setState(() {
+            _mode = 'transferring';
+            _progress = _rxSize / _expectedSize;
+            _statusText = 'Receiving: ${(_progress * 100).toStringAsFixed(1)}%';
+          });
+        }
+        return;
+      }
+
+      try {
+        final ctrl = jsonDecode(msg.text) as Map<String, dynamic>;
+        final kind = ctrl['kind']?.toString();
+        if (kind == 'meta' && !isSender) {
+          _rxFileName = ctrl['name']?.toString() ?? _rxFileName;
+          _expectedSize = ctrl['size'] is int ? ctrl['size'] as int : int.tryParse('${ctrl['size']}') ?? _expectedSize;
+          if (mounted) {
             setState(() {
-              _mode = 'transferring';
-              _progress = _rxSize / _expectedSize;
-              _statusText = 'Receiving: ${(_progress * 100).toStringAsFixed(1)}%';
+              _awaitingAccept = true;
+              _statusText = 'Incoming file — tap Accept to begin';
             });
           }
-        } else if (msg.text == 'EOF') {
+        } else if (kind == 'ready' && isSender) {
+          _sendChunks();
+        } else if (kind == 'done' && !isSender) {
           _saveFile();
         }
-      };
-    }
+      } catch (_) {
+        if (msg.text == 'EOF') _saveFile();
+      }
+    };
+  }
+
+  void _sendMeta() {
+    _wsSend({
+      'type': 'file_info',
+      'file_name': _selectedFileName,
+      'file_size': _selectedFileSize,
+    });
+    _dataChannel?.send(RTCDataChannelMessage(jsonEncode({
+      'kind': 'meta',
+      'name': _selectedFileName,
+      'size': _selectedFileSize,
+      'type': 'application/octet-stream',
+    })));
+    if (mounted) setState(() => _statusText = 'Waiting for receiver to accept...');
+  }
+
+  Future<void> _acceptIncoming() async {
+    if (_dataChannel == null) return;
+    setState(() {
+      _awaitingAccept = false;
+      _mode = 'transferring';
+      _statusText = 'Receiving...';
+    });
+    _dataChannel!.send(RTCDataChannelMessage(jsonEncode({'kind': 'ready'})));
   }
 
   Future<void> _sendChunks() async {
     if (_selectedFileBytes == null || _dataChannel == null) return;
-    setState(() { _mode = 'transferring'; _statusText = 'Sending...'; });
+    if (mounted) {
+      setState(() {
+        _mode = 'transferring';
+        _statusText = 'Sending...';
+      });
+    }
 
-    const cs = 16384;
     final total = _selectedFileBytes!.length;
-    int off = 0;
+    var off = 0;
     while (off < total) {
-      final end = min(off + cs, total);
+      while ((_dataChannel!.bufferedAmount ?? 0) > _highWater) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      final end = min(off + _chunkSize, total);
       _dataChannel!.send(RTCDataChannelMessage.fromBinary(_selectedFileBytes!.sublist(off, end)));
       off = end;
-      if (mounted) setState(() { _progress = off / total; _statusText = 'Sending: ${(_progress * 100).toStringAsFixed(1)}%'; });
-      await Future.delayed(Duration(milliseconds: 5));
+      if (mounted) {
+        setState(() {
+          _progress = off / total;
+          _statusText = 'Sending: ${(_progress * 100).toStringAsFixed(1)}%';
+        });
+      }
+      await Future.delayed(const Duration(milliseconds: 2));
     }
-    _dataChannel!.send(RTCDataChannelMessage('EOF'));
+
+    _dataChannel!.send(RTCDataChannelMessage(jsonEncode({'kind': 'done'})));
     _wsSend({'type': 'transfer_complete'});
-    if (mounted) setState(() { _mode = 'complete'; _progress = 1.0; _statusText = 'Sent!'; });
+    if (mounted) {
+      setState(() {
+        _mode = 'complete';
+        _progress = 1.0;
+        _statusText = 'Sent successfully!';
+      });
+    }
   }
 
   Future<void> _saveFile() async {
     try {
-      final dir = await getDownloadsDirectory() ?? await getTemporaryDirectory();
+      final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
       final path = '${dir.path}${Platform.pathSeparator}$_rxFileName';
       final bb = BytesBuilder();
-      for (final c in _rxChunks) bb.add(c);
+      for (final c in _rxChunks) {
+        bb.add(c);
+      }
       await File(path).writeAsBytes(bb.toBytes());
-      _rxChunks.clear(); _rxSize = 0;
-      if (mounted) setState(() { _mode = 'complete'; _progress = 1.0; _statusText = 'Saved: $path'; });
-    } catch (e) { _showError('Save failed: $e'); }
-  }
-
-  Future<void> _createOffer() async {
-    final o = await _pc!.createOffer();
-    await _pc!.setLocalDescription(o);
-    _wsSend({'type': 'offer', 'sdp': {'sdp': o.sdp, 'type': o.type}});
+      _rxChunks.clear();
+      _rxSize = 0;
+      if (mounted) {
+        setState(() {
+          _mode = 'complete';
+          _progress = 1.0;
+          _statusText = 'Saved to $path';
+        });
+      }
+    } catch (e) {
+      _showError('Save failed: $e');
+    }
   }
 
   void _cancel() {
     _cleanup();
-    _rxChunks.clear(); _rxSize = 0; _selectedFileBytes = null;
-    setState(() { _mode = 'home'; _progress = 0; _statusText = ''; _isConnected = false; _sessionId = null; });
+    _rxChunks.clear();
+    _rxSize = 0;
+    _selectedFileBytes = null;
+    _awaitingAccept = false;
+    _joinedSession = false;
+    setState(() {
+      _mode = 'home';
+      _progress = 0;
+      _statusText = '';
+      _isConnected = false;
+      _sessionId = null;
+    });
   }
 
   void _showError(String m) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: _C.red));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(m), backgroundColor: AppTheme.danger),
+      );
+    }
   }
 
   String _fmtSize(int b) {
@@ -344,230 +506,481 @@ class _Peer2PeerPageState extends State<Peer2PeerPage>
     return '${(b / 1073741824).toStringAsFixed(2)} GB';
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // UI
-  // ═══════════════════════════════════════════════════════════
-
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_isConnected) _connectionBanner(),
+          Expanded(child: _body()),
+        ],
+      );
+    }
+
     return Container(
-      decoration: BoxDecoration(gradient: LinearGradient(
-        begin: Alignment.topLeft, end: Alignment.bottomRight,
-        colors: [_C.bgDark, Color(0xFF1E293B), Color(0xFF162032)])),
-      child: SafeArea(child: Column(children: [_header(), Expanded(child: _body())])),
+      decoration: AppTheme.screenGradient(),
+      child: SafeArea(
+        child: Column(
+          children: [
+            _header(),
+            Expanded(child: _body()),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget _header() => Container(
-    height: 64, padding: EdgeInsets.symmetric(horizontal: 20),
-    decoration: BoxDecoration(color: Color(0x1A1E293B), border: Border(bottom: BorderSide(color: _C.glassBorder))),
-    child: Row(children: [
-      if (_mode != 'home') GestureDetector(onTap: _cancel,
-        child: Padding(padding: EdgeInsets.only(right: 12), child: Icon(Icons.arrow_back_ios, color: _C.textMuted, size: 20))),
-      Container(width: 36, height: 36,
-        decoration: BoxDecoration(gradient: LinearGradient(colors: [_C.cyan, _C.blue]), borderRadius: BorderRadius.circular(10)),
-        child: Icon(Icons.swap_horiz, color: Colors.white, size: 20)),
-      SizedBox(width: 12),
-      Text('Peer2Peer', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _C.textMain)),
-      Spacer(),
-      if (_isConnected) Container(
-        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(color: _C.green.withOpacity(0.2), borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: _C.green.withOpacity(0.4))),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 6, height: 6, decoration: BoxDecoration(color: _C.green, shape: BoxShape.circle)),
-          SizedBox(width: 6),
-          Text('Connected', style: TextStyle(color: _C.green, fontSize: 11, fontWeight: FontWeight.w600)),
-        ])),
-    ]),
-  );
+  Widget _connectionBanner() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppTheme.success.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.success.withValues(alpha: 0.35)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.circle, size: 8, color: AppTheme.success),
+            SizedBox(width: 8),
+            Text('Peer connected', style: TextStyle(color: AppTheme.success, fontSize: 12, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _header() {
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.35),
+        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+      ),
+      child: Row(
+        children: [
+          if (_mode != 'home')
+            IconButton(
+              onPressed: _cancel,
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppTheme.textMuted, size: 20),
+            ),
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: [AppTheme.accent, AppTheme.primary]),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.swap_horiz_rounded, color: Colors.white, size: 20),
+          ),
+          const SizedBox(width: 12),
+          const Text('Peer2Peer', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+          const Spacer(),
+          if (_isConnected)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppTheme.success.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.success.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppTheme.success, shape: BoxShape.circle)),
+                  const SizedBox(width: 6),
+                  const Text('Connected', style: TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   Widget _body() {
     switch (_mode) {
-      case 'sending': return _sendView();
-      case 'receiving': return _recvView();
-      case 'transferring': return _xferView();
-      case 'complete': return _doneView();
-      default: return _homeView();
+      case 'sending':
+        return _sendView();
+      case 'receiving':
+        return _recvView();
+      case 'transferring':
+        return _xferView();
+      case 'complete':
+        return _doneView();
+      default:
+        return _homeView();
     }
   }
 
-  Widget _homeView() => SingleChildScrollView(padding: EdgeInsets.all(24), child: Column(children: [
-    SizedBox(height: 20),
-    AnimatedBuilder(animation: _pulseCtrl, builder: (_, __) => Container(
-      width: 100, height: 100,
-      decoration: BoxDecoration(shape: BoxShape.circle,
-        gradient: LinearGradient(colors: [
-          _C.cyan.withOpacity(0.3 + _pulseCtrl.value * 0.2),
-          _C.blue.withOpacity(0.3 + _pulseCtrl.value * 0.2)]),
-        boxShadow: [BoxShadow(color: _C.cyan.withOpacity(0.2 + _pulseCtrl.value * 0.1), blurRadius: 30)]),
-      child: Icon(Icons.swap_horiz, color: _C.cyan, size: 48))),
-    SizedBox(height: 24),
-    Text('Peer-to-Peer File Transfer', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _C.textMain)),
-    SizedBox(height: 8),
-    Text('Send files directly between devices.\nNothing stored on server.', textAlign: TextAlign.center,
-      style: TextStyle(fontSize: 14, color: _C.textMuted, height: 1.5)),
-    SizedBox(height: 40),
-    _card(Icons.upload_file, 'Send File', 'Pick a file and share via QR code', [_C.blue, _C.blueDark], _startSendFlow),
-    SizedBox(height: 16),
-    _card(Icons.download, 'Receive File', 'Enter code to receive', [_C.green, Color(0xFF16A34A)], () => setState(() => _mode = 'receiving')),
-    SizedBox(height: 32),
-    Container(padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(color: _C.cyan.withOpacity(0.08), borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _C.cyan.withOpacity(0.2))),
-      child: Row(children: [
-        Icon(Icons.info_outline, color: _C.cyan, size: 20), SizedBox(width: 12),
-        Expanded(child: Text(
-          'Requires Django running with Daphne (ASGI) for WebSocket signaling.\nRun: daphne -b 0.0.0.0 -p 8000 config.asgi:application',
-          style: TextStyle(color: _C.textMuted, fontSize: 11, height: 1.4))),
-      ])),
-  ]));
+  Widget _homeView() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        children: [
+          const SizedBox(height: 20),
+          AnimatedBuilder(
+            animation: _pulseCtrl,
+            builder: (_, __) => Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [
+                    AppTheme.accent.withValues(alpha: 0.25 + _pulseCtrl.value * 0.15),
+                    AppTheme.primary.withValues(alpha: 0.25 + _pulseCtrl.value * 0.15),
+                  ],
+                ),
+                boxShadow: [
+                  BoxShadow(color: AppTheme.primary.withValues(alpha: 0.15 + _pulseCtrl.value * 0.1), blurRadius: 30),
+                ],
+              ),
+              child: const Icon(Icons.swap_horiz_rounded, color: AppTheme.accent, size: 48),
+            ),
+          ),
+          const SizedBox(height: 24),
+          const Text('Peer-to-Peer File Transfer', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+          const SizedBox(height: 8),
+          Text(
+            'Send files directly between devices.\nNothing stored on the server.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, color: AppTheme.textMuted.withValues(alpha: 0.9), height: 1.5),
+          ),
+          const SizedBox(height: 40),
+          _actionCard(Icons.upload_file_rounded, 'Send File', 'Pick a file and share via QR code', [AppTheme.primary, AppTheme.primaryBright], _startSendFlow),
+          const SizedBox(height: 16),
+          _actionCard(Icons.download_rounded, 'Receive File', 'Enter code to receive', [AppTheme.success, const Color(0xFF16A34A)], () => setState(() => _mode = 'receiving')),
+        ],
+      ),
+    );
+  }
 
-  Widget _card(IconData ic, String t, String s, List<Color> g, VoidCallback fn) => GestureDetector(
-    onTap: fn, child: Container(padding: EdgeInsets.all(20),
-      decoration: BoxDecoration(color: _C.bgCard, borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: g[0].withOpacity(0.3)),
-        boxShadow: [BoxShadow(color: g[0].withOpacity(0.1), blurRadius: 20)]),
-      child: Row(children: [
-        Container(width: 52, height: 52,
-          decoration: BoxDecoration(gradient: LinearGradient(colors: g), borderRadius: BorderRadius.circular(14)),
-          child: Icon(ic, color: Colors.white, size: 26)),
-        SizedBox(width: 16),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(t, style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _C.textMain)),
-          SizedBox(height: 4), Text(s, style: TextStyle(fontSize: 13, color: _C.textMuted)),
-        ])),
-        Icon(Icons.arrow_forward_ios, color: _C.textMuted, size: 16),
-      ])));
+  Widget _actionCard(IconData ic, String t, String s, List<Color> g, VoidCallback fn) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: fn,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: AppTheme.glassPanel(borderRadius: 16).copyWith(
+            border: Border.all(color: g[0].withValues(alpha: 0.25)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(gradient: LinearGradient(colors: g), borderRadius: BorderRadius.circular(14)),
+                child: Icon(ic, color: Colors.white, size: 26),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(t, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+                    const SizedBox(height: 4),
+                    Text(s, style: const TextStyle(fontSize: 13, color: AppTheme.textMuted)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.arrow_forward_ios_rounded, color: AppTheme.textMuted, size: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
-  Widget _sendView() => SingleChildScrollView(padding: EdgeInsets.all(24), child: Column(children: [
-    SizedBox(height: 16),
-    Container(padding: EdgeInsets.all(16),
-      decoration: BoxDecoration(color: _C.bgCard, borderRadius: BorderRadius.circular(16), border: Border.all(color: _C.glassBorder)),
-      child: Row(children: [
-        Container(width: 44, height: 44,
-          decoration: BoxDecoration(color: _C.blue.withOpacity(0.2), borderRadius: BorderRadius.circular(12)),
-          child: Icon(Icons.insert_drive_file, color: _C.blue, size: 24)),
-        SizedBox(width: 12),
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(_selectedFileName ?? '', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _C.textMain),
-            maxLines: 1, overflow: TextOverflow.ellipsis),
-          Text(_fmtSize(_selectedFileSize), style: TextStyle(fontSize: 12, color: _C.textMuted)),
-        ])),
-      ])),
-    SizedBox(height: 24),
-    if (_sessionId != null) ...[
-      Text('Scan QR or share code', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _C.textMain)),
-      SizedBox(height: 16),
-      Container(padding: EdgeInsets.all(20),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20),
-          boxShadow: [BoxShadow(color: _C.blue.withOpacity(0.2), blurRadius: 30)]),
-        child: QrImageView(data: _sessionId!, version: QrVersions.auto, size: 200, backgroundColor: Colors.white,
-          eyeStyle: QrEyeStyle(eyeShape: QrEyeShape.square, color: Color(0xFF1E293B)),
-          dataModuleStyle: QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Color(0xFF1E293B)))),
-      SizedBox(height: 16),
-      GestureDetector(
-        onTap: () { Clipboard.setData(ClipboardData(text: _sessionId!));
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Copied!'), backgroundColor: _C.green, duration: Duration(seconds: 1))); },
-        child: Container(padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          decoration: BoxDecoration(color: _C.bgCard, borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: _C.blue.withOpacity(0.3))),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text(_sessionId!, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _C.cyan, letterSpacing: 2)),
-            SizedBox(width: 8), Icon(Icons.copy, color: _C.textMuted, size: 16),
-          ]))),
-    ],
-    SizedBox(height: 24),
-    Text(_statusText, style: TextStyle(fontSize: 14, color: _C.textMuted)),
-    if (!_isConnected && _sessionId != null) ...[
-      SizedBox(height: 16), SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: _C.blue))],
-    SizedBox(height: 24),
-    TextButton.icon(onPressed: _cancel, icon: Icon(Icons.close, size: 18), label: Text('Cancel'),
-      style: TextButton.styleFrom(foregroundColor: _C.red)),
-  ]));
+  Widget _sendView() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: AppTheme.glassPanel(borderRadius: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(12)),
+                  child: const Icon(Icons.insert_drive_file_rounded, color: AppTheme.primaryBright, size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_selectedFileName ?? '', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text(_fmtSize(_selectedFileSize), style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          if (_sessionId != null) ...[
+            const Text('Scan QR or share code', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [BoxShadow(color: AppTheme.primary.withValues(alpha: 0.2), blurRadius: 30)],
+              ),
+              child: QrImageView(
+                data: _sessionId!,
+                version: QrVersions.auto,
+                size: 200,
+                backgroundColor: Colors.white,
+                eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: Color(0xFF1E293B)),
+                dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Color(0xFF1E293B)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            GestureDetector(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: _sessionId!));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Code copied!'), backgroundColor: AppTheme.success, duration: Duration(seconds: 1)),
+                );
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                decoration: AppTheme.glassPanel(borderRadius: 12).copyWith(
+                  border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_sessionId!, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.accent, letterSpacing: 2)),
+                    const SizedBox(width: 8),
+                    const Icon(Icons.copy_rounded, color: AppTheme.textMuted, size: 16),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 24),
+          Text(_statusText, style: const TextStyle(fontSize: 14, color: AppTheme.textMuted)),
+          if (!_isConnected && _sessionId != null) ...[
+            const SizedBox(height: 16),
+            const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary)),
+          ],
+          const SizedBox(height: 24),
+          TextButton.icon(
+            onPressed: _cancel,
+            icon: const Icon(Icons.close_rounded, size: 18),
+            label: const Text('Cancel'),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _recvView() {
-    if (_sessionId == null) {
-      return SingleChildScrollView(padding: EdgeInsets.all(24), child: Column(children: [
-        SizedBox(height: 20),
-        Icon(Icons.qr_code_scanner, color: _C.green, size: 64),
-        SizedBox(height: 20),
-        Text('Receive a File', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _C.textMain)),
-        SizedBox(height: 32),
-        Text('Enter the transfer code:', style: TextStyle(fontSize: 14, color: _C.textMuted)),
-        SizedBox(height: 12),
-        TextField(controller: _joinCtrl,
-          style: TextStyle(color: _C.textMain, fontSize: 18, letterSpacing: 2, fontWeight: FontWeight.bold),
-          textAlign: TextAlign.center,
-          decoration: InputDecoration(hintText: 'Paste code here',
-            hintStyle: TextStyle(color: _C.textMuted, fontSize: 14, letterSpacing: 0, fontWeight: FontWeight.normal),
-            filled: true, fillColor: _C.inputBg,
-            contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: _C.inputBorder)),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: _C.inputBorder)),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: _C.green))),
-          onSubmitted: (v) { if (v.trim().isNotEmpty) _startReceiveFlow(v.trim()); }),
-        SizedBox(height: 16),
-        SizedBox(width: double.infinity, child: ElevatedButton.icon(
-          onPressed: () { final c = _joinCtrl.text.trim(); if (c.isNotEmpty) _startReceiveFlow(c); },
-          icon: Icon(Icons.login, size: 18), label: Text('Join', style: TextStyle(fontWeight: FontWeight.w600)),
-          style: ElevatedButton.styleFrom(backgroundColor: _C.green, foregroundColor: Colors.white,
-            padding: EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))))),
-        SizedBox(height: 24),
-        TextButton.icon(onPressed: _cancel, icon: Icon(Icons.arrow_back, size: 18), label: Text('Back'),
-          style: TextButton.styleFrom(foregroundColor: _C.textMuted)),
-      ]));
+    if (_joinedSession) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!_awaitingAccept) ...[
+                const CircularProgressIndicator(color: AppTheme.success, strokeWidth: 3),
+                const SizedBox(height: 20),
+              ] else ...[
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha: 0.15), shape: BoxShape.circle),
+                  child: const Icon(Icons.file_download_rounded, color: AppTheme.primaryBright, size: 32),
+                ),
+                const SizedBox(height: 20),
+              ],
+              Text(_statusText, style: const TextStyle(color: AppTheme.textMuted, fontSize: 14), textAlign: TextAlign.center),
+              if (_peerName != null) ...[
+                const SizedBox(height: 8),
+                Text('From: $_peerName', style: const TextStyle(color: AppTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.w600)),
+              ],
+              if (_awaitingAccept) ...[
+                const SizedBox(height: 8),
+                Text(_rxFileName, style: const TextStyle(color: AppTheme.accent, fontSize: 14)),
+                Text(_fmtSize(_expectedSize), style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _acceptIncoming,
+                    icon: const Icon(Icons.check_circle_outline_rounded),
+                    label: const Text('Accept & receive'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTheme.success,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 24),
+              TextButton.icon(
+                onPressed: _cancel,
+                icon: const Icon(Icons.close_rounded, size: 18),
+                label: const Text('Cancel'),
+                style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+              ),
+            ],
+          ),
+        ),
+      );
     }
-    return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      CircularProgressIndicator(color: _C.green, strokeWidth: 3),
-      SizedBox(height: 20),
-      Text(_statusText, style: TextStyle(color: _C.textMuted, fontSize: 14)),
-      if (_peerName != null) ...[SizedBox(height: 8),
-        Text('From: $_peerName', style: TextStyle(color: _C.textMain, fontSize: 16, fontWeight: FontWeight.w600))],
-      SizedBox(height: 24),
-      TextButton.icon(onPressed: _cancel, icon: Icon(Icons.close, size: 18), label: Text('Cancel'),
-        style: TextButton.styleFrom(foregroundColor: _C.red)),
-    ]));
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        children: [
+          const SizedBox(height: 20),
+          const Icon(Icons.qr_code_scanner_rounded, color: AppTheme.success, size: 64),
+          const SizedBox(height: 20),
+          const Text('Receive a File', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+          const SizedBox(height: 32),
+          const Text('Enter the transfer code:', style: TextStyle(fontSize: 14, color: AppTheme.textMuted)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _joinCtrl,
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 18, letterSpacing: 2, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+            decoration: const InputDecoration(hintText: 'Paste code here'),
+            onSubmitted: (v) {
+              if (v.trim().isNotEmpty) _startReceiveFlow(v.trim());
+            },
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () {
+                final c = _joinCtrl.text.trim();
+                if (c.isNotEmpty) _startReceiveFlow(c);
+              },
+              icon: const Icon(Icons.login_rounded, size: 18),
+              label: const Text('Join', style: TextStyle(fontWeight: FontWeight.w600)),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTheme.success,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          TextButton.icon(
+            onPressed: _cancel,
+            icon: const Icon(Icons.arrow_back_rounded, size: 18),
+            label: const Text('Back'),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.textMuted),
+          ),
+        ],
+      ),
+    );
   }
 
-  Widget _xferView() => Center(child: Padding(padding: EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [
-    SizedBox(width: 140, height: 140, child: Stack(alignment: Alignment.center, children: [
-      SizedBox(width: 140, height: 140, child: CircularProgressIndicator(
-        value: _progress, strokeWidth: 8, backgroundColor: _C.glassBorder, valueColor: AlwaysStoppedAnimation(_C.cyan))),
-      Column(mainAxisSize: MainAxisSize.min, children: [
-        Text('${(_progress * 100).toStringAsFixed(0)}%', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: _C.textMain)),
-        Text(_progress < 1 ? 'Transferring' : 'Done', style: TextStyle(fontSize: 12, color: _C.textMuted)),
-      ]),
-    ])),
-    SizedBox(height: 24),
-    Text(_selectedFileName ?? _rxFileName, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _C.textMain),
-      maxLines: 1, overflow: TextOverflow.ellipsis),
-    SizedBox(height: 8),
-    Text(_statusText, style: TextStyle(fontSize: 14, color: _C.textMuted)),
-    if (_peerName != null) ...[SizedBox(height: 4), Text('with $_peerName', style: TextStyle(fontSize: 13, color: _C.cyan))],
-    SizedBox(height: 32),
-    TextButton.icon(onPressed: _cancel, icon: Icon(Icons.close, size: 18), label: Text('Cancel'),
-      style: TextButton.styleFrom(foregroundColor: _C.red)),
-  ])));
+  Widget _xferView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 140,
+              height: 140,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  SizedBox(
+                    width: 140,
+                    height: 140,
+                    child: CircularProgressIndicator(
+                      value: _progress,
+                      strokeWidth: 8,
+                      backgroundColor: Colors.white.withValues(alpha: 0.08),
+                      valueColor: const AlwaysStoppedAnimation(AppTheme.accent),
+                    ),
+                  ),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('${(_progress * 100).toStringAsFixed(0)}%', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+                      Text(_progress < 1 ? 'Transferring' : 'Done', style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(_selectedFileName ?? _rxFileName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 8),
+            Text(_statusText, style: const TextStyle(fontSize: 14, color: AppTheme.textMuted)),
+            if (_peerName != null) ...[
+              const SizedBox(height: 4),
+              Text('with $_peerName', style: const TextStyle(fontSize: 13, color: AppTheme.accent)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 
-  Widget _doneView() => Center(child: Padding(padding: EdgeInsets.all(32), child: Column(mainAxisSize: MainAxisSize.min, children: [
-    Container(width: 80, height: 80,
-      decoration: BoxDecoration(color: _C.green.withOpacity(0.2), shape: BoxShape.circle),
-      child: Icon(Icons.check_circle, color: _C.green, size: 48)),
-    SizedBox(height: 24),
-    Text('Transfer Complete!', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: _C.textMain)),
-    SizedBox(height: 12),
-    Text(_selectedFileName ?? _rxFileName, style: TextStyle(fontSize: 15, color: _C.cyan, fontWeight: FontWeight.w600)),
-    SizedBox(height: 8),
-    Padding(padding: EdgeInsets.symmetric(horizontal: 16),
-      child: Text(_statusText, style: TextStyle(fontSize: 13, color: _C.textMuted), textAlign: TextAlign.center)),
-    SizedBox(height: 32),
-    SizedBox(width: double.infinity, child: ElevatedButton.icon(
-      onPressed: _cancel, icon: Icon(Icons.home, size: 18),
-      label: Text('Back to Home', style: TextStyle(fontWeight: FontWeight.w600)),
-      style: ElevatedButton.styleFrom(backgroundColor: _C.blue, foregroundColor: Colors.white,
-        padding: EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))))),
-  ])));
+  Widget _doneView() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(color: AppTheme.success.withValues(alpha: 0.15), shape: BoxShape.circle),
+              child: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 48),
+            ),
+            const SizedBox(height: 24),
+            const Text('Transfer Complete!', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+            const SizedBox(height: 12),
+            Text(_selectedFileName ?? _rxFileName, style: const TextStyle(fontSize: 15, color: AppTheme.accent, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(_statusText, style: const TextStyle(fontSize: 13, color: AppTheme.textMuted), textAlign: TextAlign.center),
+            ),
+            const SizedBox(height: 32),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _cancel,
+                icon: const Icon(Icons.home_rounded, size: 18),
+                label: const Text('Back to Home', style: TextStyle(fontWeight: FontWeight.w600)),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

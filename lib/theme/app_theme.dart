@@ -19,6 +19,17 @@ class AppTheme {
   static const Color textPrimary = Color(0xFFF8FAFC);
   static const Color textMuted = Color(0xFF94A3B8);
 
+  // Semantic tokens (status, priority, feature accents)
+  static const Color statusActive = success;
+  static const Color statusPending = warning;
+  static const Color statusInactive = textMuted;
+  static const Color priorityHigh = danger;
+  static const Color priorityMedium = primary;
+  static const Color priorityLow = Color(0xFF64748B);
+  static const Color featureChat = accent;
+  static const Color featureVault = Color(0xFFA78BFA);
+  static const Color featureReport = primaryBright;
+
   static ThemeData dark() {
     final base = ThemeData(
       useMaterial3: true,
@@ -106,8 +117,104 @@ class AppTheme {
         backgroundColor: surface2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: surface2,
+        surfaceTintColor: Colors.transparent,
+        elevation: 16,
+        shadowColor: Colors.black.withValues(alpha: 0.5),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      ),
     );
   }
+
+  static EdgeInsets dialogInsets(BuildContext context) {
+    final w = MediaQuery.sizeOf(context).width;
+    final h = MediaQuery.sizeOf(context).height;
+    return EdgeInsets.symmetric(
+      horizontal: w < 400 ? 12 : 24,
+      vertical: h < 640 ? 16 : 24,
+    );
+  }
+
+  static double dialogMaxWidth(BuildContext context, {double max = 480}) {
+    return (MediaQuery.sizeOf(context).width - 32).clamp(280.0, max);
+  }
+
+  /// Login card shell — matches aims-webapps `.login-shell`.
+  static BoxDecoration loginShell() {
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: const Color(0x3393C5FD)),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          surface2.withValues(alpha: 0.92),
+          const Color(0xFF0F172A).withValues(alpha: 0.88),
+        ],
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: primary.withValues(alpha: 0.18),
+          blurRadius: 32,
+          offset: const Offset(0, 12),
+        ),
+      ],
+    );
+  }
+
+  static LinearGradient titleGradient() {
+    return const LinearGradient(
+      colors: [Color(0xFFA5B4FC), Color(0xFF7DD3FC), Color(0xFF67E8F9)],
+    );
+  }
+
+  static ButtonStyle primaryButton({double radius = 12}) {
+    return FilledButton.styleFrom(
+      backgroundColor: primary,
+      foregroundColor: Colors.white,
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+      elevation: 0,
+    );
+  }
+
+  static ButtonStyle secondaryButton({double radius = 12}) {
+    return OutlinedButton.styleFrom(
+      foregroundColor: primaryBright,
+      side: BorderSide(color: primary.withValues(alpha: 0.4)),
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+    );
+  }
+
+  static ButtonStyle dangerButton({double radius = 12}) {
+    return FilledButton.styleFrom(
+      backgroundColor: danger,
+      foregroundColor: Colors.white,
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+      elevation: 0,
+    );
+  }
+
+  static TextStyle get pageTitle => const TextStyle(
+        color: textPrimary,
+        fontSize: 20,
+        fontWeight: FontWeight.bold,
+      );
+
+  static TextStyle get sectionTitle => const TextStyle(
+        color: textPrimary,
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+      );
+
+  static TextStyle get caption => TextStyle(
+        color: textMuted.withValues(alpha: 0.9),
+        fontSize: 12,
+      );
 
   static BoxDecoration screenGradient() {
     return const BoxDecoration(
@@ -140,8 +247,8 @@ class AppTheme {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          a.withValues(alpha: 0.58),
-          b.withValues(alpha: 0.38),
+          a.withValues(alpha: 0.72),
+          b.withValues(alpha: 0.55),
         ],
       ),
       boxShadow: [
@@ -154,6 +261,24 @@ class AppTheme {
     );
   }
 
+  /// Solid surface for modals — blocks scroll content from showing through.
+  static BoxDecoration dialogPanel({double borderRadius = 20}) {
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(borderRadius),
+      color: surface2,
+      border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.55),
+          blurRadius: 40,
+          offset: const Offset(0, 16),
+        ),
+      ],
+    );
+  }
+
+  static Color get modalBarrierColor => Colors.black.withValues(alpha: 0.72);
+
   /// Bottom nav / sheet: blur + dark glass tint.
   static Widget glassBlur({
     required Widget child,
@@ -165,7 +290,7 @@ class AppTheme {
         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: surface.withValues(alpha: 0.55),
+            color: surface2.withValues(alpha: 0.94),
             border: Border(
               top: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
             ),

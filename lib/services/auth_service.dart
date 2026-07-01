@@ -1,11 +1,12 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../config.dart';
 
 class AuthService {
-  static const String baseUrl = "https://att.igenhr.com/api";
-  static const String tokenUrl = "$baseUrl/token/";
-  static const String refreshUrl = "$baseUrl/token/refresh/";
+  static String get baseUrl => AppConfig.apiBaseUrl;
+  static String get tokenUrl => AppConfig.authTokenUrl;
+  static String get refreshUrl => AppConfig.authRefreshUrl;
 
   static Future<bool> login(String username, String password) async {
     final response = await http.post(

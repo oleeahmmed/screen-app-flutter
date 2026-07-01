@@ -9,12 +9,25 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/task_status_dropdown.dart';
+import 'task_detail_page.dart';
+
+int _intFrom(dynamic v, [int fallback = 0]) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse('$v') ?? fallback;
+}
 
 class TasksPage extends StatefulWidget {
   final ApiService apiService;
+  final bool embeddedInParent;
 
-  const TasksPage({super.key, required this.apiService});
+  const TasksPage({
+    super.key,
+    required this.apiService,
+    this.embeddedInParent = false,
+  });
 
   @override
   State<TasksPage> createState() => _TasksPageState();
@@ -43,6 +56,12 @@ class _TasksPageState extends State<TasksPage> {
       });
     } else {
       setState(() => _isLoading = false);
+      final err = result['error']?.toString();
+      if (mounted && err != null && err.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err)),
+        );
+      }
     }
   }
 
@@ -74,33 +93,36 @@ class _TasksPageState extends State<TasksPage> {
     final completed = _tasks.where((t) => t['completed'] ?? false).length;
     final displayTasks = _filteredTasks;
 
+    final pad = Responsive.pagePadding(context);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'My tasks',
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.bold,
-                      ),
+        if (!widget.embeddedInParent)
+          Padding(
+            padding: EdgeInsets.fromLTRB(pad, 8, pad, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'My tasks',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: AppTheme.textPrimary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
                 ),
-              ),
-              IconButton(
-                onPressed: _loadTasks,
-                icon: const Icon(Icons.refresh_rounded),
-                color: AppTheme.textMuted,
-                tooltip: 'Refresh',
-              ),
-            ],
+                IconButton(
+                  onPressed: _loadTasks,
+                  icon: const Icon(Icons.refresh_rounded),
+                  color: AppTheme.textMuted,
+                  tooltip: 'Refresh',
+                ),
+              ],
+            ),
           ),
-        ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
+          padding: EdgeInsets.symmetric(horizontal: pad),
           child: Row(
             children: [
               Expanded(child: _statCard('To do', '$pending', const Color(0xFFF59E0B))),
@@ -111,13 +133,13 @@ class _TasksPageState extends State<TasksPage> {
         ),
         const SizedBox(height: 12),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Row(
+          padding: EdgeInsets.symmetric(horizontal: pad),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
               _filterTab('To do', 'pending'),
-              const SizedBox(width: 8),
               _filterTab('Done', 'completed'),
-              const SizedBox(width: 8),
               _filterTab('All', 'all'),
             ],
           ),
@@ -136,7 +158,7 @@ class _TasksPageState extends State<TasksPage> {
                       ),
                     )
                   : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                      padding: EdgeInsets.fromLTRB(pad, 0, pad, 24),
                       itemCount: displayTasks.length,
                       itemBuilder: (ctx, i) => _TaskCard(
                         task: displayTasks[i],
@@ -326,7 +348,15 @@ class _TaskCardState extends State<_TaskCard> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           InkWell(
-            onTap: _toggleExpand,
+            onTap: () => openTaskDetailPage(
+              context,
+              apiService: widget.apiService,
+              taskId: task['id'] as int,
+              projectId: _intFrom(task['project_id'] ?? task['project']),
+              projectName: task['project_name']?.toString() ?? '',
+              initialTask: Map<String, dynamic>.from(task as Map),
+              onClosed: widget.onRefresh,
+            ),
             borderRadius: BorderRadius.circular(16),
             child: Padding(
               padding: const EdgeInsets.all(14),
@@ -356,7 +386,7 @@ class _TaskCardState extends State<_TaskCard> {
                           children: [
                             Expanded(
                               child: Text(
-                                task['name']?.toString() ?? 'Task',
+                                (task['name'] ?? task['title'])?.toString() ?? 'Task',
                                 style: TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w600,
@@ -457,9 +487,29 @@ class _TaskCardState extends State<_TaskCard> {
                     icon: Icon(Icons.more_vert_rounded, color: AppTheme.textMuted, size: 22),
                     onSelected: (v) {
                       if (v == 'refresh') widget.onRefresh();
-                      else if (v == 'expand') _toggleExpand();
+                      else if (v == 'open') {
+                        openTaskDetailPage(
+                          context,
+                          apiService: widget.apiService,
+                          taskId: task['id'] as int,
+                          projectId: _intFrom(task['project_id'] ?? task['project']),
+                          projectName: task['project_name']?.toString() ?? '',
+                          initialTask: Map<String, dynamic>.from(task as Map),
+                          onClosed: widget.onRefresh,
+                        );
+                      } else if (v == 'expand') _toggleExpand();
                     },
                     itemBuilder: (ctx) => [
+                      const PopupMenuItem(
+                        value: 'open',
+                        child: Row(
+                          children: [
+                            Icon(Icons.open_in_new_rounded, color: AppTheme.primaryBright, size: 20),
+                            SizedBox(width: 10),
+                            Text('Open task', style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+                          ],
+                        ),
+                      ),
                       PopupMenuItem(
                         value: 'expand',
                         child: Row(
@@ -489,12 +539,14 @@ class _TaskCardState extends State<_TaskCard> {
                       ),
                     ],
                   ),
-                  IconButton(
-                    icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
-                    color: AppTheme.textMuted,
-                    onPressed: _toggleExpand,
-                    tooltip: _expanded ? 'Collapse' : 'Expand',
-                  ),
+                  if (!Responsive.isMobile(context))
+                    IconButton(
+                      icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
+                      color: AppTheme.textMuted,
+                      onPressed: _toggleExpand,
+                      tooltip: _expanded ? 'Collapse' : 'Expand',
+                      visualDensity: VisualDensity.compact,
+                    ),
                 ],
               ),
             ),
@@ -681,6 +733,7 @@ class _SubtaskRow extends StatelessWidget {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppTheme.surface,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -688,45 +741,48 @@ class _SubtaskRow extends StatelessWidget {
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  subtask['summary']?.toString() ?? 'Subtask',
-                  style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (list.isEmpty)
-                  const Text('No files yet', style: TextStyle(color: AppTheme.textMuted))
-                else
-                  ...list.map(
-                    (a) => ListTile(
-                      leading: const Icon(Icons.attach_file, color: AppTheme.primaryBright),
-                      title: Text(
-                        a['file_name']?.toString() ?? 'file',
-                        style: const TextStyle(color: AppTheme.textPrimary),
-                      ),
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        onOpenUrl(a['file_url']?.toString());
-                      },
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    subtask['summary']?.toString() ?? 'Subtask',
+                    style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
                     ),
                   ),
-                const SizedBox(height: 8),
-                FilledButton.icon(
-                  onPressed: () async {
-                    Navigator.pop(ctx);
-                    await _upload(context);
-                  },
-                  icon: const Icon(Icons.upload_file),
-                  label: const Text('Upload file'),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  if (list.isEmpty)
+                    const Text('No files yet', style: TextStyle(color: AppTheme.textMuted))
+                  else
+                    ...list.map(
+                      (a) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.attach_file, color: AppTheme.primaryBright),
+                        title: Text(
+                          a['file_name']?.toString() ?? 'file',
+                          style: const TextStyle(color: AppTheme.textPrimary),
+                        ),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          onOpenUrl(a['file_url']?.toString());
+                        },
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      await _upload(context);
+                    },
+                    icon: const Icon(Icons.upload_file),
+                    label: const Text('Upload file'),
+                  ),
+                ],
+              ),
             ),
           ),
         );

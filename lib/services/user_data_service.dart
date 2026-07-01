@@ -12,6 +12,7 @@ class UserDataService {
       'refresh_token': prefs.getString('refresh_token') ?? '',
       'username': prefs.getString('username') ?? '',
       'user_id': prefs.getString('user_id') ?? '',
+      'employee_id': prefs.getString('employee_id') ?? '',
       'email': prefs.getString('email') ?? '',
       'full_name': prefs.getString('full_name') ?? '',
       'designation': prefs.getString('designation') ?? '',
@@ -73,6 +74,25 @@ class UserDataService {
   static Future<String> getUserId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('user_id') ?? '';
+  }
+
+  // Get employee ID (for /api/employees/{id}/... fallbacks)
+  static Future<String> getEmployeeId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('employee_id') ?? '';
+  }
+
+  static Future<void> saveEmployeeId(dynamic employee) async {
+    final prefs = await SharedPreferences.getInstance();
+    String? id;
+    if (employee is Map) {
+      id = employee['id']?.toString() ?? employee['employee_id']?.toString();
+    } else if (employee != null) {
+      id = employee.toString();
+    }
+    if (id != null && id.isNotEmpty) {
+      await prefs.setString('employee_id', id);
+    }
   }
   
   // Get company ID

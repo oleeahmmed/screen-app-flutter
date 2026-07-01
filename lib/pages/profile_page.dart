@@ -6,6 +6,9 @@ import '../app_session.dart';
 import '../config.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_primary_button.dart';
+import '../widgets/app_shell.dart';
+import '../widgets/glass_card.dart';
 import 'data_privacy_notice_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -55,7 +58,6 @@ class _ProfilePageState extends State<ProfilePage> {
     super.dispose();
   }
 
-  /// Sync text fields from API shape (GET / PATCH response).
   void _applyProfileFromMap(Map<String, dynamic> d) {
     _username = d['username']?.toString() ?? '';
     _emailCtrl.text = d['email']?.toString() ?? '';
@@ -196,225 +198,241 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: AppTheme.screenGradient(),
-      child: SafeArea(
-        child: _loading
-            ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright))
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-                children: [
-                  Text(
-                    'Profile & settings',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          color: AppTheme.textPrimary,
-                          fontWeight: FontWeight.bold,
-                        ),
+    if (_loading) {
+      return AppShell(
+        wide: true,
+        child: const Center(
+          child: CircularProgressIndicator(color: AppTheme.primaryBright),
+        ),
+      );
+    }
+
+    return AppShell(
+      scrollable: true,
+      wide: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Profile & settings', style: AppTheme.pageTitle),
+          const SizedBox(height: 4),
+          Text(
+            'Account, photo, screenshot consent, and alerts',
+            style: AppTheme.caption,
+          ),
+          const SizedBox(height: 16),
+          GlassCard(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const DataPrivacyNoticePage(),
+                ),
+              );
+            },
+            child: Row(
+              children: [
+                Icon(Icons.description_outlined, color: AppTheme.primaryBright.withValues(alpha: 0.9)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Data & privacy', style: AppTheme.sectionTitle),
+                      const SizedBox(height: 2),
+                      Text('Screenshots & activity data notice', style: AppTheme.caption),
+                    ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Account, photo, screenshot consent, and alerts',
-                    style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
-                  ),
-                  const SizedBox(height: 16),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.description_outlined, color: AppTheme.primaryBright),
-                    title: const Text('Data & privacy', style: TextStyle(color: AppTheme.textPrimary)),
-                    subtitle: Text(
-                      'Screenshots & activity data notice',
-                      style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                    ),
-                    trailing: const Icon(Icons.chevron_right, color: AppTheme.textMuted),
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const DataPrivacyNoticePage(),
-                        ),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  Center(
-                    child: Stack(
-                      children: [
-                        CircleAvatar(
-                          radius: 48,
-                          backgroundColor: AppTheme.surface2,
-                          backgroundImage: (_photoUrl != null && _photoUrl!.isNotEmpty)
-                              ? NetworkImage(_resolvePhotoUrl(_photoUrl!))
-                              : null,
-                          child: (_photoUrl == null || _photoUrl!.isEmpty)
-                              ? Icon(Icons.person, size: 48, color: AppTheme.textMuted)
-                              : null,
-                        ),
-                        Positioned(
-                          right: 0,
-                          bottom: 0,
-                          child: Material(
-                            color: AppTheme.primary,
-                            shape: const CircleBorder(),
-                            child: InkWell(
-                              onTap: _pickPhoto,
-                              customBorder: const CircleBorder(),
-                              child: const Padding(
-                                padding: EdgeInsets.all(8),
-                                child: Icon(Icons.camera_alt, color: Colors.white, size: 18),
-                              ),
+                ),
+                Icon(Icons.chevron_right, color: AppTheme.textMuted.withValues(alpha: 0.7)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          GlassCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Stack(
+                    children: [
+                      CircleAvatar(
+                        radius: 48,
+                        backgroundColor: AppTheme.surface2,
+                        backgroundImage: (_photoUrl != null && _photoUrl!.isNotEmpty)
+                            ? NetworkImage(_resolvePhotoUrl(_photoUrl!))
+                            : null,
+                        child: (_photoUrl == null || _photoUrl!.isEmpty)
+                            ? Icon(Icons.person, size: 48, color: AppTheme.textMuted)
+                            : null,
+                      ),
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Material(
+                          color: AppTheme.primary,
+                          shape: const CircleBorder(),
+                          child: InkWell(
+                            onTap: _pickPhoto,
+                            customBorder: const CircleBorder(),
+                            child: const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: Icon(Icons.camera_alt, color: Colors.white, size: 18),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Center(
-                    child: TextButton(
-                      onPressed: _pickPhoto,
-                      child: const Text('Change photo'),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Username',
-                    style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _username.isEmpty ? '—' : _username,
-                    style: const TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _emailCtrl,
-                    decoration: const InputDecoration(labelText: 'Email'),
-                    style: const TextStyle(color: AppTheme.textPrimary),
-                    keyboardType: TextInputType.emailAddress,
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _firstCtrl,
-                          decoration: const InputDecoration(labelText: 'First name'),
-                          style: const TextStyle(color: AppTheme.textPrimary),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: TextField(
-                          controller: _lastCtrl,
-                          decoration: const InputDecoration(labelText: 'Last name'),
-                          style: const TextStyle(color: AppTheme.textPrimary),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _phoneCtrl,
-                    decoration: const InputDecoration(labelText: 'Phone'),
-                    style: const TextStyle(color: AppTheme.textPrimary),
-                    keyboardType: TextInputType.phone,
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _desigCtrl,
-                    decoration: const InputDecoration(labelText: 'Designation'),
-                    style: const TextStyle(color: AppTheme.textPrimary),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _deptCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Department',
-                      hintText: 'e.g. Engineering, Sales',
-                    ),
-                    style: const TextStyle(color: AppTheme.textPrimary),
-                  ),
-                  const SizedBox(height: 20),
-                  Card(
-                    child: SwitchListTile(
-                      title: const Text('Screenshot monitoring'),
-                      subtitle: const Text(
-                        'Allow screen captures while clocked in. Server will reject uploads if disabled.',
-                        style: TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 8),
+                Center(
+                  child: TextButton(onPressed: _pickPhoto, child: const Text('Change photo')),
+                ),
+                const SizedBox(height: 8),
+                Text('Username', style: AppTheme.caption),
+                const SizedBox(height: 4),
+                Text(
+                  _username.isEmpty ? '—' : _username,
+                  style: AppTheme.sectionTitle.copyWith(fontSize: 16),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _emailCtrl,
+                  decoration: const InputDecoration(labelText: 'Email'),
+                  style: const TextStyle(color: AppTheme.textPrimary),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _firstCtrl,
+                        decoration: const InputDecoration(labelText: 'First name'),
+                        style: const TextStyle(color: AppTheme.textPrimary),
                       ),
-                      value: _consent,
-                      activeThumbColor: AppTheme.primaryBright,
-                      onChanged: (v) => setState(() {
-                        _consent = v;
-                        AppSession.setConsent(v);
-                      }),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Card(
-                    child: SwitchListTile(
-                      title: const Text('Notification sound'),
-                      subtitle: const Text(
-                        'Play a short sound when new alerts arrive',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                      value: _sound,
-                      activeThumbColor: AppTheme.primaryBright,
-                      onChanged: _toggleSound,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Capture interval: ${AppConfig.screenshotInterval}s (build flag SCREENSHOT_INTERVAL_SEC)',
-                    style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
-                  ),
-                  if (widget.onOpenP2P != null) ...[
-                    const SizedBox(height: 12),
-                    ListTile(
-                      leading: const Icon(Icons.swap_horiz, color: AppTheme.accent),
-                      title: const Text('Peer-to-peer transfer'),
-                      subtitle: const Text('Send files over local network'),
-                      trailing: const Icon(Icons.chevron_right, color: AppTheme.textMuted),
-                      onTap: widget.onOpenP2P,
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  FilledButton.icon(
-                    onPressed: _saving ? null : _saveProfile,
-                    icon: _saving
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                          )
-                        : const Icon(Icons.save),
-                    label: Text(_saving ? 'Saving…' : 'Save changes'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppTheme.primary,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                  ),
-                  if (widget.onLogout != null) ...[
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: widget.onLogout,
-                        icon: const Icon(Icons.logout, color: AppTheme.danger),
-                        label: const Text('Log out'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: AppTheme.danger,
-                          side: const BorderSide(color: AppTheme.danger),
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                        ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _lastCtrl,
+                        decoration: const InputDecoration(labelText: 'Last name'),
+                        style: const TextStyle(color: AppTheme.textPrimary),
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _phoneCtrl,
+                  decoration: const InputDecoration(labelText: 'Phone'),
+                  style: const TextStyle(color: AppTheme.textPrimary),
+                  keyboardType: TextInputType.phone,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _desigCtrl,
+                  decoration: const InputDecoration(labelText: 'Designation'),
+                  style: const TextStyle(color: AppTheme.textPrimary),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _deptCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Department',
+                    hintText: 'e.g. Engineering, Sales',
+                  ),
+                  style: const TextStyle(color: AppTheme.textPrimary),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          GlassCard(
+            child: Column(
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('Screenshot monitoring', style: AppTheme.sectionTitle),
+                  subtitle: Text(
+                    'Allow screen captures while clocked in. Server will reject uploads if disabled.',
+                    style: AppTheme.caption,
+                  ),
+                  value: _consent,
+                  activeThumbColor: AppTheme.primaryBright,
+                  onChanged: (v) => setState(() {
+                    _consent = v;
+                    AppSession.setConsent(v);
+                  }),
+                ),
+                Divider(color: AppTheme.border, height: 1),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('Notification sound', style: AppTheme.sectionTitle),
+                  subtitle: Text(
+                    'Play a short sound when new alerts arrive',
+                    style: AppTheme.caption,
+                  ),
+                  value: _sound,
+                  activeThumbColor: AppTheme.primaryBright,
+                  onChanged: _toggleSound,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Capture interval: ${AppConfig.screenshotInterval}s (build flag SCREENSHOT_INTERVAL_SEC)',
+                  style: AppTheme.caption.copyWith(fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          if (widget.onOpenP2P != null) ...[
+            const SizedBox(height: 14),
+            GlassCard(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              onTap: widget.onOpenP2P,
+              child: Row(
+                children: [
+                  Icon(Icons.swap_horiz, color: AppTheme.accent),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Peer-to-peer transfer', style: AppTheme.sectionTitle),
+                        const SizedBox(height: 2),
+                        Text('Send files over local network', style: AppTheme.caption),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, color: AppTheme.textMuted.withValues(alpha: 0.7)),
                 ],
               ),
+            ),
+          ],
+          const SizedBox(height: 24),
+          AppPrimaryButton(
+            label: _saving ? 'Saving…' : 'Save changes',
+            icon: _saving ? null : Icons.save,
+            loading: _saving,
+            expanded: true,
+            onPressed: _saving ? null : _saveProfile,
+          ),
+          if (widget.onLogout != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: widget.onLogout,
+                icon: const Icon(Icons.logout, color: AppTheme.danger),
+                label: const Text('Log out'),
+                style: AppTheme.secondaryButton().copyWith(
+                  foregroundColor: WidgetStateProperty.all(AppTheme.danger),
+                  side: WidgetStateProperty.all(const BorderSide(color: AppTheme.danger)),
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

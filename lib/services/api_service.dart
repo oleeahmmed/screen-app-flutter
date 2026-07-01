@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'user_data_service.dart';
 
@@ -22,17 +23,247 @@ class ApiService {
     _token = token;
   }
 
+  String? get token => _token;
+
+  Future<void> ensureAuth() async {
+    if (_token == null || _token!.isEmpty) {
+      await initToken();
+    }
+  }
+
+  Map<String, String> _jsonPostHeaders() {
+    return {
+      ..._authHeaderOnly(),
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    };
+  }
+
   Map<String, String> _getHeaders() {
     return {
       'Content-Type': 'application/json',
+      'Accept': 'application/json',
       if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
     };
+  }
+
+  bool _looksLikeHtml(String body) {
+    final t = body.trimLeft().toLowerCase();
+    return t.startsWith('<!doctype') ||
+        t.startsWith('<html') ||
+        t.startsWith('<head') ||
+        (t.startsWith('<') && t.contains('<html'));
+  }
+
+  dynamic _safeJsonDecode(String body) {
+    var s = body;
+    if (s.startsWith('\uFEFF')) s = s.substring(1);
+    s = s.trim();
+    if (s.isEmpty) return <String, dynamic>{};
+    return jsonDecode(s);
+  }
+
+  String _responsePreview(String body, {int max = 160}) {
+    final t = body.trim();
+    if (t.isEmpty) return '(empty body)';
+    return t.length <= max ? t : '${t.substring(0, max)}…';
+  }
+
+  /// POST check-in / check-out with JSON body, empty body fallback, and attendance verify.
+  Future<Map<String, dynamic>> _postAttendanceAction({
+    required Uri uri,
+    required String label,
+    required bool Function(Map<String, dynamic>? current) verifySuccess,
+  }) async {
+    await ensureAuth();
+
+    Future<http.Response> sendJson() => http
+        .post(uri, headers: _jsonPostHeaders(), body: '{}')
+        .timeout(const Duration(seconds: 15));
+    Future<http.Response> sendEmpty() => http
+        .post(uri, headers: _authHeaderOnly())
+        .timeout(const Duration(seconds: 15));
+
+    http.Response? lastResponse;
+    for (final send in [sendJson, sendEmpty]) {
+      try {
+        var response = await send();
+        if (response.statusCode == 401 && await refreshAccessToken()) {
+          response = await send();
+        }
+        lastResponse = response;
+        final rawBody = response.body;
+
+        if (_looksLikeHtml(rawBody)) {
+          continue;
+        }
+
+        dynamic raw;
+        try {
+          raw = _safeJsonDecode(rawBody);
+        } catch (_) {
+          if (response.statusCode == 200 || response.statusCode == 201) {
+            final verified = await _verifyAttendanceAfterAction(verifySuccess);
+            if (verified['success'] == true) return verified;
+          }
+          continue;
+        }
+
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          if (raw is Map) {
+            final msg = raw['message']?.toString().toLowerCase() ?? '';
+            if (msg.contains('already checked in')) {
+              return {'success': true, 'data': raw};
+            }
+          }
+          return {'success': true, 'data': raw};
+        }
+
+        if (raw is Map) {
+          final err = raw['message'] ?? raw['error'] ?? raw['detail'];
+          if (err != null) {
+            return {'success': false, 'error': err.toString()};
+          }
+        }
+
+        if (response.statusCode == 401) {
+          return {'success': false, 'error': 'Session expired — please log in again'};
+        }
+        if (response.statusCode == 403) {
+          return {'success': false, 'error': 'Access denied — subscription may have expired'};
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    final verified = await _verifyAttendanceAfterAction(verifySuccess);
+    if (verified['success'] == true) return verified;
+
+    if (lastResponse != null) {
+      final code = lastResponse!.statusCode;
+      final preview = _responsePreview(lastResponse!.body);
+      if (_looksLikeHtml(lastResponse!.body)) {
+        return {
+          'success': false,
+          'error': '$label failed — server returned a web page (HTTP $code). Log in again.',
+        };
+      }
+      return {
+        'success': false,
+        'error': '$label failed (HTTP $code): $preview',
+      };
+    }
+
+    return {'success': false, 'error': '$label failed — network error. Check connection and try again.'};
+  }
+
+  Future<Map<String, dynamic>> _verifyAttendanceAfterAction(
+    bool Function(Map<String, dynamic>? current) verifySuccess,
+  ) async {
+    final result = await getCurrentAttendance();
+    if (result['success'] != true) {
+      return {'success': false, 'error': 'Could not verify attendance status'};
+    }
+    final data = result['data'] as Map<String, dynamic>? ?? {};
+    final current = data['current_attendance'] as Map<String, dynamic>?;
+    if (verifySuccess(current)) {
+      return {'success': true, 'data': {'verified': true, 'current_attendance': current}};
+    }
+    return {'success': false, 'error': 'Attendance state did not update'};
+  }
+
+  dynamic _decodeJsonBody(String body, {required String context}) {
+    if (body.trim().isEmpty) {
+      throw FormatException('$context: empty response');
+    }
+    if (_looksLikeHtml(body)) {
+      throw FormatException(
+        '$context: server returned HTML (wrong URL or not logged in). '
+        'Deploy latest API or check token.',
+      );
+    }
+    return jsonDecode(body);
+  }
+
+  List<dynamic> _extractJsonList(
+    dynamic decoded, {
+    List<String> keys = const ['results', 'tasks', 'projects', 'data', 'notifications'],
+  }) {
+    if (decoded is List) return decoded;
+    if (decoded is Map) {
+      for (final key in keys) {
+        final v = decoded[key];
+        if (v is List) return v;
+      }
+    }
+    return [];
   }
 
   Map<String, String> _authHeaderOnly() {
     return {
       if (_token != null && _token!.isNotEmpty) 'Authorization': 'Bearer $_token',
     };
+  }
+
+  Future<http.Response> _authorizedGet(
+    Uri uri, {
+    Duration timeout = const Duration(seconds: 15),
+    bool retryOn401 = true,
+  }) async {
+    Future<http.Response> send() =>
+        http.get(uri, headers: _getHeaders()).timeout(timeout);
+    var response = await send();
+    if (response.statusCode == 401 && retryOn401 && await refreshAccessToken()) {
+      response = await send();
+    }
+    return response;
+  }
+
+  Future<http.Response> _authorizedPost(
+    Uri uri, {
+    Object? body,
+    Duration timeout = const Duration(seconds: 15),
+    bool retryOn401 = true,
+  }) async {
+    Future<http.Response> send() => http
+        .post(uri, headers: _getHeaders(), body: body)
+        .timeout(timeout);
+    var response = await send();
+    if (response.statusCode == 401 && retryOn401 && await refreshAccessToken()) {
+      response = await send();
+    }
+    return response;
+  }
+
+  Future<http.Response> _authorizedPatch(
+    Uri uri, {
+    Object? body,
+    Duration timeout = const Duration(seconds: 15),
+    bool retryOn401 = true,
+  }) async {
+    Future<http.Response> send() => http
+        .patch(uri, headers: _getHeaders(), body: body)
+        .timeout(timeout);
+    var response = await send();
+    if (response.statusCode == 401 && retryOn401 && await refreshAccessToken()) {
+      response = await send();
+    }
+    return response;
+  }
+
+  Future<http.Response> _authorizedDelete(
+    Uri uri, {
+    Duration timeout = const Duration(seconds: 15),
+    bool retryOn401 = true,
+  }) async {
+    Future<http.Response> send() =>
+        http.delete(uri, headers: _getHeaders()).timeout(timeout);
+    var response = await send();
+    if (response.statusCode == 401 && retryOn401 && await refreshAccessToken()) {
+      response = await send();
+    }
+    return response;
   }
 
   /// DRF JSON: `{ "error": "..." }` or field errors `{"summary":["..."]}`.
@@ -56,16 +287,162 @@ class ApiService {
     return 'Request failed ($code)';
   }
 
+  String _apiDisplayString(dynamic v) {
+    if (v == null) return '';
+    if (v is String) return v;
+    if (v is num || v is bool) return v.toString();
+    if (v is Map) {
+      for (final key in ['full_name', 'name', 'username', 'email', 'label', 'title']) {
+        final x = v[key];
+        if (x != null && x.toString().trim().isNotEmpty) return x.toString();
+      }
+      final id = v['id'];
+      if (id != null) return id.toString();
+      return '';
+    }
+    if (v is List && v.isNotEmpty) return _apiDisplayString(v.first);
+    return v.toString();
+  }
+
+  Map<String, dynamic> _normalizeProjectMap(Map<String, dynamic> m) {
+    final out = Map<String, dynamic>.from(m);
+    out['project_manager'] = _apiDisplayString(
+      m['project_manager'] ?? m['project_manager_name'],
+    );
+    out['project_manager_name'] ??= out['project_manager'];
+    out['customer_name'] = _apiDisplayString(m['customer_name'] ?? m['customer']);
+    if (m['customer'] is Map && out['customer_id'] == null) {
+      out['customer_id'] = (m['customer'] as Map)['id'];
+    }
+    final prog = m['completion_percentage'] ?? m['progress'] ?? m['completion'];
+    if (prog != null) {
+      final pct = prog is num ? prog.toDouble() : (double.tryParse('$prog') ?? 0.0);
+      out['completion_percentage'] = pct;
+      out['progress'] = pct;
+      out['completion'] = pct;
+    }
+    if (out['description'] != null && out['description'] is! String) {
+      out['description'] = _apiDisplayString(out['description']);
+    }
+    return out;
+  }
+
+  List<dynamic> _normalizeProjectItems(List<dynamic> list) {
+    return list.map((p) {
+      if (p is Map<String, dynamic>) return _normalizeProjectMap(p);
+      if (p is Map) return _normalizeProjectMap(Map<String, dynamic>.from(p));
+      return p;
+    }).toList();
+  }
+
+  List<dynamic> _normalizeTaskList(dynamic raw) {
+    final list = _extractJsonList(raw, keys: const ['tasks', 'results', 'data']);
+    return list.map((t) {
+      if (t is! Map) return t;
+      final m = Map<String, dynamic>.from(t);
+      m['name'] ??= m['title'];
+      m['description'] ??= m['desc'];
+      m['title'] ??= m['name'];
+      m['desc'] ??= m['description'];
+      if (m['description'] != null && m['description'] is! String) {
+        m['description'] = _apiDisplayString(m['description']);
+      }
+      if (m['assignee'] != null && m['assignee'] is! String) {
+        m['assignee'] = _apiDisplayString(m['assignee']);
+      }
+      if (m['user_name'] == null || (m['user_name'] is! String)) {
+        m['user_name'] = _apiDisplayString(m['user_name'] ?? m['user']);
+      }
+      if (m['project_name'] != null && m['project_name'] is! String) {
+        m['project_name'] = _apiDisplayString(m['project_name']);
+      }
+      if (m['completed'] == null && m['status'] != null) {
+        m['completed'] = m['status'].toString() == 'completed';
+      }
+      if (m['assignee_ids'] is! List && m['user_id'] != null) {
+        final uid = int.tryParse('${m['user_id']}');
+        if (uid != null) m['assignee_ids'] = [uid];
+      }
+      return m;
+    }).toList();
+  }
+
+  Map<String, dynamic> _normalizeTaskMap(Map<String, dynamic> m) {
+    m['name'] ??= m['title'];
+    m['description'] ??= m['desc'];
+    m['title'] ??= m['name'];
+    m['desc'] ??= m['description'];
+    return m;
+  }
+
+  Map<String, dynamic> _normalizeProjectDetailMap(Map<String, dynamic> m) {
+    final out = _normalizeProjectMap(m);
+    if (out['stages'] is List) {
+      out['stages'] = (out['stages'] as List).map((s) {
+        if (s is! Map) return s;
+        final stage = Map<String, dynamic>.from(s);
+        if (stage['tasks'] is List) {
+          stage['tasks'] = _normalizeTaskList(stage['tasks']);
+        }
+        return stage;
+      }).toList();
+    }
+    if (out['unassigned_tasks'] is List) {
+      out['unassigned_tasks'] = _normalizeTaskList(out['unassigned_tasks']);
+    }
+    return out;
+  }
+
+  Future<List<dynamic>?> _tryFetchProjectList(String url, String label) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(url));
+      if (response.statusCode != 200) return null;
+      final decoded = _decodeJsonBody(response.body, context: label);
+      final list = _extractJsonList(
+        decoded,
+        keys: const ['results', 'projects', 'data'],
+      );
+      if (list.isNotEmpty || decoded is List) {
+        return _normalizeProjectItems(list.isNotEmpty ? list : decoded as List);
+      }
+      return null;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  Future<List<dynamic>?> _fetchProjectsFallback() async {
+    final employeeId = await UserDataService.getEmployeeId();
+    final userId = await UserDataService.getUserId();
+    if (employeeId.isNotEmpty) {
+      final list = await _tryFetchProjectList(
+        AppConfig.employeeProjectsUrl(employeeId),
+        'GET /api/employees/{employee_id}/projects/',
+      );
+      if (list != null && list.isNotEmpty) return list;
+    }
+    if (userId.isNotEmpty) {
+      return _tryFetchProjectList(
+        AppConfig.userProjectsUrl(userId),
+        'GET /api/users/{user_id}/projects/',
+      );
+    }
+    return null;
+  }
+
   Future<Map<String, dynamic>> login(String email, String password) async {
     try {
       print('🔐 Logging in with: $email');
-      final response = await http
-          .post(
-            Uri.parse('${AppConfig.apiBaseUrl}/token/'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'username': email, 'password': password}),
-          )
-          .timeout(Duration(seconds: 10));
+      final body = jsonEncode({'username': email, 'password': password});
+      final headers = {'Content-Type': 'application/json'};
+      var response = await http
+          .post(Uri.parse(AppConfig.authLoginUrl), headers: headers, body: body)
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 404) {
+        response = await http
+            .post(Uri.parse(AppConfig.authTokenUrl), headers: headers, body: body)
+            .timeout(const Duration(seconds: 10));
+      }
 
       print('📊 Login response: ${response.statusCode}');
       print('📝 Response body: ${response.body}');
@@ -93,176 +470,143 @@ class ApiService {
     }
   }
 
+  static bool attendanceIsOpen(Map<String, dynamic>? att) {
+    if (att == null) return false;
+    final checkOut = att['check_out'];
+    if (checkOut == null) return true;
+    if (checkOut is String && checkOut.trim().isEmpty) return true;
+    return false;
+  }
+
   Future<Map<String, dynamic>> checkIn() async {
-    try {
-      print('✅ Checking in...');
-      final response = await http
-          .post(
-            Uri.parse(AppConfig.checkInUrl),
-            headers: _getHeaders(),
-          )
-          .timeout(Duration(seconds: 10));
-
-      print('📊 Check-in response: ${response.statusCode}');
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+    final current = await getCurrentAttendance();
+    if (current['success'] == true) {
+      final att = current['data']?['current_attendance'] as Map<String, dynamic>?;
+      if (attendanceIsOpen(att)) {
+        return {
+          'success': true,
+          'data': {'message': 'Already checked in', 'attendance': att},
+        };
       }
-      return {'success': false, 'error': 'Check-in failed: ${response.statusCode}'};
-    } catch (e) {
-      print('❌ Check-in error: $e');
-      return {'success': false, 'error': 'Check-in error: $e'};
     }
+    return _postAttendanceAction(
+      uri: Uri.parse(AppConfig.checkInUrl),
+      label: 'Check-in',
+      verifySuccess: attendanceIsOpen,
+    );
   }
 
   Future<Map<String, dynamic>> checkOut() async {
-    int retryCount = 0;
-    const maxRetries = 3;
-    
-    while (retryCount < maxRetries) {
-      try {
-        print('❌ Checking out... (Attempt ${retryCount + 1}/$maxRetries)');
-        
-        var response = await http
-            .post(
-              Uri.parse(AppConfig.checkOutUrl),
-              headers: _getHeaders(),
-            )
-            .timeout(Duration(seconds: 15));
+    return _postAttendanceAction(
+      uri: Uri.parse(AppConfig.checkOutUrl),
+      label: 'Check-out',
+      verifySuccess: (current) => !attendanceIsOpen(current),
+    );
+  }
 
-        print('📊 Check-out response: ${response.statusCode}');
-        print('📝 Response body: ${response.body}');
-
-        // If 401, token might be expired
-        if (response.statusCode == 401) {
-          print('⚠️ Token expired, attempting refresh...');
-          return {'success': false, 'error': 'Session expired - please login again'};
-        }
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          final data = jsonDecode(response.body);
-          print('✅ Check-out successful');
-          return {'success': true, 'data': data};
-        } else if (response.statusCode == 400) {
-          try {
-            final data = jsonDecode(response.body);
-            return {'success': false, 'error': data['message'] ?? 'No active check-in found'};
-          } catch (e) {
-            return {'success': false, 'error': 'No active check-in found'};
-          }
-        } else if (response.statusCode == 403) {
-          return {'success': false, 'error': 'Access denied - subscription expired'};
-        }
-        
-        // For other errors, retry
-        retryCount++;
-        if (retryCount < maxRetries) {
-          print('⚠️ Retrying in 2 seconds...');
-          await Future.delayed(Duration(seconds: 2));
-          continue;
-        }
-        
-        return {'success': false, 'error': 'Check-out failed: ${response.statusCode}'};
-        
-      } on http.ClientException catch (e) {
-        print('❌ Network error: $e');
-        retryCount++;
-        
-        if (retryCount < maxRetries) {
-          print('⚠️ Retrying in 2 seconds...');
-          await Future.delayed(Duration(seconds: 2));
-          continue;
-        }
-        
+  Future<Map<String, dynamic>> _fetchTasksFromUrl(String url, String label) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(url));
+      print('📊 Tasks ($label): ${response.statusCode}');
+      if (response.statusCode != 200) {
         return {
           'success': false,
-          'error': 'Network connection failed. Please check:\n'
-              '1. Django server is running\n'
-              '2. Server URL is correct (${AppConfig.checkOutUrl})\n'
-              '3. Your internet connection'
-        };
-      } on TimeoutException catch (e) {
-        print('❌ Timeout error: $e');
-        retryCount++;
-        
-        if (retryCount < maxRetries) {
-          print('⚠️ Retrying in 2 seconds...');
-          await Future.delayed(Duration(seconds: 2));
-          continue;
-        }
-        
-        return {
-          'success': false,
-          'error': 'Server timeout. Please check if Django server is running.'
-        };
-      } catch (e) {
-        print('❌ Check-out error: $e');
-        retryCount++;
-        
-        if (retryCount < maxRetries) {
-          print('⚠️ Retrying in 2 seconds...');
-          await Future.delayed(Duration(seconds: 2));
-          continue;
-        }
-        
-        return {
-          'success': false,
-          'error': 'Check-out error: ${e.toString()}'
+          'error': 'Failed to load tasks (${response.statusCode})',
         };
       }
+      final decoded = _decodeJsonBody(response.body, context: label);
+      return {'success': true, 'data': _normalizeTaskList(decoded)};
+    } on FormatException catch (e) {
+      print('❌ Tasks ($label): $e');
+      return {'success': false, 'error': e.message};
     }
-    
-    return {
-      'success': false,
-      'error': 'Failed after $maxRetries attempts. Please try again.'
-    };
   }
 
   Future<Map<String, dynamic>> getTasks() async {
     try {
       print('📋 Loading tasks...');
-      final response = await http
-          .get(
-            Uri.parse(AppConfig.tasksUrl),
-            headers: _getHeaders(),
-          )
-          .timeout(Duration(seconds: 10));
+      final employeeId = await UserDataService.getEmployeeId();
+      final userId = await UserDataService.getUserId();
 
-      print('📊 Tasks response: ${response.statusCode}');
+      final endpoints = <(String, String)>[
+        (AppConfig.tasksUrl, 'GET /api/tasks/'),
+        if (employeeId.isNotEmpty)
+          (
+            AppConfig.employeeTasksUrl(employeeId),
+            'GET /api/employees/{employee_id}/tasks/',
+          ),
+        if (userId.isNotEmpty)
+          (
+            AppConfig.userTasksUrl(userId),
+            'GET /api/users/{user_id}/tasks/',
+          ),
+      ];
 
-      if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+      Map<String, dynamic>? last;
+      for (final (url, label) in endpoints) {
+        final result = await _fetchTasksFromUrl(url, label);
+        last = result;
+        if (result['success'] == true) {
+          final list = result['data'] as List<dynamic>? ?? [];
+          if (list.isNotEmpty) return result;
+        }
       }
-      return {'success': false, 'error': 'Failed to load tasks'};
+
+      if (last != null && last['success'] == true) return last;
+      return {
+        'success': false,
+        'error': last?['error'] ??
+            'No tasks found. Tried /api/tasks/ and employee/user fallbacks.',
+      };
     } catch (e) {
       print('❌ Tasks error: $e');
       return {'success': false, 'error': 'Tasks error: $e'};
     }
   }
 
-  /// Full task detail (same fields as PATCH response) — for edit / attachments UI.
-  Future<Map<String, dynamic>> getTask(int taskId) async {
-    try {
-      final response = await http
-          .get(
-            Uri.parse('${AppConfig.tasksUrl}$taskId/'),
-            headers: _getHeaders(),
-          )
-          .timeout(const Duration(seconds: 15));
-      if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+  Map<String, dynamic>? _parseTaskDetailResponse(String body, String context) {
+    final decoded = _decodeJsonBody(body, context: context);
+    if (decoded is Map<String, dynamic>) {
+      if (decoded['task'] is Map) {
+        return _normalizeTaskMap(Map<String, dynamic>.from(decoded['task'] as Map));
       }
-      var err = 'Failed to load task';
-      try {
-        final d = jsonDecode(response.body);
-        if (d is Map && d['error'] != null) {
-          err = d['error'].toString();
-        }
-      } catch (_) {}
-      return {'success': false, 'error': err};
-    } catch (e) {
-      return {'success': false, 'error': '$e'};
+      if (decoded['id'] != null || decoded['name'] != null || decoded['title'] != null) {
+        return _normalizeTaskMap(decoded);
+      }
     }
+    return null;
+  }
+
+  /// Full task detail — tries `/api/tasks/{id}/` then project-scoped URL.
+  Future<Map<String, dynamic>> getTask(int taskId, {int projectId = 0}) async {
+    final urls = <String>['${AppConfig.tasksUrl}$taskId/'];
+    if (projectId > 0) {
+      urls.add(AppConfig.projectTaskUrl(projectId, taskId));
+    }
+    var lastErr = 'Task not found';
+    for (final url in urls) {
+      try {
+        final response = await _authorizedGet(Uri.parse(url));
+        if (response.statusCode == 200) {
+          final task = _parseTaskDetailResponse(response.body, 'GET $url');
+          if (task != null) {
+            return {'success': true, 'data': task};
+          }
+          lastErr = 'Invalid task response from server';
+          continue;
+        }
+        if (response.statusCode == 404) {
+          lastErr = 'Task not found';
+          continue;
+        }
+        lastErr = _parseApiErrorBody(response.body, response.statusCode);
+      } on FormatException catch (e) {
+        lastErr = e.message;
+      } catch (e) {
+        lastErr = '$e';
+      }
+    }
+    return {'success': false, 'error': lastErr};
   }
 
   Future<Map<String, dynamic>> toggleTask(int taskId) async {
@@ -290,17 +634,53 @@ class ApiService {
 
   Future<Map<String, dynamic>> getTaskAttachments(int taskId) async {
     try {
-      final response = await http
-          .get(
-            Uri.parse('${AppConfig.tasksUrl}$taskId/attachments/'),
-            headers: _getHeaders(),
-          )
-          .timeout(const Duration(seconds: 15));
+      final response = await _authorizedGet(
+        Uri.parse('${AppConfig.tasksUrl}$taskId/attachments/'),
+      );
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         return {'success': true, 'data': data is List ? data : <dynamic>[]};
       }
       return {'success': false, 'error': 'Failed to load attachments'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteTaskAttachment(int taskId, int attachmentId) async {
+    try {
+      final response = await _authorizedDelete(
+        Uri.parse('${AppConfig.tasksUrl}$taskId/attachments/$attachmentId/'),
+      );
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete attachment'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getTaskActivity(int projectId, int taskId, {int page = 1}) async {
+    if (projectId <= 0) {
+      return {'success': false, 'error': 'Project id required for activity log'};
+    }
+    try {
+      final uri = Uri.parse(AppConfig.projectTaskActivityUrl(projectId, taskId)).replace(
+        queryParameters: {'page': '$page', 'page_size': '30'},
+      );
+      final response = await _authorizedGet(uri);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map && decoded['results'] is List) {
+          return {'success': true, 'data': decoded['results']};
+        }
+        if (decoded is List) {
+          return {'success': true, 'data': decoded};
+        }
+        return {'success': true, 'data': <dynamic>[]};
+      }
+      return {'success': false, 'error': 'Failed to load activity'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -396,8 +776,15 @@ class ApiService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        print('✅ Successfully loaded ${(data as List).length} users');
-        return {'success': true, 'data': data};
+        final list = data is List
+            ? data
+            : (data is Map && data['users'] is List)
+                ? data['users']
+                : (data is Map && data['results'] is List)
+                    ? data['results']
+                    : <dynamic>[];
+        print('✅ Successfully loaded ${list.length} users');
+        return {'success': true, 'data': list};
       } else if (response.statusCode == 401) {
         return {'success': false, 'error': 'Unauthorized - please login again'};
       } else if (response.statusCode == 403) {
@@ -420,7 +807,13 @@ class ApiService {
           .timeout(Duration(seconds: 10));
 
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final data = jsonDecode(response.body);
+        final list = data is List
+            ? data
+            : (data is Map && data['messages'] is List)
+                ? data['messages']
+                : <dynamic>[];
+        return {'success': true, 'data': list};
       }
       return {'success': false, 'error': 'Failed to load conversation'};
     } catch (e) {
@@ -549,7 +942,17 @@ class ApiService {
           .get(Uri.parse(AppConfig.chatUnreadUrl), headers: _getHeaders())
           .timeout(Duration(seconds: 10));
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final data = jsonDecode(response.body);
+        if (data is Map) {
+          final total = data['total_unread'] ?? data['unread_count'] ?? data['count'];
+          if (total != null) {
+            return {
+              'success': true,
+              'data': {'unread_count': total is int ? total : int.tryParse('$total') ?? 0},
+            };
+          }
+        }
+        return {'success': true, 'data': data};
       }
       return {'success': false, 'error': 'Failed'};
     } catch (e) {
@@ -601,7 +1004,15 @@ class ApiService {
           .get(Uri.parse(AppConfig.chatGroupsUrl), headers: _getHeaders())
           .timeout(Duration(seconds: 10));
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final data = jsonDecode(response.body);
+        final list = data is List
+            ? data
+            : (data is Map && data['groups'] is List)
+                ? data['groups']
+                : (data is Map && data['results'] is List)
+                    ? data['results']
+                    : <dynamic>[];
+        return {'success': true, 'data': list};
       }
       return {'success': false, 'error': 'Failed to load groups'};
     } catch (e) {
@@ -640,7 +1051,13 @@ class ApiService {
           )
           .timeout(Duration(seconds: 10));
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final data = jsonDecode(response.body);
+        final list = data is List
+            ? data
+            : (data is Map && data['messages'] is List)
+                ? data['messages']
+                : <dynamic>[];
+        return {'success': true, 'data': list};
       }
       return {'success': false, 'error': 'Failed to load group messages'};
     } catch (e) {
@@ -761,6 +1178,7 @@ class ApiService {
     String? dueDate,
     int? projectId,
     int? stageId,
+    List<int>? assigneeIds,
     bool isAttachmentRequired = false,
     List<int>? attachmentBytes,
     String? attachmentName,
@@ -771,13 +1189,16 @@ class ApiService {
         var request = http.MultipartRequest('POST', Uri.parse(AppConfig.tasksUrl));
         final headers = _getHeaders(); headers.remove('Content-Type');
         request.headers.addAll(headers);
-        request.fields['name'] = name;
-        request.fields['description'] = description;
+        request.fields['title'] = name;
+        request.fields['desc'] = description;
         request.fields['priority'] = priority;
         request.fields['is_attachment_required'] = isAttachmentRequired.toString();
         if (dueDate != null) request.fields['due_date'] = dueDate;
-        if (projectId != null) request.fields['project'] = projectId.toString();
-        if (stageId != null) request.fields['stage'] = stageId.toString();
+        if (projectId != null) request.fields['project_id'] = projectId.toString();
+        if (stageId != null) request.fields['stage_id'] = stageId.toString();
+        if (assigneeIds != null && assigneeIds.isNotEmpty) {
+          request.fields['assignee_ids'] = jsonEncode(assigneeIds);
+        }
         request.files.add(http.MultipartFile.fromBytes('attachment', attachmentBytes, filename: attachmentName));
         var response = await request.send().timeout(Duration(seconds: 30));
         final body = await response.stream.bytesToString();
@@ -785,18 +1206,22 @@ class ApiService {
         return {'success': false, 'error': 'Failed: ${response.statusCode} - $body'};
       } else {
         final body = <String, dynamic>{
-          'name': name,
-          'description': description,
+          'title': name,
+          'desc': description,
           'priority': priority,
           'is_attachment_required': isAttachmentRequired,
         };
         if (dueDate != null) body['due_date'] = dueDate;
-        if (projectId != null) body['project'] = projectId;
-        if (stageId != null) body['stage'] = stageId;
+        if (projectId != null) body['project_id'] = projectId;
+        if (stageId != null) body['stage_id'] = stageId;
+        if (assigneeIds != null && assigneeIds.isNotEmpty) {
+          body['assignee_ids'] = assigneeIds;
+        }
 
-        final response = await http
-            .post(Uri.parse(AppConfig.tasksUrl), headers: _getHeaders(), body: jsonEncode(body))
-            .timeout(Duration(seconds: 10));
+        final response = await _authorizedPost(
+          Uri.parse(AppConfig.tasksUrl),
+          body: jsonEncode(body),
+        );
         if (response.statusCode == 200 || response.statusCode == 201) {
           return {'success': true, 'data': jsonDecode(response.body)};
         }
@@ -808,11 +1233,36 @@ class ApiService {
   }
 
   // ─── Update Task ───
+  Map<String, dynamic> _taskPatchBody(Map<String, dynamic> data) {
+    final body = Map<String, dynamic>.from(data);
+    if (body.containsKey('name')) {
+      body['title'] = body.remove('name');
+    }
+    if (body.containsKey('description')) {
+      body['desc'] = body.remove('description');
+    }
+    if (body.containsKey('user')) {
+      body['assignee_ids'] = [body.remove('user')];
+    }
+    if (body.containsKey('user_id')) {
+      body['assignee_ids'] = [body.remove('user_id')];
+    }
+    if (body.containsKey('assignee_id')) {
+      body['assignee_ids'] = [body.remove('assignee_id')];
+    }
+    return body;
+  }
+
+  Future<Map<String, dynamic>> updateTaskAssignees(int taskId, List<int> assigneeIds) {
+    return updateTask(taskId, {'assignee_ids': assigneeIds});
+  }
+
   Future<Map<String, dynamic>> updateTask(int taskId, Map<String, dynamic> data) async {
     try {
-      final response = await http
-          .patch(Uri.parse('${AppConfig.tasksUrl}$taskId/'), headers: _getHeaders(), body: jsonEncode(data))
-          .timeout(Duration(seconds: 10));
+      final response = await _authorizedPatch(
+        Uri.parse('${AppConfig.tasksUrl}$taskId/'),
+        body: jsonEncode(_taskPatchBody(data)),
+      );
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
@@ -854,11 +1304,18 @@ class ApiService {
   // ─── SubTask APIs ───
   Future<Map<String, dynamic>> getSubTasks(int taskId) async {
     try {
-      final response = await http
-          .get(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/'), headers: _getHeaders())
-          .timeout(Duration(seconds: 10));
+      final response = await _authorizedGet(
+        Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/'),
+      );
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map && decoded['subtasks'] is List) {
+          return {'success': true, 'data': decoded['subtasks']};
+        }
+        if (decoded is List) {
+          return {'success': true, 'data': decoded};
+        }
+        return {'success': true, 'data': decoded};
       }
       return {'success': false, 'error': 'Failed to load subtasks'};
     } catch (e) {
@@ -939,6 +1396,26 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> deleteSubTaskAttachment(
+    int taskId,
+    int subtaskId,
+    int attachmentId,
+  ) async {
+    try {
+      final response = await _authorizedDelete(
+        Uri.parse(
+          '${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/attachments/$attachmentId/',
+        ),
+      );
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to delete attachment'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> deleteSubTask(int taskId, int subtaskId) async {
     try {
       final response = await http
@@ -982,7 +1459,15 @@ class ApiService {
           .get(Uri.parse(AppConfig.notificationsUrl), headers: _getHeaders())
           .timeout(Duration(seconds: 10));
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final data = jsonDecode(response.body);
+        final list = data is List
+            ? data
+            : (data is Map && data['results'] is List)
+                ? data['results']
+                : (data is Map && data['notifications'] is List)
+                    ? data['notifications']
+                    : <dynamic>[];
+        return {'success': true, 'data': list};
       }
       return {'success': false, 'error': 'Failed to load notifications'};
     } catch (e) {
@@ -1004,17 +1489,89 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> markAllNotificationsRead() async {
+  Future<Map<String, dynamic>> markNotificationRead(int notificationId) async {
     try {
-      final response = await http
-          .post(Uri.parse(AppConfig.notificationsMarkAllReadUrl), headers: _getHeaders())
-          .timeout(Duration(seconds: 10));
+      final response = await _authorizedPost(
+        Uri.parse('${AppConfig.notificationsUrl}$notificationId/'),
+        body: jsonEncode({'action': 'mark_read'}),
+      );
       if (response.statusCode == 200) {
         return {'success': true};
       }
-      return {'success': false, 'error': 'Failed'};
+      return {'success': false, 'error': 'Failed to mark notification read'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> markAllNotificationsRead() async {
+    try {
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.notificationsMarkAllReadUrl),
+        body: '{}',
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': _safeJsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to mark all as read (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> clearAllNotifications() async {
+    try {
+      final response = await http
+          .delete(Uri.parse(AppConfig.notificationsClearUrl), headers: _getHeaders())
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 401 && await refreshAccessToken()) {
+        return clearAllNotifications();
+      }
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': _safeJsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to clear notifications (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<bool> refreshAccessToken() async {
+    try {
+      final refresh = await UserDataService.getRefreshToken();
+      if (refresh.isEmpty) return false;
+      final body = jsonEncode({'refresh': refresh});
+      final headers = {'Content-Type': 'application/json'};
+      var response = await http
+          .post(
+            Uri.parse(AppConfig.authRefreshUrl),
+            headers: headers,
+            body: body,
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) {
+        response = await http
+            .post(
+              Uri.parse(AppConfig.authTokenRefreshUrl),
+              headers: headers,
+              body: body,
+            )
+            .timeout(const Duration(seconds: 15));
+      }
+      if (response.statusCode != 200) return false;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final access = data['access']?.toString();
+      if (access == null || access.isEmpty) return false;
+      _token = access;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('auth_token', access);
+      if (data['refresh'] != null) {
+        await prefs.setString('refresh_token', data['refresh'].toString());
+      }
+      print('🔑 Access token refreshed');
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -1054,7 +1611,11 @@ class ApiService {
           .get(Uri.parse(AppConfig.projectsMetaUrl), headers: _getHeaders())
           .timeout(Duration(seconds: 10));
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body) as Map<String, dynamic>};
+        final decoded = _decodeJsonBody(response.body, context: 'GET /api/projects/meta/');
+        if (decoded is Map<String, dynamic>) {
+          return {'success': true, 'data': decoded};
+        }
+        return {'success': false, 'error': 'Invalid projects meta response'};
       }
       return {'success': false, 'error': 'Failed to load filter options'};
     } catch (e) {
@@ -1086,13 +1647,48 @@ class ApiService {
       if (search != null && search.trim().isNotEmpty) params['search'] = search.trim();
 
       final uri = Uri.parse(AppConfig.projectsUrl).replace(queryParameters: params);
-      final response = await http
-          .get(uri, headers: _getHeaders())
-          .timeout(Duration(seconds: 15));
+      final response = await _authorizedGet(uri);
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        dynamic decoded;
+        try {
+          decoded = _decodeJsonBody(response.body, context: 'GET /api/projects/');
+        } on FormatException catch (e) {
+          final fallback = await _fetchProjectsFallback();
+          if (fallback != null) {
+            return {'success': true, 'data': fallback};
+          }
+          return {'success': false, 'error': e.message};
+        }
+
+        final list = _extractJsonList(
+          decoded,
+          keys: const ['results', 'projects', 'data'],
+        );
+        if (list.isNotEmpty || decoded is List) {
+          return {'success': true, 'data': _normalizeProjectItems(list)};
+        }
+        if (decoded is Map<String, dynamic> &&
+            (decoded.containsKey('customers') || decoded.containsKey('employees'))) {
+          return {
+            'success': false,
+            'error': 'Projects API returned filter metadata — deploy /api/projects/ list endpoint',
+          };
+        }
+
+        final fallback = await _fetchProjectsFallback();
+        if (fallback != null && fallback.isNotEmpty) {
+          return {'success': true, 'data': fallback};
+        }
+
+        return {'success': true, 'data': _normalizeProjectItems(list)};
       }
-      return {'success': false, 'error': 'Failed to load projects'};
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        return {
+          'success': false,
+          'error': _parseApiErrorBody(response.body, response.statusCode),
+        };
+      }
+      return {'success': false, 'error': 'Failed to load projects (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1136,13 +1732,43 @@ class ApiService {
 
   Future<Map<String, dynamic>> getProjectDetail(int projectId) async {
     try {
-      final response = await http
-          .get(Uri.parse('${AppConfig.projectsUrl}$projectId/'), headers: _getHeaders())
-          .timeout(Duration(seconds: 10));
+      final response = await _authorizedGet(
+        Uri.parse('${AppConfig.projectsUrl}$projectId/'),
+        timeout: const Duration(seconds: 15),
+      );
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        try {
+          final decoded = _decodeJsonBody(
+            response.body,
+            context: 'GET /api/projects/$projectId/',
+          );
+          if (decoded is Map<String, dynamic>) {
+            return {
+              'success': true,
+              'data': _normalizeProjectDetailMap(decoded),
+            };
+          }
+          if (decoded is Map) {
+            return {
+              'success': true,
+              'data': _normalizeProjectDetailMap(Map<String, dynamic>.from(decoded)),
+            };
+          }
+          return {'success': true, 'data': decoded};
+        } on FormatException catch (e) {
+          return {'success': false, 'error': e.message};
+        }
       }
-      return {'success': false, 'error': 'Failed to load project'};
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        return {
+          'success': false,
+          'error': _parseApiErrorBody(response.body, response.statusCode),
+        };
+      }
+      return {
+        'success': false,
+        'error': 'Failed to load project (${response.statusCode})',
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1151,6 +1777,7 @@ class ApiService {
   // ─── Project CRUD ───
   Future<Map<String, dynamic>> createProject({
     required String name,
+    required int customerId,
     String description = '',
     String priority = 'medium',
     List<Map<String, dynamic>>? stages,
@@ -1158,17 +1785,25 @@ class ApiService {
     try {
       final body = <String, dynamic>{
         'name': name,
+        'customer_id': customerId,
         'description': description,
         'priority': priority,
       };
       if (stages != null) body['stages'] = stages;
       final response = await http
-          .post(Uri.parse('${AppConfig.projectsUrl}create/'), headers: _getHeaders(), body: jsonEncode(body))
-          .timeout(Duration(seconds: 10));
+          .post(
+            Uri.parse('${AppConfig.projectsUrl}create/'),
+            headers: _getHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200 || response.statusCode == 201) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
-      return {'success': false, 'error': 'Failed to create project'};
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1239,9 +1874,17 @@ class ApiService {
 
   Future<Map<String, dynamic>> reorderStages(int projectId, List<int> stageIds) async {
     try {
+      final stages = <Map<String, int>>[];
+      for (var i = 0; i < stageIds.length; i++) {
+        stages.add({'id': stageIds[i], 'order': i});
+      }
       final response = await http
-          .post(Uri.parse('${AppConfig.projectsUrl}$projectId/stages/reorder/'), headers: _getHeaders(), body: jsonEncode({'order': stageIds}))
-          .timeout(Duration(seconds: 10));
+          .post(
+            Uri.parse('${AppConfig.projectsUrl}$projectId/stages/reorder/'),
+            headers: _getHeaders(),
+            body: jsonEncode({'stages': stages}),
+          )
+          .timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) return {'success': true};
       return {'success': false, 'error': 'Failed to reorder stages'};
     } catch (e) {
@@ -1251,13 +1894,10 @@ class ApiService {
 
   Future<Map<String, dynamic>> moveTask(int taskId, int stageId) async {
     try {
-      final response = await http
-          .post(
-            Uri.parse('${AppConfig.tasksUrl}$taskId/move/'),
-            headers: _getHeaders(),
-            body: jsonEncode({'stage_id': stageId}),
-          )
-          .timeout(const Duration(seconds: 10));
+      final response = await _authorizedPost(
+        Uri.parse('${AppConfig.tasksUrl}$taskId/move/'),
+        body: jsonEncode({'stage_id': stageId}),
+      );
       if (response.statusCode == 200) return {'success': true};
       var err = 'Failed to move task';
       try {
@@ -1272,41 +1912,250 @@ class ApiService {
 
   // ─── Access Check (verify token is still valid) ───
   Future<Map<String, dynamic>> accessCheck() async {
-    try {
-      final response = await http
-          .get(Uri.parse(AppConfig.accessCheckUrl), headers: _getHeaders())
-          .timeout(Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
-      } else if (response.statusCode == 403) {
-        // Access denied but token is valid - return the error data
-        return {'success': false, 'data': jsonDecode(response.body), 'error': 'Access denied'};
+    final urls = [AppConfig.authAccessCheckUrl, AppConfig.accessCheckLegacyUrl];
+    for (final url in urls) {
+      try {
+        final response = await _authorizedGet(
+          Uri.parse(url),
+          timeout: const Duration(seconds: 10),
+        );
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data is Map && data['employee'] != null) {
+            await UserDataService.saveEmployeeId(data['employee']);
+          }
+          return {'success': true, 'data': data};
+        }
+        if (response.statusCode == 403) {
+          return {
+            'success': false,
+            'data': jsonDecode(response.body),
+            'error': 'Access denied',
+          };
+        }
+      } catch (e) {
+        if (url == urls.last) {
+          return {'success': false, 'error': '$e'};
+        }
       }
-      return {'success': false, 'error': 'Access check failed: ${response.statusCode}'};
+    }
+    return {'success': false, 'error': 'Access check failed'};
+  }
+
+  /// Accept current data & monitoring notice (JWT). Sets server-side accepted version + optional screenshot consent.
+  Future<Map<String, dynamic>> acceptPrivacyNotice({bool screenshotMonitoringConsent = true}) async {
+    final body = jsonEncode({'screenshot_monitoring_consent': screenshotMonitoringConsent});
+    final urls = [
+      AppConfig.privacyNoticeAcceptUrl,
+      AppConfig.privacyNoticeAcceptLegacyUrl,
+    ];
+
+    for (final url in urls) {
+      try {
+        final response = await _authorizedPost(Uri.parse(url), body: body);
+        final rawBody = response.body;
+        if (_looksLikeHtml(rawBody)) {
+          continue;
+        }
+        dynamic raw;
+        try {
+          raw = rawBody.isNotEmpty ? jsonDecode(rawBody) : null;
+        } catch (_) {
+          continue;
+        }
+        if (response.statusCode == 200 && raw is Map) {
+          final map = Map<String, dynamic>.from(raw);
+          if (map['success'] == true || map.containsKey('data_privacy_notice_accepted_version')) {
+            return {'success': true, 'data': map};
+          }
+        }
+        if (raw is Map) {
+          final err = raw['error'] ?? raw['detail'];
+          if (err != null) {
+            return {'success': false, 'error': err.toString()};
+          }
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    // Production fallback until dedicated privacy route is deployed.
+    try {
+      final profileBody = jsonEncode({
+        'accept_data_privacy_notice': true,
+        'screenshot_monitoring_consent': screenshotMonitoringConsent,
+      });
+      final response = await _authorizedPatch(Uri.parse(AppConfig.profileUrl), body: profileBody);
+      final rawBody = response.body;
+      if (!_looksLikeHtml(rawBody) && response.statusCode == 200) {
+        final raw = rawBody.isNotEmpty ? jsonDecode(rawBody) : null;
+        if (raw is Map) {
+          final map = Map<String, dynamic>.from(raw);
+          final emp = map['employee'];
+          if (emp is Map) {
+            final e = Map<String, dynamic>.from(emp);
+            return {
+              'success': true,
+              'data': {
+                'data_privacy_notice_accepted_version': e['data_privacy_notice_accepted_version'],
+                'screenshot_monitoring_consent': e['screenshot_monitoring_consent'],
+                'data_privacy_notice_version': AppConfig.dataPrivacyNoticeVersion,
+              },
+            };
+          }
+        }
+      }
+    } catch (_) {}
+
+    return {
+      'success': false,
+      'error': 'Could not save notice — server may need update. Contact admin or try again after login.',
+    };
+  }
+
+  Future<Map<String, dynamic>> getCurrentAttendance() async {
+    try {
+      await ensureAuth();
+      final response = await _authorizedGet(Uri.parse(AppConfig.attendanceCurrentUrl));
+      if (response.statusCode != 200) {
+        return {'success': false, 'error': 'Failed to load attendance (${response.statusCode})'};
+      }
+      final decoded = _safeJsonDecode(response.body);
+      if (decoded is! Map) {
+        return {'success': false, 'error': 'Unexpected attendance response format'};
+      }
+      final data = Map<String, dynamic>.from(decoded);
+      final currentRaw = data['current_attendance'];
+      final current = currentRaw is Map ? Map<String, dynamic>.from(currentRaw) : null;
+      if (!attendanceIsOpen(current)) {
+        final open = await _findOpenAttendanceFromList();
+        if (attendanceIsOpen(open)) {
+          data['current_attendance'] = open;
+        }
+      }
+      return {'success': true, 'data': data};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
   }
 
-  /// Accept current data & monitoring notice (JWT). Sets server-side accepted version + optional screenshot consent.
-  Future<Map<String, dynamic>> acceptPrivacyNotice({bool screenshotMonitoringConsent = true}) async {
+  Future<Map<String, dynamic>> _parseBreakPost(http.Response response, {required String failLabel}) async {
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      try {
+        return {'success': true, 'data': _safeJsonDecode(response.body)};
+      } catch (_) {
+        return {'success': true, 'data': <String, dynamic>{}};
+      }
+    }
+    var err = failLabel;
     try {
-      final response = await http
-          .post(
-            Uri.parse(AppConfig.privacyNoticeAcceptUrl),
-            headers: _getHeaders(),
-            body: jsonEncode({'screenshot_monitoring_consent': screenshotMonitoringConsent}),
-          )
-          .timeout(const Duration(seconds: 15));
+      final d = _safeJsonDecode(response.body);
+      if (d is Map) {
+        err = d['error']?.toString() ?? d['message']?.toString() ?? d['detail']?.toString() ?? failLabel;
+      }
+    } catch (_) {}
+    return {'success': false, 'error': err};
+  }
+
+  Future<Map<String, dynamic>?> _findOpenAttendanceFromList() async {
+    final list = await getAttendanceList();
+    if (list['success'] != true) return null;
+    final raw = list['data'] as List<dynamic>? ?? [];
+    for (final item in raw) {
+      if (item is Map && attendanceIsOpen(Map<String, dynamic>.from(item))) {
+        return Map<String, dynamic>.from(item);
+      }
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>> getAttendanceList() async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.attendanceListUrl));
+      if (response.statusCode == 200) {
+        final raw = jsonDecode(response.body);
+        final list = raw is List ? List<dynamic>.from(raw) : <dynamic>[];
+        return {'success': true, 'data': list};
+      }
+      return {'success': false, 'error': 'Failed to load attendance history'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getClosingReportPending() async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.closingReportsPendingUrl));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to check report status'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getClosingReports() async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.closingReportsUrl));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        return {
+          'success': true,
+          'data': decoded is List ? decoded : _extractJsonList(decoded),
+        };
+      }
+      return {'success': false, 'error': 'Failed to load reports'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> submitClosingReport({
+    required String whatIDid,
+    required String whatIWillDo,
+    String blockers = '',
+    List<int> dependencyEmployeeIds = const [],
+  }) async {
+    try {
+      final body = jsonEncode({
+        'what_i_did': whatIDid,
+        'what_i_will_do': whatIWillDo,
+        'blockers': blockers,
+        'dependency_employee_ids': dependencyEmployeeIds,
+      });
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.closingReportsUrl),
+        body: body,
+      );
       final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
-      if (response.statusCode == 200 && raw is Map) {
+      if (response.statusCode == 201 && raw is Map) {
         return {'success': true, 'data': Map<String, dynamic>.from(raw)};
       }
-      final errMap = raw is Map ? raw : null;
-      return {
-        'success': false,
-        'error': errMap != null ? (errMap['error'] ?? errMap['detail'] ?? 'Request failed') : 'Request failed',
-      };
+      if (raw is Map) {
+        return {
+          'success': false,
+          'error': raw['detail'] ?? raw['error'] ?? 'Submit failed (${response.statusCode})',
+        };
+      }
+      return {'success': false, 'error': 'Submit failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getCompanyEmployees() async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.companyEmployeesUrl));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        return {
+          'success': true,
+          'data': decoded is List ? decoded : _extractJsonList(decoded, keys: const ['results', 'employees', 'data']),
+        };
+      }
+      return {'success': false, 'error': 'Failed to load employees'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1319,71 +2168,68 @@ class ApiService {
     String? lastActivityAt,
   }) async {
     try {
+      await ensureAuth();
       print('📤 Uploading screenshot (${imageBytes.length} bytes)...');
       print('   Activity Status: ${isIdle ? "IDLE" : "ACTIVE"}');
       if (isIdle) {
         print('   Idle Duration: ${idleDuration}m');
       }
-      
-      // Create relative path with timestamp
+
       final now = DateTime.now();
       final date = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
       final time = '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}';
       final relativePath = '$date/screen1/$time.png';
 
-      var request = http.MultipartRequest(
-        'POST',
-        Uri.parse(AppConfig.screenshotUploadUrl),
-      );
+      Future<http.StreamedResponse> sendUpload() async {
+        final request = http.MultipartRequest(
+          'POST',
+          Uri.parse(AppConfig.screenshotUploadUrl),
+        );
+        final headers = _getHeaders();
+        headers.remove('Content-Type');
+        request.headers.addAll(headers);
 
-      // Remove Content-Type from headers for multipart request
-      final headers = _getHeaders();
-      headers.remove('Content-Type');
-      request.headers.addAll(headers);
-      
-      // Add file
-      request.files.add(
-        http.MultipartFile.fromBytes(
-          'file',
-          imageBytes,
-          filename: '$time.png',
-          contentType: MediaType('image', 'png'),
-        ),
-      );
-      
-      // Add fields
-      request.fields['relative_path'] = relativePath;
-      request.fields['is_idle'] = isIdle.toString();
-      request.fields['idle_duration'] = idleDuration.toString();
-      if (lastActivityAt != null) {
-        request.fields['last_activity_at'] = lastActivityAt;
+        final isJpeg = imageBytes.length > 2 && imageBytes[0] == 0xFF && imageBytes[1] == 0xD8;
+        final ext = isJpeg ? 'jpg' : 'png';
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            imageBytes,
+            filename: '$time.$ext',
+            contentType: MediaType('image', isJpeg ? 'jpeg' : 'png'),
+          ),
+        );
+
+        request.fields['relative_path'] = relativePath;
+        request.fields['is_idle'] = isIdle.toString();
+        request.fields['idle_duration'] = idleDuration.toString();
+        if (lastActivityAt != null) {
+          request.fields['last_activity_at'] = lastActivityAt;
+        }
+
+        return request.send().timeout(const Duration(seconds: 60));
       }
-      
+
       print('📋 Upload URL: ${AppConfig.screenshotUploadUrl}');
       print('📋 Relative path: $relativePath');
-      print('📋 File size: ${imageBytes.length} bytes');
-      print('📋 Is Idle: $isIdle');
-      print('📋 Idle Duration: ${idleDuration}m');
-      
-      var response = await request.send().timeout(Duration(seconds: 60));
+
+      var response = await sendUpload();
+      if (response.statusCode == 401 && await refreshAccessToken()) {
+        response = await sendUpload();
+      }
       final responseBody = await response.stream.bytesToString();
-      
+
       print('📊 Upload response: ${response.statusCode}');
-      print('📝 Response body: ${responseBody.length > 200 ? responseBody.substring(0, 200) : responseBody}');
-      
+
       if (response.statusCode == 200 || response.statusCode == 201) {
         return {'success': true, 'data': responseBody};
-      } else {
-        // Extract error message - handle both JSON and HTML responses
-        String errorMsg = 'Upload failed: ${response.statusCode}';
-        try {
-          final json = jsonDecode(responseBody);
-          errorMsg = json['error'] ?? json['errors']?.toString() ?? errorMsg;
-        } catch (_) {
-          // HTML error page - just use status code
-        }
-        return {'success': false, 'error': errorMsg};
       }
+      String errorMsg = 'Upload failed: ${response.statusCode}';
+      try {
+        final json = jsonDecode(responseBody);
+        errorMsg = json['error'] ?? json['errors']?.toString() ?? errorMsg;
+      } catch (_) {}
+      return {'success': false, 'error': errorMsg};
     } catch (e) {
       print('❌ Upload error: $e');
       return {'success': false, 'error': 'Upload error: $e'};
@@ -1535,7 +2381,18 @@ class ApiService {
   // Peer-to-Peer File Transfer APIs
   // ═══════════════════════════════════════════════════════════════
 
-  String? get token => _token;
+  Future<Map<String, dynamic>> p2pGetIceServers() async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.p2pIceServersUrl));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'data': data is Map ? data : {}};
+      }
+      return {'success': false, 'error': 'Failed to load ICE servers'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
 
   Future<Map<String, dynamic>> p2pCreateSession({String fileName = '', int fileSize = 0, int? receiverId}) async {
     try {
@@ -1581,6 +2438,500 @@ class ApiService {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
       return {'success': false, 'error': 'Session not found'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getBreakStatus() async {
+    try {
+      await ensureAuth();
+      final response = await _authorizedGet(Uri.parse(AppConfig.breaksStatusUrl));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': _safeJsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load break status (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> startBreak(DateTime expectedBack) async {
+    try {
+      await ensureAuth();
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.breaksStartUrl),
+        body: jsonEncode({'expected_back': expectedBack.toUtc().toIso8601String()}),
+      );
+      return _parseBreakPost(response, failLabel: 'Could not start break');
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> endBreak() async {
+    try {
+      await ensureAuth();
+      final response = await _authorizedPost(Uri.parse(AppConfig.breaksBackUrl), body: '{}');
+      return _parseBreakPost(response, failLabel: 'Could not end break');
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getMyBreaks({String? date}) async {
+    try {
+      var url = AppConfig.breaksMyBreaksUrl;
+      if (date != null && date.isNotEmpty) url = '$url?date=$date';
+      final response = await _authorizedGet(Uri.parse(url));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to load breaks'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  // ─── Project vault APIs ───
+
+  Future<Map<String, dynamic>> getVaultCategories(int projectId) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.vaultCategoriesUrl(projectId)));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        return {
+          'success': true,
+          'data': decoded is List ? decoded : _extractJsonList(decoded),
+        };
+      }
+      return {'success': false, 'error': 'Failed to load vault categories (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateVaultCategory(
+    int projectId,
+    int categoryId, {
+    String? name,
+    String? description,
+  }) async {
+    try {
+      final body = <String, dynamic>{};
+      if (name != null) body['name'] = name;
+      if (description != null) body['description'] = description;
+      final response = await _authorizedPatch(
+        Uri.parse(AppConfig.vaultCategoryUrl(projectId, categoryId)),
+        body: jsonEncode(body),
+      );
+      final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+      if (response.statusCode == 200 && raw is Map) {
+        return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+      }
+      if (raw is Map) {
+        return {'success': false, 'error': raw['name'] ?? raw['detail'] ?? raw['error'] ?? 'Update failed'};
+      }
+      return {'success': false, 'error': 'Update category failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteVaultCategory(int projectId, int categoryId) async {
+    try {
+      final response = await _authorizedDelete(
+        Uri.parse(AppConfig.vaultCategoryUrl(projectId, categoryId)),
+      );
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Delete category failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> createVaultCategory(
+    int projectId, {
+    required String name,
+    String description = '',
+  }) async {
+    try {
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.vaultCategoriesUrl(projectId)),
+        body: jsonEncode({'name': name, 'description': description}),
+      );
+      final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+      if ((response.statusCode == 201 || response.statusCode == 200) && raw is Map) {
+        return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+      }
+      if (raw is Map) {
+        return {'success': false, 'error': raw['name'] ?? raw['detail'] ?? raw['error'] ?? 'Create failed'};
+      }
+      return {'success': false, 'error': 'Create category failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultEntries(
+    int projectId, {
+    int? categoryId,
+    String? query,
+  }) async {
+    try {
+      final q = <String, String>{};
+      if (categoryId != null) q['category_id'] = '$categoryId';
+      if (query != null && query.trim().isNotEmpty) q['q'] = query.trim();
+      final uri = Uri.parse(AppConfig.vaultEntriesUrl(projectId)).replace(queryParameters: q.isEmpty ? null : q);
+      final response = await _authorizedGet(uri);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        return {
+          'success': true,
+          'data': decoded is List ? decoded : _extractJsonList(decoded),
+        };
+      }
+      return {'success': false, 'error': 'Failed to load vault entries (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> createVaultEntry(
+    int projectId, {
+    required int categoryId,
+    required String name,
+    String url = '',
+    String username = '',
+    String password = '',
+    String notes = '',
+    bool isFavorite = false,
+  }) async {
+    try {
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.vaultEntriesUrl(projectId)),
+        body: jsonEncode({
+          'category': categoryId,
+          'name': name,
+          'url': url,
+          'username': username,
+          if (password.isNotEmpty) 'password': password,
+          'notes': notes,
+          'is_favorite': isFavorite,
+        }),
+      );
+      final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+      if ((response.statusCode == 201 || response.statusCode == 200) && raw is Map) {
+        return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+      }
+      if (raw is Map) {
+        return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? 'Create failed'};
+      }
+      return {'success': false, 'error': 'Create entry failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateVaultEntry(
+    int projectId,
+    int entryId, {
+    int? categoryId,
+    String? name,
+    String? url,
+    String? username,
+    String? password,
+    String? notes,
+    bool? isFavorite,
+  }) async {
+    try {
+      final body = <String, dynamic>{};
+      if (categoryId != null) body['category'] = categoryId;
+      if (name != null) body['name'] = name;
+      if (url != null) body['url'] = url;
+      if (username != null) body['username'] = username;
+      if (password != null) body['password'] = password;
+      if (notes != null) body['notes'] = notes;
+      if (isFavorite != null) body['is_favorite'] = isFavorite;
+      final response = await _authorizedPatch(
+        Uri.parse(AppConfig.vaultEntryUrl(projectId, entryId)),
+        body: jsonEncode(body),
+      );
+      final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+      if (response.statusCode == 200 && raw is Map) {
+        return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+      }
+      if (raw is Map) {
+        return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? 'Update failed'};
+      }
+      return {'success': false, 'error': 'Update failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteVaultEntry(int projectId, int entryId) async {
+    try {
+      final response = await _authorizedDelete(Uri.parse(AppConfig.vaultEntryUrl(projectId, entryId)));
+      if (response.statusCode == 204 || response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Delete failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> revealVaultEntry(int projectId, int entryId) async {
+    try {
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.vaultEntryRevealUrl(projectId, entryId)),
+        body: '{}',
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Reveal failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> copyVaultField(int projectId, int entryId, String field) async {
+    try {
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.vaultEntryCopyFieldUrl(projectId, entryId)),
+        body: jsonEncode({'field': field}),
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Copy failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> hideVaultPassword(int projectId, int entryId) async {
+    try {
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.vaultEntryHidePasswordUrl(projectId, entryId)),
+        body: '{}',
+      );
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Hide failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadVaultAttachment(
+    int projectId,
+    int entryId,
+    List<int> bytes,
+    String filename, {
+    String? title,
+  }) async {
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse(AppConfig.vaultEntryAttachmentUrl(projectId, entryId)),
+      );
+      request.headers.addAll(_authHeaderOnly());
+      request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+      if (title != null && title.trim().isNotEmpty) {
+        request.fields['title'] = title.trim();
+      }
+      final streamed = await request.send().timeout(const Duration(seconds: 120));
+      final response = await http.Response.fromStream(streamed);
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      var err = 'Upload failed';
+      try {
+        final d = jsonDecode(response.body);
+        if (d is Map) err = d['detail']?.toString() ?? d['error']?.toString() ?? err;
+      } catch (_) {}
+      return {'success': false, 'error': err};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultShares(int projectId, int entryId) async {
+    try {
+      final response = await _authorizedGet(
+        Uri.parse(AppConfig.vaultEntrySharesUrl(projectId, entryId)),
+      );
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        return {
+          'success': true,
+          'data': decoded is List ? decoded : _extractJsonList(decoded),
+        };
+      }
+      return {'success': false, 'error': 'Failed to load shares (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> shareVaultEntry(
+    int projectId,
+    int entryId, {
+    required List<int> userIds,
+    String permission = 'view',
+    String? expiresAt,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'user_ids': userIds,
+        'permission': permission,
+      };
+      if (expiresAt != null) body['expires_at'] = expiresAt;
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.vaultEntryShareUrl(projectId, entryId)),
+        body: jsonEncode(body),
+      );
+      final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+      if ((response.statusCode == 201 || response.statusCode == 200) && raw is Map) {
+        return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+      }
+      if (raw is Map) {
+        return {'success': false, 'error': raw['user_ids'] ?? raw['detail'] ?? raw['error'] ?? 'Share failed'};
+      }
+      return {'success': false, 'error': 'Share failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateVaultShare(
+    int projectId,
+    int entryId,
+    int shareId, {
+    String? permission,
+    String? expiresAt,
+    bool? isActive,
+  }) async {
+    try {
+      final body = <String, dynamic>{};
+      if (permission != null) body['permission'] = permission;
+      if (expiresAt != null) body['expires_at'] = expiresAt;
+      if (isActive != null) body['is_active'] = isActive;
+      final response = await _authorizedPatch(
+        Uri.parse(AppConfig.vaultShareDetailUrl(projectId, entryId, shareId)),
+        body: jsonEncode(body),
+      );
+      final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+      if (response.statusCode == 200 && raw is Map) {
+        return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+      }
+      if (raw is Map) {
+        return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? 'Update failed'};
+      }
+      return {'success': false, 'error': 'Update share failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> removeVaultShare(int projectId, int entryId, int shareId) async {
+    try {
+      final response = await _authorizedDelete(
+        Uri.parse(AppConfig.vaultShareDetailUrl(projectId, entryId, shareId)),
+      );
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+        return {'success': true, 'data': raw is Map ? Map<String, dynamic>.from(raw) : null};
+      }
+      return {'success': false, 'error': 'Remove share failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultActivity(int projectId, {int page = 1}) async {
+    try {
+      final uri = Uri.parse(AppConfig.vaultActivityUrl(projectId)).replace(
+        queryParameters: {'page': '$page', 'page_size': '30'},
+      );
+      final response = await _authorizedGet(uri);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map && decoded['results'] is List) {
+          return {'success': true, 'data': decoded['results'], 'next': decoded['next']};
+        }
+        if (decoded is List) {
+          return {'success': true, 'data': decoded};
+        }
+        return {'success': true, 'data': <dynamic>[]};
+      }
+      return {'success': false, 'error': 'Failed to load vault activity'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultEntryActivity(
+    int projectId,
+    int entryId, {
+    int page = 1,
+  }) async {
+    try {
+      final uri = Uri.parse(AppConfig.vaultEntryActivityUrl(projectId, entryId)).replace(
+        queryParameters: {'page': '$page', 'page_size': '30'},
+      );
+      final response = await _authorizedGet(uri);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map && decoded['results'] is List) {
+          return {'success': true, 'data': decoded['results'], 'next': decoded['next']};
+        }
+        if (decoded is List) {
+          return {'success': true, 'data': decoded};
+        }
+        return {'success': true, 'data': <dynamic>[]};
+      }
+      return {'success': false, 'error': 'Failed to load entry activity'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultContextCustomers() async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.vaultContextCustomersUrl));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        return {
+          'success': true,
+          'data': decoded is List ? decoded : _extractJsonList(decoded),
+        };
+      }
+      return {'success': false, 'error': 'Failed to load customers (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultContextCustomerProjects(int customerId) async {
+    try {
+      final response = await _authorizedGet(
+        Uri.parse(AppConfig.vaultContextCustomerProjectsUrl(customerId)),
+      );
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+        }
+        return {'success': false, 'error': 'Invalid response'};
+      }
+      return {'success': false, 'error': 'Failed to load projects (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
