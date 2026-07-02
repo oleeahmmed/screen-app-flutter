@@ -14,6 +14,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../config.dart';
 import '../utils/ws_connect.dart';
+import '../utils/platform_capabilities.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 
@@ -506,8 +507,45 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     return '${(b / 1073741824).toStringAsFixed(2)} GB';
   }
 
+  Widget _unsupportedPlatform() {
+    final body = Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.info_outline, size: 48, color: AppTheme.textMuted.withValues(alpha: 0.8)),
+            const SizedBox(height: 16),
+            Text(
+              'File transfer not available on Linux yet',
+              style: AppTheme.sectionTitle,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Use the Windows or mobile app for peer-to-peer file transfer.',
+              style: AppTheme.caption,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (widget.embedded) return body;
+
+    return Container(
+      decoration: AppTheme.screenGradient(),
+      child: SafeArea(child: body),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (!PlatformCapabilities.peerToPeerFileTransfer) {
+      return _unsupportedPlatform();
+    }
+
     if (widget.embedded) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -1,5 +1,8 @@
 // dashboard_page.dart — Home / time tracking hub (aims-webapps glass style)
 
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -301,8 +304,15 @@ class _DashboardPageState extends State<DashboardPage> {
           await _loadBreakInfo();
           if (mounted) setState(() => _breakRefresh++);
           if (AppSession.mayCaptureScreenshots) {
-            widget.screenshotService?.startCapture();
-            _showSnackBar('Checked in — monitoring active', AppTheme.success);
+            unawaited(widget.screenshotService?.startCapture());
+            if (Platform.isLinux) {
+              _showSnackBar(
+                'Checked in — screen capture runs in background',
+                AppTheme.success,
+              );
+            } else {
+              _showSnackBar('Checked in — monitoring active', AppTheme.success);
+            }
           } else {
             _showSnackBar(
               'Checked in — enable screenshots under Me → Profile',

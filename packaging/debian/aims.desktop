@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AIMS
+GenericName=iGenHR Client
+Comment=iGenHR workforce client
+Exec=/usr/bin/aims
+Icon=aims
+Terminal=false
+Categories=Office;Network;
+StartupWMClass=aims
+Keywords=igenhr;aims;hr;attendance;

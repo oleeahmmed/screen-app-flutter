@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../services/api_service.dart';
@@ -80,31 +82,32 @@ class _BreakPanelState extends State<BreakPanel> {
       if (wasOnBreak) widget.onBreakChanged?.call(false);
       return;
     }
-    setState(() => _loading = true);
-    final r = await widget.apiService.getBreakStatus();
-    final my = await widget.apiService.getMyBreaks();
-    if (!mounted) return;
-    if (r['success'] == true) {
-      final data = r['data'] as Map<String, dynamic>? ?? {};
-      final nextOnBreak = data['on_break'] == true;
-      final wasOnBreak = _onBreak;
-      setState(() {
-        _onBreak = nextOnBreak;
-        _activeBreak = data['break'] as Map<String, dynamic>?;
-        _loading = false;
-      });
-      if (nextOnBreak != wasOnBreak) {
-        widget.onBreakChanged?.call(nextOnBreak);
+    if (mounted) setState(() => _loading = true);
+    try {
+      final r = await widget.apiService.getBreakStatus();
+      final my = await widget.apiService.getMyBreaks();
+      if (!mounted) return;
+      if (r['success'] == true) {
+        final data = r['data'] as Map<String, dynamic>? ?? {};
+        final nextOnBreak = data['on_break'] == true;
+        final wasOnBreak = _onBreak;
+        setState(() {
+          _onBreak = nextOnBreak;
+          _activeBreak = data['break'] as Map<String, dynamic>?;
+        });
+        if (nextOnBreak != wasOnBreak) {
+          widget.onBreakChanged?.call(nextOnBreak);
+        }
+        if (_onBreak && widget.screenshotService?.isRunning == true) {
+          _screenshotsPausedForBreak = true;
+          unawaited(widget.screenshotService?.stopCapture());
+        }
       }
-      if (_onBreak && widget.screenshotService?.isRunning == true) {
-        _screenshotsPausedForBreak = true;
-        await widget.screenshotService?.stopCapture();
+      if (my['success'] == true && mounted) {
+        setState(() => _breakSummary = my['data'] as Map<String, dynamic>?);
       }
-    } else {
-      setState(() => _loading = false);
-    }
-    if (my['success'] == true && mounted) {
-      setState(() => _breakSummary = my['data'] as Map<String, dynamic>?);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -211,7 +214,7 @@ class _BreakPanelState extends State<BreakPanel> {
     if (r['success'] == true) {
       if (_screenshotsPausedForBreak && widget.isClockedIn) {
         _screenshotsPausedForBreak = false;
-        await widget.screenshotService?.startCapture();
+        unawaited(widget.screenshotService?.startCapture());
       }
       setState(() {
         _onBreak = false;

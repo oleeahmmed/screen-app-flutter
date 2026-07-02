@@ -27,6 +27,7 @@ import 'widgets/tool_page_scaffold.dart';
 import 'widgets/notification_banner.dart';
 import 'widgets/app_top_bar.dart';
 import 'services/app_navigation.dart';
+import 'utils/platform_capabilities.dart';
 
 int _intFromDynamic(dynamic v, int fallback) {
   if (v is int) return v;
@@ -75,6 +76,64 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _homeRefreshToken = 0;
   StreamSubscription<Map<String, dynamic>>? _notifPushSub;
   AppLifecycleState _lifecycle = AppLifecycleState.resumed;
+
+  Widget? _dashboardPage;
+  Widget? _workHubPage;
+  Widget? _chatPage;
+  Widget? _notificationsPage;
+  Widget? _profilePage;
+
+  void _clearPageCache() {
+    _dashboardPage = null;
+    _workHubPage = null;
+    _chatPage = null;
+    _notificationsPage = null;
+    _profilePage = null;
+  }
+
+  void _ensurePageBuilt(int index) {
+    switch (index) {
+      case 0:
+        _dashboardPage ??= DashboardPage(
+          apiService: _apiService,
+          username: _username,
+          screenshotService: _screenshotService,
+          refreshToken: _homeRefreshToken,
+          onLogout: _handleLogout,
+        );
+      case 1:
+        _workHubPage ??= WorkHubPage(
+          apiService: _apiService,
+          screenshotService: _screenshotService,
+          onLogout: _handleLogout,
+        );
+      case 2:
+        _chatPage ??= ChatPage(apiService: _apiService);
+      case 3:
+        _notificationsPage ??= NotificationsPage(
+          apiService: _apiService,
+          refreshToken: _notifListRefreshToken,
+          onNotificationsChanged: () => _notificationService.syncUnreadCount(),
+        );
+      case 4:
+        _profilePage ??= ProfilePage(
+          apiService: _apiService,
+          onOpenP2P: PlatformCapabilities.peerToPeerFileTransfer ? _openP2P : null,
+          onLogout: _handleLogout,
+        );
+    }
+  }
+
+  List<Widget> _mainStackChildren() {
+    _ensurePageBuilt(_currentIndex);
+    return [
+      _dashboardPage ?? const SizedBox.shrink(),
+      _workHubPage ?? const SizedBox.shrink(),
+      _chatPage ?? const SizedBox.shrink(),
+      _notificationsPage ?? const SizedBox.shrink(),
+      _profilePage ?? const SizedBox.shrink(),
+    ];
+  }
 
   @override
   void initState() {
@@ -157,6 +216,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               _username = username;
               _isLoading = false;
             });
+            _ensurePageBuilt(0);
             _startNotifications();
             if (data['employee'] != null) {
               _schedulePrivacyNoticeDialog();
@@ -213,6 +273,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       _username = username;
       _currentIndex = 0;
     });
+    _clearPageCache();
+    _ensurePageBuilt(0);
     _startNotifications();
     _schedulePrivacyNoticeDialog();
     _scheduleClosingReportDialog();
@@ -309,6 +371,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       );
     }
 
+    _notificationsPage = null;
     setState(() => _notifListRefreshToken++);
 
     if (notifType == 'closing_report_due') {
@@ -348,6 +411,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     await SharedPreferences.getInstance().then((p) => p.clear());
     AppSession.setConsent(false);
     _screenshotService.stopCapture();
+    _clearPageCache();
     if (!mounted) return;
     setState(() {
       _isLoggedIn = false;
@@ -442,31 +506,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           Expanded(
             child: IndexedStack(
               index: _currentIndex,
-              children: [
-                DashboardPage(
-                  apiService: _apiService,
-                  username: _username,
-                  screenshotService: _screenshotService,
-                  refreshToken: _homeRefreshToken,
-                  onLogout: _handleLogout,
-                ),
-                WorkHubPage(
-                  apiService: _apiService,
-                  screenshotService: _screenshotService,
-                  onLogout: _handleLogout,
-                ),
-                ChatPage(apiService: _apiService),
-                NotificationsPage(
-                  apiService: _apiService,
-                  refreshToken: _notifListRefreshToken,
-                  onNotificationsChanged: () => _notificationService.syncUnreadCount(),
-                ),
-                ProfilePage(
-                  apiService: _apiService,
-                  onOpenP2P: _openP2P,
-                  onLogout: _handleLogout,
-                ),
-              ],
+              children: _mainStackChildren(),
             ),
           ),
         ],
@@ -499,8 +539,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void _onNavSelected(int i) {
     setState(() {
       _currentIndex = i;
-      if (i == 0) _homeRefreshToken++;
+      if (i == 0) {
+        _homeRefreshToken++;
+        _dashboardPage = null;
+      }
     });
+    _ensurePageBuilt(i);
     if (i == 3) _refreshNotificationBadge();
   }
 

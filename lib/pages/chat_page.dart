@@ -9,6 +9,7 @@ import '../services/voice_recorder_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/empty_state.dart';
 import '../utils/responsive.dart';
+import '../utils/platform_capabilities.dart';
 
 class ChatPage extends StatefulWidget {
   final ApiService apiService;
@@ -35,9 +36,18 @@ class _ChatPageState extends State<ChatPage> {
   Timer? _recordTimer;
   Process? _recProcess;
   String? _recPath;
-  final VoiceRecorderService _voiceRecorder = VoiceRecorderService();
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  VoiceRecorderService? _voiceRecorder;
+  AudioPlayer? _audioPlayer;
   String? _playingUrl;
+
+  bool get _supportsNativeAudio => PlatformCapabilities.nativeAudio;
+
+  VoiceRecorderService get _recorder => _voiceRecorder ??= VoiceRecorderService();
+
+  AudioPlayer? get _player {
+    if (!_supportsNativeAudio) return null;
+    return _audioPlayer ??= AudioPlayer();
+  }
 
   final _msgController = TextEditingController();
   final _searchController = TextEditingController();
@@ -54,8 +64,8 @@ class _ChatPageState extends State<ChatPage> {
     _refreshTimer?.cancel();
     _recordTimer?.cancel();
     _recProcess?.kill();
-    _voiceRecorder.dispose();
-    _audioPlayer.dispose();
+    _voiceRecorder?.dispose();
+    _audioPlayer?.dispose();
     _msgController.dispose();
     _searchController.dispose();
     _scrollController.dispose();
@@ -155,7 +165,7 @@ class _ChatPageState extends State<ChatPage> {
     if (_isRecording) {
       await _stopAndSendRecording();
     } else if (Platform.isAndroid || Platform.isIOS) {
-      final started = await _voiceRecorder.start();
+      final started = await _recorder.start();
       if (!started) {
         _showError('Microphone permission required');
         return;
@@ -215,7 +225,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
     String? filePath;
     if (Platform.isAndroid || Platform.isIOS) {
-      filePath = await _voiceRecorder.stop();
+      filePath = await _recorder.stop();
     } else {
       final dir = await getTemporaryDirectory();
       final stopFile = File('${dir.path}${Platform.pathSeparator}stop_rec.flag');
@@ -283,10 +293,21 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   // ─── Play Voice ───
   Future<void> _playVoice(String url) async {
-    if (_playingUrl == url) { await _audioPlayer.stop(); setState(() => _playingUrl = null); return; }
+    final player = _player;
+    if (player == null) {
+      _showError('Voice playback is not available on this platform');
+      return;
+    }
+    if (_playingUrl == url) {
+      await player.stop();
+      setState(() => _playingUrl = null);
+      return;
+    }
     setState(() => _playingUrl = url);
-    await _audioPlayer.play(UrlSource(url));
-    _audioPlayer.onPlayerComplete.listen((_) { if (mounted) setState(() => _playingUrl = null); });
+    await player.play(UrlSource(url));
+    player.onPlayerComplete.listen((_) {
+      if (mounted) setState(() => _playingUrl = null);
+    });
   }
 
   void _refreshMessages() {

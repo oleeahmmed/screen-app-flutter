@@ -5,9 +5,11 @@ import 'package:record/record.dart';
 
 /// Voice recording for chat — Android/iOS via [record], Windows via external script.
 class VoiceRecorderService {
-  final AudioRecorder _recorder = AudioRecorder();
+  AudioRecorder? _recorder;
   String? _path;
   bool _isRecording = false;
+
+  AudioRecorder get _rec => _recorder ??= AudioRecorder();
 
   bool get isRecording => _isRecording;
   String? get currentPath => _path;
@@ -18,13 +20,13 @@ class VoiceRecorderService {
     final mic = await Permission.microphone.request();
     if (!mic.isGranted) return false;
 
-    if (!await _recorder.hasPermission()) return false;
+    if (!await _rec.hasPermission()) return false;
 
     final dir = await getTemporaryDirectory();
     _path =
         '${dir.path}${Platform.pathSeparator}voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
 
-    await _recorder.start(
+    await _rec.start(
       const RecordConfig(
         encoder: AudioEncoder.aacLc,
         bitRate: 128000,
@@ -38,14 +40,14 @@ class VoiceRecorderService {
 
   Future<String?> stop() async {
     if (!_isRecording) return null;
-    final path = await _recorder.stop();
+    final path = await _rec.stop();
     _isRecording = false;
     return path ?? _path;
   }
 
   Future<void> cancel() async {
     if (_isRecording) {
-      await _recorder.stop();
+      await _rec.stop();
       _isRecording = false;
     }
     final p = _path;
@@ -58,6 +60,6 @@ class VoiceRecorderService {
   }
 
   void dispose() {
-    _recorder.dispose();
+    _recorder?.dispose();
   }
 }

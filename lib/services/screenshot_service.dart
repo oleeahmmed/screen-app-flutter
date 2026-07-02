@@ -35,6 +35,22 @@ class ScreenshotService {
   static const int idleThresholdSeconds = 60;
   static const bool enableDebugLogs = true;
 
+  static const List<String> _linuxCaptureTools = [
+    'grim',
+    'gnome-screenshot',
+    'spectacle',
+    'scrot',
+    'import',
+    'maim',
+  ];
+
+  static const List<String> _linuxToolPaths = [
+    '/usr/bin',
+    '/usr/local/bin',
+    '/bin',
+    '/snap/bin',
+  ];
+
   ScreenshotService(this.apiService);
 
   void _debugLog(String message) {
@@ -57,6 +73,17 @@ class ScreenshotService {
       _debugLog('Screenshot capture not supported on ${Platform.operatingSystem}');
       return;
     }
+
+    if (Platform.isLinux) {
+      final hasTool = await _linuxCaptureToolAvailable();
+      if (!hasTool) {
+        _debugLog(
+          'Linux screenshot skipped — install: sudo apt install gnome-screenshot grim scrot',
+        );
+        return;
+      }
+    }
+
     _isRunning = true;
 
     final interval = AppConfig.screenshotInterval.clamp(15, 600);
@@ -75,7 +102,8 @@ class ScreenshotService {
       _checkActivityStatus();
     });
 
-    await _captureOnce();
+    // First capture runs in background — must not block clock-in UI.
+    unawaited(_captureOnce());
   }
 
   Future<void> _prepareAndroidCapture() async {
@@ -202,17 +230,26 @@ try {
       for (final tool in tools) {
         try {
           final exe = tool[0];
-          if (!await _commandExists(exe)) continue;
+          final resolved = await _resolveCommand(exe);
+          if (resolved == null) continue;
           final args = tool.sublist(1);
-          final result = await Process.run(exe, args, runInShell: false);
+          ProcessResult result;
+          try {
+            result = await Process.run(resolved, args, runInShell: false)
+                .timeout(const Duration(seconds: 12));
+          } on TimeoutException {
+            _debugLog('Linux capture timeout: $exe');
+            continue;
+          }
           if (result.exitCode != 0) continue;
 
           var readPath = tempFile;
           if (exe == 'xwd') {
             readPath = tempFile.replaceAll('.png', '.xwd');
-            if (await _commandExists('convert')) {
+            final convert = await _resolveCommand('convert');
+            if (convert != null) {
               final pngPath = tempFile;
-              final conv = await Process.run('convert', [readPath, pngPath]);
+              final conv = await Process.run(convert, [readPath, pngPath]);
               if (conv.exitCode == 0) {
                 await File(readPath).delete().catchError((_) {});
                 readPath = pngPath;
@@ -236,13 +273,51 @@ try {
     }
   }
 
+  Future<bool> _linuxCaptureToolAvailable() async {
+    for (final tool in _linuxCaptureTools) {
+      if (await _commandExists(tool)) return true;
+    }
+    return false;
+  }
+
   Future<bool> _commandExists(String command) async {
     try {
       final result = await Process.run('which', [command], runInShell: false);
-      return result.exitCode == 0 && result.stdout.toString().trim().isNotEmpty;
-    } catch (_) {
-      return false;
+      if (result.exitCode == 0 && result.stdout.toString().trim().isNotEmpty) {
+        return true;
+      }
+    } catch (_) {}
+    if (command.contains('/')) {
+      try {
+        return await File(command).exists();
+      } catch (_) {
+        return false;
+      }
     }
+    for (final dir in _linuxToolPaths) {
+      try {
+        if (await File('$dir/$command').exists()) return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  Future<String?> _resolveCommand(String command) async {
+    if (command.contains('/')) return command;
+    for (final dir in _linuxToolPaths) {
+      final path = '$dir/$command';
+      try {
+        if (await File(path).exists()) return path;
+      } catch (_) {}
+    }
+    try {
+      final result = await Process.run('which', [command], runInShell: false);
+      if (result.exitCode == 0) {
+        final path = result.stdout.toString().trim();
+        if (path.isNotEmpty) return path;
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> _uploadImage(Uint8List imageBytes) async {

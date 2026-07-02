@@ -13,6 +13,7 @@ import '../config.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
+import '../utils/platform_capabilities.dart';
 import '../widgets/app_quick_menu.dart';
 import '../widgets/kanban_assignee_picker.dart';
 import '../widgets/task_status_dropdown.dart';
@@ -1268,6 +1269,62 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   }
 
   Widget _attachmentsPanel() {
+    final panel = AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      padding: const EdgeInsets.all(20),
+      decoration: _cardDeco().copyWith(
+        border: Border.all(
+          color: _attachmentsDragOver ? AppTheme.primary : Colors.white.withValues(alpha: 0.08),
+          width: _attachmentsDragOver ? 2 : 1,
+        ),
+      ),
+      child: _attachments.isEmpty
+          ? Center(
+              child: Text(
+                _attachmentsDragOver
+                    ? 'Drop files here…'
+                    : (Responsive.isMobile(context)
+                        ? 'No attachments — tap Upload'
+                        : PlatformCapabilities.fileDragDrop
+                            ? 'No attachments yet — upload, drop, or paste (Ctrl+V)'
+                            : 'No attachments yet — upload or paste (Ctrl+V)'),
+                style: TextStyle(
+                  color: _attachmentsDragOver ? AppTheme.primary : Colors.white.withValues(alpha: 0.35),
+                  fontSize: 12,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            )
+          : Column(
+              children: _attachments.map((a) {
+                final name = a['file_name']?.toString() ?? 'file';
+                return ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.insert_drive_file, color: Color(0xFFA78BFA), size: 20),
+                  title: Text(name, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.open_in_new, size: 16, color: Colors.white38),
+                        onPressed: () => _openUrl(a['file_url']?.toString()),
+                        tooltip: 'Open',
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
+                        onPressed: () => _deleteAttachment(a),
+                        tooltip: 'Delete',
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+    );
+
+    if (!PlatformCapabilities.fileDragDrop) return panel;
+
     return DropTarget(
       onDragEntered: (_) => setState(() => _attachmentsDragOver = true),
       onDragExited: (_) => setState(() => _attachmentsDragOver = false),
@@ -1278,57 +1335,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           await _uploadBytes(bytes, f.name);
         }
       },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.all(20),
-        decoration: _cardDeco().copyWith(
-          border: Border.all(
-            color: _attachmentsDragOver ? AppTheme.primary : Colors.white.withValues(alpha: 0.08),
-            width: _attachmentsDragOver ? 2 : 1,
-          ),
-        ),
-        child: _attachments.isEmpty
-            ? Center(
-                child: Text(
-                  _attachmentsDragOver
-                      ? 'Drop files here…'
-                      : (Responsive.isMobile(context)
-                          ? 'No attachments — tap Upload'
-                          : 'No attachments yet — upload, drop, or paste (Ctrl+V)'),
-                  style: TextStyle(
-                    color: _attachmentsDragOver ? AppTheme.primary : Colors.white.withValues(alpha: 0.35),
-                    fontSize: 12,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              )
-            : Column(
-                children: _attachments.map((a) {
-                  final name = a['file_name']?.toString() ?? 'file';
-                  return ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.insert_drive_file, color: Color(0xFFA78BFA), size: 20),
-                    title: Text(name, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.open_in_new, size: 16, color: Colors.white38),
-                          onPressed: () => _openUrl(a['file_url']?.toString()),
-                          tooltip: 'Open',
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
-                          onPressed: () => _deleteAttachment(a),
-                          tooltip: 'Delete',
-                        ),
-                      ],
-                    ),
-                  );
-                }).toList(),
-              ),
-      ),
+      child: panel,
     );
   }
 
