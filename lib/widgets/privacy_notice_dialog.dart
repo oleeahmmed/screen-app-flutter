@@ -6,6 +6,8 @@ import '../config.dart';
 import '../pages/data_privacy_notice_page.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
+import '../utils/platform_capabilities.dart';
 import '../utils/responsive.dart';
 
 /// Blocking dialog until the user agrees or taps Later.
@@ -32,7 +34,7 @@ class _PrivacyNoticeDialogContent extends StatefulWidget {
 }
 
 class _PrivacyNoticeDialogContentState extends State<_PrivacyNoticeDialogContent> {
-  bool _consentScreenshots = true;
+  late bool _consentScreenshots = PlatformCapabilities.screenshotMonitoring;
   bool _submitting = false;
 
   Future<void> _accept() async {
@@ -56,17 +58,10 @@ class _PrivacyNoticeDialogContentState extends State<_PrivacyNoticeDialogContent
       AppSession.setConsent(consent);
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Notice accepted')),
-      );
+      AppToast.saved(context, message: 'Notice accepted');
     } else {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(r['error']?.toString() ?? 'Could not save — try again'),
-          backgroundColor: AppTheme.danger,
-        ),
-      );
+      AppToast.saveFailed(context, r['error']?.toString() ?? 'Could not save — try again');
     }
   }
 
@@ -106,8 +101,11 @@ class _PrivacyNoticeDialogContentState extends State<_PrivacyNoticeDialogContent
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Text(
-                        'This app may collect screenshots and related activity data (window titles, idle state, timestamps) '
-                        'for workplace monitoring as configured by your organization.',
+                        PlatformCapabilities.screenshotMonitoring
+                            ? 'This app may collect screenshots and related activity data (window titles, idle state, timestamps) '
+                                'for workplace monitoring as configured by your organization.'
+                            : 'This app may collect activity and attendance data for workplace monitoring as configured by your organization. '
+                                'Screenshot capture is not used on this device.',
                         style: TextStyle(
                           color: AppTheme.textMuted,
                           height: 1.45,
@@ -131,24 +129,25 @@ class _PrivacyNoticeDialogContentState extends State<_PrivacyNoticeDialogContent
                           label: const Text('Read full notice'),
                         ),
                       ),
-                      CheckboxListTile(
-                        value: _consentScreenshots,
-                        onChanged: _submitting ? null : (v) => setState(() => _consentScreenshots = v ?? true),
-                        title: Text(
-                          'I agree to screenshot / monitoring capture as allowed by my organization.',
-                          style: TextStyle(
-                            fontSize: narrow ? 11 : 12,
-                            color: AppTheme.textPrimary.withValues(alpha: 0.85),
+                      if (PlatformCapabilities.screenshotMonitoring)
+                        CheckboxListTile(
+                          value: _consentScreenshots,
+                          onChanged: _submitting ? null : (v) => setState(() => _consentScreenshots = v ?? true),
+                          title: Text(
+                            'I agree to screenshot / monitoring capture as allowed by my organization.',
+                            style: TextStyle(
+                              fontSize: narrow ? 11 : 12,
+                              color: AppTheme.textPrimary.withValues(alpha: 0.85),
+                            ),
                           ),
+                          subtitle: Text(
+                            'Change anytime in Profile.',
+                            style: TextStyle(fontSize: 10, color: AppTheme.textMuted.withValues(alpha: 0.8)),
+                          ),
+                          controlAffinity: ListTileControlAffinity.leading,
+                          contentPadding: EdgeInsets.zero,
+                          dense: mobile,
                         ),
-                        subtitle: Text(
-                          'Change anytime in Profile.',
-                          style: TextStyle(fontSize: 10, color: AppTheme.textMuted.withValues(alpha: 0.8)),
-                        ),
-                        controlAffinity: ListTileControlAffinity.leading,
-                        contentPadding: EdgeInsets.zero,
-                        dense: mobile,
-                      ),
                     ],
                   ),
                 ),

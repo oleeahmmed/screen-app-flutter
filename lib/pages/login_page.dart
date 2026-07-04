@@ -1,4 +1,6 @@
-// login_page.dart — Login (aims-webapps glass style)
+// login_page.dart — aims-webapps Login.jsx clone
+
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,6 +12,8 @@ import '../services/user_data_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_logo.dart';
+
+enum _LoginView { login, forgot }
 
 class LoginPage extends StatefulWidget {
   final ApiService apiService;
@@ -28,14 +32,37 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _forgotEmailController = TextEditingController();
+
+  _LoginView _view = _LoginView.login;
   bool _isLoading = false;
   bool _showPassword = false;
+  bool _rememberMe = false;
   String? _errorMessage;
+  bool _forgotSent = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRemembered();
+  }
+
+  Future<void> _loadRemembered() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('remembered_username');
+    if (saved != null && saved.isNotEmpty && mounted) {
+      setState(() {
+        _usernameController.text = saved;
+        _rememberMe = true;
+      });
+    }
+  }
 
   @override
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
+    _forgotEmailController.dispose();
     super.dispose();
   }
 
@@ -51,7 +78,7 @@ class _LoginPageState extends State<LoginPage> {
     });
 
     final result = await widget.apiService.login(
-      _usernameController.text,
+      _usernameController.text.trim(),
       _passwordController.text,
     );
 
@@ -72,6 +99,11 @@ class _LoginPageState extends State<LoginPage> {
       widget.apiService.setToken(token);
 
       final prefs = await SharedPreferences.getInstance();
+      if (_rememberMe) {
+        await prefs.setString('remembered_username', _usernameController.text.trim());
+      } else {
+        await prefs.remove('remembered_username');
+      }
       await prefs.setString('auth_token', token);
       await prefs.setString('refresh_token', data['refresh'] ?? '');
       await prefs.setString('username', username);
@@ -116,29 +148,53 @@ class _LoginPageState extends State<LoginPage> {
 
       widget.onLoginSuccess(username, token);
     } else {
-      setState(() => _errorMessage = result['error'] ?? 'Login failed');
+      setState(() => _errorMessage = result['error'] ?? 'Invalid username or password, or account is inactive.');
+    }
+  }
+
+  Future<void> _sendForgotPassword() async {
+    final email = _forgotEmailController.text.trim();
+    if (email.isEmpty) {
+      setState(() => _errorMessage = 'Enter your email address');
+      return;
+    }
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+    final r = await widget.apiService.forgotPassword(email);
+    if (!mounted) return;
+    setState(() {
+      _isLoading = false;
+      if (r['success'] == true) {
+        _forgotSent = true;
+        _errorMessage = null;
+      } else {
+        _errorMessage = r['error']?.toString() ?? 'Could not send reset link';
+      }
+    });
+  }
+
+  String get _subtitle {
+    switch (_view) {
+      case _LoginView.forgot:
+        return 'Reset your password';
+      case _LoginView.login:
+        return 'Sign in to your workspace';
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final maxW = Responsive.isMobile(context) ? double.infinity : 420.0;
+    final maxW = Responsive.isMobile(context) ? double.infinity : 448.0;
+    final pad = Responsive.isMobile(context) ? 20.0 : 32.0;
 
     return Scaffold(
       body: Stack(
+        fit: StackFit.expand,
         children: [
           Container(decoration: AppTheme.screenGradient()),
-          // Ambient orbs
-          Positioned(
-            top: MediaQuery.sizeOf(context).height * 0.15,
-            left: MediaQuery.sizeOf(context).width * 0.1,
-            child: _orb(const Color(0xFF6366F1), 220),
-          ),
-          Positioned(
-            bottom: MediaQuery.sizeOf(context).height * 0.15,
-            right: MediaQuery.sizeOf(context).width * 0.08,
-            child: _orb(const Color(0xFF0EA5E9), 200),
-          ),
+          _ambientOrbs(context),
           SafeArea(
             child: Center(
               child: SingleChildScrollView(
@@ -147,7 +203,7 @@ class _LoginPageState extends State<LoginPage> {
                   constraints: BoxConstraints(maxWidth: maxW),
                   child: Container(
                     decoration: AppTheme.loginShell(),
-                    padding: EdgeInsets.all(Responsive.isMobile(context) ? 20 : 32),
+                    padding: EdgeInsets.all(pad),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -155,87 +211,22 @@ class _LoginPageState extends State<LoginPage> {
                         Center(
                           child: Column(
                             children: [
-                              const AppLogo(size: 72),
+                              const AppLogo(size: 56, showBorder: false),
                               const SizedBox(height: 16),
-                              ShaderMask(
-                                shaderCallback: (b) => AppTheme.titleGradient().createShader(b),
-                                child: const Text(
-                                  'AIMS',
-                                  style: TextStyle(
-                                    fontSize: 26,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                    letterSpacing: 1.2,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              const Text(
-                                'Sign in to your workspace',
-                                style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
+                              Text(
+                                _subtitle,
+                                style: const TextStyle(color: Color(0xFFA1A1AA), fontSize: 14),
                               ),
                             ],
                           ),
                         ),
                         const SizedBox(height: 28),
-                        if (_errorMessage != null) ...[
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: AppTheme.danger.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: AppTheme.danger.withValues(alpha: 0.3)),
-                            ),
-                            child: Text(
-                              _errorMessage!,
-                              style: TextStyle(color: AppTheme.danger.withValues(alpha: 0.9), fontSize: 12),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                        ],
-                        _label('Username'),
-                        TextField(
-                          controller: _usernameController,
-                          enabled: !_isLoading,
-                          style: const TextStyle(color: AppTheme.textPrimary),
-                          decoration: _inputDeco(hint: 'Username or email'),
-                        ),
-                        const SizedBox(height: 14),
-                        _label('Password'),
-                        TextField(
-                          controller: _passwordController,
-                          enabled: !_isLoading,
-                          obscureText: !_showPassword,
-                          style: const TextStyle(color: AppTheme.textPrimary),
-                          decoration: _inputDeco(hint: 'Password').copyWith(
-                            suffixIcon: IconButton(
-                              icon: Icon(
-                                _showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                                color: AppTheme.textMuted,
-                                size: 20,
-                              ),
-                              onPressed: () => setState(() => _showPassword = !_showPassword),
-                            ),
-                          ),
-                          onSubmitted: (_) => _login(),
-                        ),
+                        if (_view == _LoginView.login) _buildLoginForm() else _buildForgotForm(),
                         const SizedBox(height: 24),
-                        FilledButton(
-                          onPressed: _isLoading ? null : _login,
-                          style: AppTheme.primaryButton(),
-                          child: _isLoading
-                              ? const SizedBox(
-                                  width: 22,
-                                  height: 22,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                )
-                              : const Text('Sign In', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-                        ),
-                        const SizedBox(height: 20),
                         const Text(
-                          '© AIMS Monitor Pro',
+                          '© 2024 AIMS Monitor Pro. All rights reserved.',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: Color(0xFF52525B), fontSize: 11),
+                          style: TextStyle(color: Color(0xFF52525B), fontSize: 12),
                         ),
                       ],
                     ),
@@ -249,14 +240,259 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  Widget _orb(Color color, double size) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: color.withValues(alpha: 0.12),
+  Widget _ambientOrbs(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    return IgnorePointer(
+      child: Stack(
+        children: [
+          Positioned(
+            top: size.height * 0.22,
+            left: size.width * 0.18,
+            child: _blurOrb(const Color(0xFF6366F1), 280),
+          ),
+          Positioned(
+            bottom: size.height * 0.2,
+            right: size.width * 0.15,
+            child: _blurOrb(const Color(0xFF0EA5E9), 260),
+          ),
+          Positioned(
+            top: size.height * 0.45,
+            left: size.width * 0.35,
+            child: _blurOrb(const Color(0xFF38BDF8), 320),
+          ),
+        ],
       ),
+    );
+  }
+
+  Widget _blurOrb(Color color, double size) {
+    return ImageFiltered(
+      imageFilter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color.withValues(alpha: 0.14),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoginForm() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _label('Username'),
+        TextField(
+          controller: _usernameController,
+          enabled: !_isLoading,
+          autocorrect: false,
+          textCapitalization: TextCapitalization.none,
+          style: const TextStyle(color: AppTheme.textPrimary),
+          decoration: _glassInput(hint: 'Enter your username'),
+          onSubmitted: (_) => _login(),
+        ),
+        const SizedBox(height: 16),
+        _label('Password'),
+        TextField(
+          controller: _passwordController,
+          enabled: !_isLoading,
+          obscureText: !_showPassword,
+          style: const TextStyle(color: AppTheme.textPrimary),
+          decoration: _glassInput(hint: '••••••••').copyWith(
+            suffixIcon: IconButton(
+              icon: Icon(
+                _showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                color: const Color(0xFF64748B),
+                size: 18,
+              ),
+              onPressed: () => setState(() => _showPassword = !_showPassword),
+            ),
+          ),
+          onSubmitted: (_) => _login(),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: Checkbox(
+                value: _rememberMe,
+                onChanged: _isLoading ? null : (v) => setState(() => _rememberMe = v ?? false),
+                activeColor: const Color(0xFF3B82F6),
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.25)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _isLoading ? null : () => setState(() => _rememberMe = !_rememberMe),
+              child: const Text('Remember me', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12)),
+            ),
+            const Spacer(),
+            TextButton(
+              onPressed: _isLoading
+                  ? null
+                  : () => setState(() {
+                        _view = _LoginView.forgot;
+                        _errorMessage = null;
+                        _forgotSent = false;
+                      }),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF60A5FA),
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Forgot password?', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+        if (_errorMessage != null) ...[
+          const SizedBox(height: 14),
+          _errorBox(_errorMessage!),
+        ],
+        const SizedBox(height: 18),
+        _primaryBtn(
+          label: _isLoading ? 'Signing in…' : 'Sign In',
+          onPressed: _isLoading ? null : _login,
+          loading: _isLoading,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildForgotForm() {
+    if (_forgotSent) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF10B981).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.2)),
+            ),
+            child: Text(
+              'Password reset instructions sent to ${_forgotEmailController.text.trim()}. Check your inbox.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xFF6EE7B7), fontSize: 12),
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextButton(
+            onPressed: () => setState(() {
+              _view = _LoginView.login;
+              _forgotSent = false;
+            }),
+            child: const Text('← Back to sign in', style: TextStyle(color: Color(0xFF60A5FA), fontSize: 12)),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          "Enter your email and we'll send you a reset link.",
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+        ),
+        const SizedBox(height: 16),
+        _label('Email Address'),
+        TextField(
+          controller: _forgotEmailController,
+          enabled: !_isLoading,
+          keyboardType: TextInputType.emailAddress,
+          style: const TextStyle(color: AppTheme.textPrimary),
+          decoration: _glassInput(hint: 'you@example.com'),
+        ),
+        if (_errorMessage != null) ...[
+          const SizedBox(height: 14),
+          _errorBox(_errorMessage!),
+        ],
+        const SizedBox(height: 18),
+        _primaryBtn(
+          label: _isLoading ? 'Sending…' : 'Send Reset Link',
+          onPressed: _isLoading ? null : _sendForgotPassword,
+          loading: _isLoading,
+        ),
+        const SizedBox(height: 12),
+        TextButton(
+          onPressed: _isLoading
+              ? null
+              : () => setState(() {
+                    _view = _LoginView.login;
+                    _errorMessage = null;
+                  }),
+          child: const Text('← Back to sign in', style: TextStyle(color: Color(0xFF60A5FA), fontSize: 12)),
+        ),
+      ],
+    );
+  }
+
+  Widget _primaryBtn({
+    required String label,
+    required VoidCallback? onPressed,
+    bool loading = false,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF3B82F6), Color(0xFF2563EB)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF3B82F6).withValues(alpha: 0.35),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            child: Center(
+              child: loading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _errorBox(String msg) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEF4444).withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.2)),
+      ),
+      child: Text(msg, style: const TextStyle(color: Color(0xFFFCA5A5), fontSize: 12)),
     );
   }
 
@@ -265,25 +501,25 @@ class _LoginPageState extends State<LoginPage> {
       padding: const EdgeInsets.only(bottom: 6),
       child: Text(
         text,
-        style: const TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.w500),
+        style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12, fontWeight: FontWeight.w500),
       ),
     );
   }
 
-  InputDecoration _inputDeco({required String hint}) {
+  InputDecoration _glassInput({required String hint}) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7)),
+      hintStyle: TextStyle(color: const Color(0xFFA1A1AA).withValues(alpha: 0.75)),
       filled: true,
-      fillColor: AppTheme.surface2.withValues(alpha: 0.65),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+      fillColor: const Color(0xFF0F172A).withValues(alpha: 0.65),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide(color: const Color(0xFF93C5FD).withValues(alpha: 0.12)),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(8),
         borderSide: const BorderSide(color: Color(0xFF3B82F6), width: 1.5),
       ),
     );

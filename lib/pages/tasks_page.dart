@@ -1,4 +1,4 @@
-// tasks_page.dart — Employee: view tasks, mark done, subtasks, file uploads
+// tasks_page.dart — Employee "My Tasks" (aims-webapps EmployeeTaskList clone)
 
 import 'dart:async';
 import 'dart:io';
@@ -9,15 +9,12 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
 import '../utils/responsive.dart';
+import '../utils/task_helpers.dart';
+import '../widgets/task_action_buttons.dart';
 import '../widgets/task_status_dropdown.dart';
 import 'task_detail_page.dart';
-
-int _intFrom(dynamic v, [int fallback = 0]) {
-  if (v is int) return v;
-  if (v is num) return v.toInt();
-  return int.tryParse('$v') ?? fallback;
-}
 
 class TasksPage extends StatefulWidget {
   final ApiService apiService;
@@ -58,41 +55,50 @@ class _TasksPageState extends State<TasksPage> {
       setState(() => _isLoading = false);
       final err = result['error']?.toString();
       if (mounted && err != null && err.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(err)),
-        );
+        AppToast.error(context, err);
       }
     }
   }
 
   List<dynamic> get _filteredTasks {
     if (_filter == 'pending') {
-      return _tasks.where((t) => !(t['completed'] ?? false)).toList();
+      return _tasks.where((t) => !taskIsCompleted(t)).toList();
     }
     if (_filter == 'completed') {
-      return _tasks.where((t) => t['completed'] ?? false).toList();
+      return _tasks.where((t) => taskIsCompleted(t)).toList();
     }
     return _tasks;
   }
 
-  Future<void> _toggleTask(int taskId) async {
-    final result = await widget.apiService.toggleTask(taskId);
+  Future<void> _toggleTask(dynamic task) async {
+    final id = taskIdFrom(task);
+    if (id == null) return;
+    final done = taskIsCompleted(task);
+    final taskMap = task is Map ? Map<String, dynamic>.from(task) : null;
+    final result = await widget.apiService.setTaskCompleted(
+      id,
+      completed: !done,
+      task: taskMap,
+    );
     if (!mounted) return;
     if (result['success'] == true) {
       _loadTasks();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result['error']?.toString() ?? 'Could not update task')),
-      );
+      AppToast.updateFailed(context, result['error']?.toString());
     }
+  }
+
+  int get _pendingCount => _tasks.where((t) => !taskIsCompleted(t)).length;
+  int get _completedCount => _tasks.where((t) => taskIsCompleted(t)).length;
+
+  int get _progressPct {
+    if (_tasks.isEmpty) return 0;
+    return ((_completedCount / _tasks.length) * 100).round();
   }
 
   @override
   Widget build(BuildContext context) {
-    final pending = _tasks.where((t) => !(t['completed'] ?? false)).length;
-    final completed = _tasks.where((t) => t['completed'] ?? false).length;
     final displayTasks = _filteredTasks;
-
     final pad = Responsive.pagePadding(context);
 
     return Column(
@@ -121,26 +127,25 @@ class _TasksPageState extends State<TasksPage> {
               ],
             ),
           ),
+        if (_tasks.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: pad),
+            child: _OverallProgressCard(
+              pct: _progressPct,
+              done: _completedCount,
+              total: _tasks.length,
+            ),
+          ),
+        const SizedBox(height: 12),
         Padding(
           padding: EdgeInsets.symmetric(horizontal: pad),
           child: Row(
             children: [
-              Expanded(child: _statCard('To do', '$pending', const Color(0xFFF59E0B))),
-              const SizedBox(width: 12),
-              Expanded(child: _statCard('Done', '$completed', const Color(0xFF10B981))),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: pad),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _filterTab('To do', 'pending'),
-              _filterTab('Done', 'completed'),
-              _filterTab('All', 'all'),
+              _filterTab('To do', 'pending', '$_pendingCount'),
+              const SizedBox(width: 8),
+              _filterTab('Done', 'completed', '$_completedCount'),
+              const SizedBox(width: 8),
+              _filterTab('All', 'all', '${_tasks.length}'),
             ],
           ),
         ),
@@ -152,9 +157,9 @@ class _TasksPageState extends State<TasksPage> {
                   ? Center(
                       child: Text(
                         _filter == 'pending'
-                            ? 'No pending tasks'
+                            ? 'No open tasks assigned to you.'
                             : 'No tasks in this view',
-                        style: const TextStyle(color: AppTheme.textMuted, fontSize: 16),
+                        style: const TextStyle(color: AppTheme.textMuted, fontSize: 15),
                       ),
                     )
                   : ListView.builder(
@@ -163,9 +168,8 @@ class _TasksPageState extends State<TasksPage> {
                       itemBuilder: (ctx, i) => _TaskCard(
                         task: displayTasks[i],
                         apiService: widget.apiService,
-                        onToggle: () => _toggleTask(displayTasks[i]['id'] as int),
+                        onToggle: () => _toggleTask(displayTasks[i]),
                         onRefresh: _loadTasks,
-                        colorIndex: i,
                       ),
                     ),
         ),
@@ -173,26 +177,7 @@ class _TasksPageState extends State<TasksPage> {
     );
   }
 
-  Widget _statCard(String label, String value, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: AppTheme.glassPanel(
-        borderRadius: 14,
-        topTint: color.withValues(alpha: 0.4),
-        bottomTint: AppTheme.surface2,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: color)),
-          const SizedBox(height: 4),
-          Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-        ],
-      ),
-    );
-  }
-
-  Widget _filterTab(String label, String value) {
+  Widget _filterTab(String label, String value, String count) {
     final isActive = _filter == value;
     return GestureDetector(
       onTap: () => setState(() => _filter = value),
@@ -203,13 +188,34 @@ class _TasksPageState extends State<TasksPage> {
           topTint: isActive ? AppTheme.primary.withValues(alpha: 0.45) : AppTheme.surface2,
           bottomTint: isActive ? AppTheme.surface.withValues(alpha: 0.5) : AppTheme.surface,
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isActive ? AppTheme.primaryBright : AppTheme.textMuted,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: isActive ? AppTheme.primaryBright : AppTheme.textMuted,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: isActive ? 0.18 : 0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                count,
+                style: TextStyle(
+                  color: isActive ? AppTheme.primaryBright : AppTheme.textMuted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -222,19 +228,79 @@ class _TasksPageState extends State<TasksPage> {
   }
 }
 
+class _OverallProgressCard extends StatelessWidget {
+  final int pct;
+  final int done;
+  final int total;
+
+  const _OverallProgressCard({
+    required this.pct,
+    required this.done,
+    required this.total,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+      decoration: AppTheme.glassPanel(borderRadius: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(
+                'OVERALL PROGRESS',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
+                  color: AppTheme.textMuted.withValues(alpha: 0.85),
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '$pct%',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF60A5FA),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: total > 0 ? pct / 100 : 0,
+              minHeight: 8,
+              backgroundColor: Colors.white.withValues(alpha: 0.06),
+              color: const Color(0xFF3B82F6),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$done of $total tasks completed',
+            style: TextStyle(fontSize: 11, color: AppTheme.textMuted.withValues(alpha: 0.9)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TaskCard extends StatefulWidget {
   final dynamic task;
   final ApiService apiService;
   final VoidCallback onToggle;
   final VoidCallback onRefresh;
-  final int colorIndex;
 
   const _TaskCard({
     required this.task,
     required this.apiService,
     required this.onToggle,
     required this.onRefresh,
-    required this.colorIndex,
   });
 
   @override
@@ -249,8 +315,10 @@ class _TaskCardState extends State<_TaskCard> {
   bool _loadingAttachments = false;
 
   Future<void> _loadSubtasks() async {
+    final id = taskIdFrom(widget.task);
+    if (id == null) return;
     setState(() => _loadingSubtasks = true);
-    final result = await widget.apiService.getSubTasks(widget.task['id'] as int);
+    final result = await widget.apiService.getSubTasks(id);
     if (!mounted) return;
     if (result['success'] == true) {
       setState(() {
@@ -263,8 +331,10 @@ class _TaskCardState extends State<_TaskCard> {
   }
 
   Future<void> _loadTaskAttachments() async {
+    final id = taskIdFrom(widget.task);
+    if (id == null) return;
     setState(() => _loadingAttachments = true);
-    final result = await widget.apiService.getTaskAttachments(widget.task['id'] as int);
+    final result = await widget.apiService.getTaskAttachments(id);
     if (!mounted) return;
     if (result['success'] == true) {
       setState(() {
@@ -285,6 +355,8 @@ class _TaskCardState extends State<_TaskCard> {
   }
 
   Future<void> _pickAndUploadTaskFile() async {
+    final id = taskIdFrom(widget.task);
+    if (id == null) return;
     final result = await FilePicker.platform.pickFiles(allowMultiple: false, withData: true);
     if (result == null || result.files.isEmpty) return;
     final f = result.files.first;
@@ -293,30 +365,28 @@ class _TaskCardState extends State<_TaskCard> {
       bytes = await File(f.path!).readAsBytes();
     }
     if (bytes == null || f.name.isEmpty) return;
-    final up = await widget.apiService.uploadTaskAttachment(widget.task['id'] as int, bytes, f.name);
+    final up = await widget.apiService.uploadTaskAttachment(id, bytes, f.name);
     if (!mounted) return;
     if (up['success'] == true) {
       await _loadTaskAttachments();
       if (!mounted) return;
       widget.onRefresh();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File uploaded')));
+      AppToast.success(context, 'File uploaded');
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(up['error']?.toString() ?? 'Upload failed')),
-      );
+      AppToast.error(context, up['error']?.toString() ?? 'Upload failed');
     }
   }
 
   Future<void> _toggleSubtask(int subtaskId) async {
-    final result = await widget.apiService.toggleSubTask(widget.task['id'] as int, subtaskId);
+    final taskId = taskIdFrom(widget.task);
+    if (taskId == null) return;
+    final result = await widget.apiService.toggleSubTask(taskId, subtaskId);
     if (!mounted) return;
     if (result['success'] == true) {
       await _loadSubtasks();
       widget.onRefresh();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result['error']?.toString() ?? 'Could not update subtask')),
-      );
+      AppToast.updateFailed(context, result['error']?.toString());
     }
   }
 
@@ -330,240 +400,222 @@ class _TaskCardState extends State<_TaskCard> {
     }
   }
 
+  void _openDetail() {
+    final task = widget.task;
+    final id = taskIdFrom(task);
+    if (id == null) return;
+    openTaskDetailPage(
+      context,
+      apiService: widget.apiService,
+      taskId: id,
+      projectId: taskProjectIdFrom(task) ?? 0,
+      projectName: task['project_name']?.toString() ?? '',
+      initialTask: Map<String, dynamic>.from(task as Map),
+      onClosed: widget.onRefresh,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final task = widget.task;
-    final isCompleted = task['completed'] == true;
-    final subtaskCount = task['subtask_count'] ?? 0;
-    final completedSubtasks = task['completed_subtask_count'] ?? 0;
+    final isCompleted = taskIsCompleted(task);
+    final subtaskCount = (task['subtask_count'] as num?)?.toInt() ?? 0;
+    final completedSubtasks = (task['completed_subtask_count'] as num?)?.toInt() ?? 0;
     final needsEvidence = task['is_attachment_required'] == true;
     final hasFiles = task['has_attachments'] == true;
-    final colors = [AppTheme.primary, const Color(0xFF8B5CF6), const Color(0xFFEC4899), const Color(0xFFF59E0B)];
-    final accent = colors[widget.colorIndex % colors.length];
+    final priColor = priorityColor(task['priority']?.toString());
+    final taskKey = taskDisplayKey(task);
+    final progressPct = subtaskCount > 0
+        ? ((completedSubtasks / subtaskCount) * 100).round()
+        : (isCompleted ? 100 : 0);
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: AppTheme.glassPanel(borderRadius: 16),
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.surface2.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          InkWell(
-            onTap: () => openTaskDetailPage(
-              context,
-              apiService: widget.apiService,
-              taskId: task['id'] as int,
-              projectId: _intFrom(task['project_id'] ?? task['project']),
-              projectName: task['project_name']?.toString() ?? '',
-              initialTask: Map<String, dynamic>.from(task as Map),
-              onClosed: widget.onRefresh,
-            ),
-            borderRadius: BorderRadius.circular(16),
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  GestureDetector(
-                    onTap: widget.onToggle,
-                    child: Container(
-                      width: 28,
-                      height: 28,
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: _openDetail,
+              borderRadius: BorderRadius.circular(14),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      margin: const EdgeInsets.only(top: 6),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: isCompleted ? accent : Colors.white54, width: 2),
-                        color: isCompleted ? accent : Colors.transparent,
+                        color: priColor,
+                        boxShadow: [BoxShadow(color: priColor.withValues(alpha: 0.55), blurRadius: 6)],
                       ),
-                      child: isCompleted ? const Icon(Icons.check, size: 16, color: Colors.white) : null,
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  taskDisplayTitle(task),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppTheme.textPrimary,
+                                    decoration: isCompleted ? TextDecoration.lineThrough : null,
+                                  ),
+                                ),
+                              ),
+                              TaskStatusBadge(task: task),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              if (taskKey.isNotEmpty)
+                                Text(
+                                  taskKey,
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    fontFamily: 'monospace',
+                                    color: Color(0xFF60A5FA),
+                                  ),
+                                ),
+                              if ((task['project_name'] ?? '').toString().isNotEmpty)
+                                Text(
+                                  task['project_name'].toString(),
+                                  style: TextStyle(fontSize: 11, color: AppTheme.textMuted.withValues(alpha: 0.9)),
+                                ),
+                              if (task['due_date'] != null)
+                                Text(
+                                  'Due ${task['due_date']}',
+                                  style: TextStyle(fontSize: 11, color: priColor.withValues(alpha: 0.95)),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          TaskStatusDropdown(
+                            key: ValueKey<String>('ts_${task['id']}_${task['status']}_${task['completed']}'),
+                            taskId: taskIdFrom(task)!,
+                            task: task,
+                            projectId: taskProjectIdFrom(task) ?? 0,
+                            apiService: widget.apiService,
+                            onUpdated: widget.onRefresh,
+                            compact: true,
+                          ),
+                          const SizedBox(height: 10),
+                          TaskCompleteButton(
+                            isCompleted: isCompleted,
+                            onPressed: widget.onToggle,
+                            compact: true,
+                          ),
+                          if (subtaskCount > 0) ...[
+                            const SizedBox(height: 10),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                value: subtaskCount > 0 ? completedSubtasks / subtaskCount : 0,
+                                minHeight: 4,
+                                backgroundColor: Colors.white.withValues(alpha: 0.08),
+                                color: priColor,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '$completedSubtasks/$subtaskCount subtasks · $progressPct%',
+                              style: TextStyle(fontSize: 10, color: AppTheme.textMuted.withValues(alpha: 0.85)),
+                            ),
+                          ],
+                          if (needsEvidence)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
                               child: Text(
-                                (task['name'] ?? task['title'])?.toString() ?? 'Task',
+                                hasFiles ? 'Evidence attached' : 'Evidence required to complete',
                                 style: TextStyle(
-                                  fontSize: 15,
+                                  fontSize: 10,
                                   fontWeight: FontWeight.w600,
-                                  color: AppTheme.textPrimary,
-                                  decoration: isCompleted ? TextDecoration.lineThrough : null,
+                                  color: hasFiles ? const Color(0xFF34D399) : const Color(0xFFFBBF24),
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            TaskStatusBadge(task: task),
-                          ],
+                        ],
+                      ),
+                    ),
+                    PopupMenuButton<String>(
+                      tooltip: 'Task actions',
+                      color: AppTheme.surface2,
+                      surfaceTintColor: Colors.transparent,
+                      icon: Icon(Icons.more_vert_rounded, color: AppTheme.textMuted, size: 22),
+                      onSelected: (v) {
+                        if (v == 'refresh') {
+                          widget.onRefresh();
+                        } else if (v == 'open') {
+                          _openDetail();
+                        } else if (v == 'expand') {
+                          _toggleExpand();
+                        }
+                      },
+                      itemBuilder: (ctx) => [
+                        const PopupMenuItem(
+                          value: 'open',
+                          child: Row(
+                            children: [
+                              Icon(Icons.open_in_new_rounded, color: AppTheme.primaryBright, size: 20),
+                              SizedBox(width: 10),
+                              Text('Open task', style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+                            ],
+                          ),
                         ),
-                        const SizedBox(height: 8),
-                        TaskStatusDropdown(
-                          key: ValueKey<String>('ts_${task['id']}_${task['status']}_${task['completed']}'),
-                          taskId: task['id'] as int,
-                          task: task,
-                          apiService: widget.apiService,
-                          onUpdated: widget.onRefresh,
-                        ),
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          width: double.infinity,
-                          child: isCompleted
-                              ? OutlinedButton.icon(
-                                  onPressed: widget.onToggle,
-                                  icon: const Icon(Icons.replay_rounded, size: 18),
-                                  label: const Text('Restore'),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: AppTheme.warning,
-                                    side: BorderSide(color: AppTheme.warning.withValues(alpha: 0.55)),
-                                    padding: const EdgeInsets.symmetric(vertical: 10),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                  ),
-                                )
-                              : FilledButton.icon(
-                                  onPressed: widget.onToggle,
-                                  icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
-                                  label: const Text('Mark complete'),
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: AppTheme.success.withValues(alpha: 0.85),
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 10),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                  ),
-                                ),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 4,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            if (subtaskCount > 0)
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.checklist_rounded, size: 14, color: AppTheme.textMuted.withValues(alpha: 0.9)),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '$completedSubtasks / $subtaskCount subtasks',
-                                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                                  ),
-                                ],
+                        PopupMenuItem(
+                          value: 'expand',
+                          child: Row(
+                            children: [
+                              Icon(
+                                _expanded ? Icons.unfold_less_rounded : Icons.unfold_more_rounded,
+                                color: AppTheme.primaryBright,
+                                size: 20,
                               ),
-                            if (needsEvidence)
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: hasFiles
-                                      ? const Color(0xFF10B981).withValues(alpha: 0.2)
-                                      : const Color(0xFFF59E0B).withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  hasFiles ? 'Evidence attached' : 'Evidence required',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: hasFiles ? const Color(0xFF34D399) : const Color(0xFFFBBF24),
-                                  ),
-                                ),
-                              ),
-                            if (task['due_date'] != null)
+                              const SizedBox(width: 10),
                               Text(
-                                task['due_date'].toString(),
-                                style: TextStyle(color: accent, fontSize: 12),
+                                _expanded ? 'Collapse details' : 'Expand details',
+                                style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
                               ),
-                          ],
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'refresh',
+                          child: Row(
+                            children: [
+                              Icon(Icons.refresh_rounded, color: AppTheme.textMuted, size: 20),
+                              SizedBox(width: 10),
+                              Text('Refresh', style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+                            ],
+                          ),
                         ),
                       ],
                     ),
-                  ),
-                  PopupMenuButton<String>(
-                    tooltip: 'Task actions',
-                    color: AppTheme.surface2,
-                    surfaceTintColor: Colors.transparent,
-                    icon: Icon(Icons.more_vert_rounded, color: AppTheme.textMuted, size: 22),
-                    onSelected: (v) {
-                      if (v == 'refresh') widget.onRefresh();
-                      else if (v == 'open') {
-                        openTaskDetailPage(
-                          context,
-                          apiService: widget.apiService,
-                          taskId: task['id'] as int,
-                          projectId: _intFrom(task['project_id'] ?? task['project']),
-                          projectName: task['project_name']?.toString() ?? '',
-                          initialTask: Map<String, dynamic>.from(task as Map),
-                          onClosed: widget.onRefresh,
-                        );
-                      } else if (v == 'expand') _toggleExpand();
-                    },
-                    itemBuilder: (ctx) => [
-                      const PopupMenuItem(
-                        value: 'open',
-                        child: Row(
-                          children: [
-                            Icon(Icons.open_in_new_rounded, color: AppTheme.primaryBright, size: 20),
-                            SizedBox(width: 10),
-                            Text('Open task', style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
-                          ],
-                        ),
-                      ),
-                      PopupMenuItem(
-                        value: 'expand',
-                        child: Row(
-                          children: [
-                            Icon(
-                              _expanded ? Icons.unfold_less_rounded : Icons.unfold_more_rounded,
-                              color: AppTheme.primaryBright,
-                              size: 20,
-                            ),
-                            const SizedBox(width: 10),
-                            Text(
-                              _expanded ? 'Collapse details' : 'Expand details',
-                              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const PopupMenuItem(
-                        value: 'refresh',
-                        child: Row(
-                          children: [
-                            Icon(Icons.refresh_rounded, color: AppTheme.textMuted, size: 20),
-                            SizedBox(width: 10),
-                            Text('Refresh', style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (!Responsive.isMobile(context))
-                    IconButton(
-                      icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
-                      color: AppTheme.textMuted,
-                      onPressed: _toggleExpand,
-                      tooltip: _expanded ? 'Collapse' : 'Expand',
-                      visualDensity: VisualDensity.compact,
-                    ),
-                ],
-              ),
-            ),
-          ),
-          if (subtaskCount > 0)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: subtaskCount > 0 ? completedSubtasks / subtaskCount : 0,
-                  backgroundColor: Colors.white.withValues(alpha: 0.08),
-                  valueColor: AlwaysStoppedAnimation<Color>(accent),
-                  minHeight: 3,
+                  ],
                 ),
               ),
             ),
+          ),
           if (_expanded) ...[
             Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
             Padding(
@@ -617,10 +669,7 @@ class _TaskCardState extends State<_TaskCard> {
                       ),
                     )
                   else if (_attachments.isEmpty)
-                    const Text(
-                      'No files yet',
-                      style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                    )
+                    const Text('No files yet', style: TextStyle(color: AppTheme.textMuted, fontSize: 12))
                   else
                     Wrap(
                       spacing: 8,
@@ -666,7 +715,7 @@ class _TaskCardState extends State<_TaskCard> {
                     const Text('No subtasks', style: TextStyle(color: AppTheme.textMuted, fontSize: 12))
                   else
                     ..._subtasks.map((st) => _SubtaskRow(
-                          taskId: widget.task['id'] as int,
+                          taskId: taskIdFrom(widget.task)!,
                           subtask: st,
                           apiService: widget.apiService,
                           onToggle: () => _toggleSubtask(st['id'] as int),
@@ -684,7 +733,6 @@ class _TaskCardState extends State<_TaskCard> {
       ),
     );
   }
-
 }
 
 class _SubtaskRow extends StatelessWidget {
@@ -716,11 +764,9 @@ class _SubtaskRow extends StatelessWidget {
     if (up['success'] == true) {
       await onAfterUpload();
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File uploaded')));
+      AppToast.success(context, 'File uploaded');
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(up['error']?.toString() ?? 'Upload failed')),
-      );
+      AppToast.error(context, up['error']?.toString() ?? 'Upload failed');
     }
   }
 
@@ -853,31 +899,10 @@ class _SubtaskRow extends StatelessWidget {
                   onUpdated: onAfterUpload,
                 ),
                 const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: isDone
-                      ? OutlinedButton.icon(
-                          onPressed: onToggle,
-                          icon: const Icon(Icons.replay_rounded, size: 16),
-                          label: const Text('Restore'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.warning,
-                            side: BorderSide(color: AppTheme.warning.withValues(alpha: 0.55)),
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                        )
-                      : FilledButton.icon(
-                          onPressed: onToggle,
-                          icon: const Icon(Icons.check_circle_outline_rounded, size: 16),
-                          label: const Text('Mark complete'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppTheme.success.withValues(alpha: 0.85),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                        ),
+                TaskCompleteButton(
+                  isCompleted: isDone,
+                  onPressed: onToggle,
+                  compact: true,
                 ),
                 if (needAtt)
                   Text(
@@ -903,8 +928,11 @@ class _SubtaskRow extends StatelessWidget {
               ),
             ),
             onSelected: (v) {
-              if (v == 'upload') _upload(context);
-              else if (v == 'files') _showFiles(context);
+              if (v == 'upload') {
+                _upload(context);
+              } else if (v == 'files') {
+                _showFiles(context);
+              }
             },
             itemBuilder: (ctx) => [
               const PopupMenuItem(

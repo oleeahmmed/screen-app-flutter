@@ -3,6 +3,7 @@ import 'dart:async';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
 import '../utils/notification_ui.dart';
 import '../utils/responsive.dart';
 
@@ -74,14 +75,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
     if (!mounted) return;
     setState(() => _actionBusy = false);
     if (r['success'] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('All notifications marked as read'), backgroundColor: AppTheme.success),
-      );
+      AppToast.success(context, 'All notifications marked as read');
       await _afterListMutation();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not mark all read'), backgroundColor: AppTheme.danger),
-      );
+      AppToast.updateFailed(context, r['error']?.toString() ?? 'Could not mark all read');
     }
   }
 
@@ -113,14 +110,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
     if (!mounted) return;
     setState(() => _actionBusy = false);
     if (r['success'] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Notifications cleared'), backgroundColor: AppTheme.success),
-      );
+      AppToast.success(context, 'Notifications cleared');
       await _afterListMutation();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not clear notifications'), backgroundColor: AppTheme.danger),
-      );
+      AppToast.error(context, r['error']?.toString() ?? 'Could not clear notifications');
     }
   }
 

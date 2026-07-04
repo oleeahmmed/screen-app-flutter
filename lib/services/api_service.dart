@@ -359,6 +359,9 @@ class ApiService {
       if (m['completed'] == null && m['status'] != null) {
         m['completed'] = m['status'].toString() == 'completed';
       }
+      if (m['project_id'] == null && m['project'] != null) {
+        m['project_id'] = int.tryParse('${m['project']}');
+      }
       if (m['assignee_ids'] is! List && m['user_id'] != null) {
         final uid = int.tryParse('${m['user_id']}');
         if (uid != null) m['assignee_ids'] = [uid];
@@ -466,6 +469,31 @@ class ApiService {
       return {'success': false, 'error': 'Login failed: ${response.statusCode}'};
     } catch (e) {
       print('❌ Login error: $e');
+      return {'success': false, 'error': 'Connection error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> forgotPassword(String email) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.apiBaseUrl}/auth/forgot-password/'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true};
+      }
+      try {
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        final err = body['error'] ?? body['detail'] ?? body['message'];
+        if (err != null) {
+          return {'success': false, 'error': err is String ? err : err.toString()};
+        }
+      } catch (_) {}
+      return {'success': false, 'error': 'Could not send reset link (${response.statusCode})'};
+    } catch (e) {
       return {'success': false, 'error': 'Connection error: $e'};
     }
   }
@@ -609,26 +637,121 @@ class ApiService {
     return {'success': false, 'error': lastErr};
   }
 
-  Future<Map<String, dynamic>> toggleTask(int taskId) async {
+  /// POST `/api/projects/{project_id}/tasks/{id}/complete/` — mirrors aims-webapps.
+  Future<Map<String, dynamic>> completeTask(
+    int taskId, {
+    int projectId = 0,
+    Map<String, dynamic>? task,
+  }) async {
+    final pid = projectId > 0 ? projectId : _projectIdFromTask(task);
+    if (pid != null && pid > 0) {
+      final scoped = await _postTaskAction(
+        AppConfig.projectTaskCompleteUrl(pid, taskId),
+        'complete task',
+      );
+      if (scoped['success'] == true) return scoped;
+      // Fall through to PATCH when project-scoped route fails unexpectedly.
+      if (scoped['error']?.toString().contains('not found') != true) {
+        return scoped;
+      }
+    }
+    return updateTask(
+      taskId,
+      {'status': 'completed'},
+      projectId: pid ?? 0,
+      task: task,
+    );
+  }
+
+  /// POST `/api/projects/{project_id}/tasks/{id}/reopen/` — mirrors aims-webapps.
+  Future<Map<String, dynamic>> reopenTask(
+    int taskId, {
+    int projectId = 0,
+    Map<String, dynamic>? task,
+  }) async {
+    final pid = projectId > 0 ? projectId : _projectIdFromTask(task);
+    if (pid != null && pid > 0) {
+      final scoped = await _postTaskAction(
+        AppConfig.projectTaskReopenUrl(pid, taskId),
+        'reopen task',
+      );
+      if (scoped['success'] == true) return scoped;
+      if (scoped['error']?.toString().contains('not found') != true) {
+        return scoped;
+      }
+    }
+    return updateTask(
+      taskId,
+      {'status': 'pending'},
+      projectId: pid ?? 0,
+      task: task,
+    );
+  }
+
+  /// Mark complete or reopen — preferred over legacy `/toggle/` (status out of sync).
+  Future<Map<String, dynamic>> setTaskCompleted(
+    int taskId, {
+    required bool completed,
+    int projectId = 0,
+    Map<String, dynamic>? task,
+  }) {
+    if (completed) {
+      return completeTask(taskId, projectId: projectId, task: task);
+    }
+    return reopenTask(taskId, projectId: projectId, task: task);
+  }
+
+  Future<Map<String, dynamic>> toggleTask(
+    int taskId, {
+    bool? markCompleted,
+    int projectId = 0,
+    Map<String, dynamic>? task,
+  }) async {
+    if (markCompleted != null) {
+      return setTaskCompleted(
+        taskId,
+        completed: markCompleted,
+        projectId: projectId,
+        task: task,
+      );
+    }
+    final done = task != null &&
+        (task['completed'] == true ||
+            (task['status'] ?? '').toString().toLowerCase() == 'completed');
+    return setTaskCompleted(
+      taskId,
+      completed: !done,
+      projectId: projectId,
+      task: task,
+    );
+  }
+
+  int? _projectIdFromTask(Map<String, dynamic>? task) {
+    if (task == null) return null;
+    final raw = task['project_id'] ?? task['projectId'] ?? task['project'];
+    return int.tryParse('$raw');
+  }
+
+  Future<Map<String, dynamic>> _postTaskAction(String url, String label) async {
     try {
       final response = await http
-          .post(
-            Uri.parse('${AppConfig.tasksUrl}$taskId/toggle/'),
-            headers: _getHeaders(),
-          )
+          .post(Uri.parse(url), headers: _getHeaders())
           .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        dynamic data;
+        try {
+          data = jsonDecode(response.body);
+        } catch (_) {
+          data = {'success': true};
+        }
+        return {'success': true, 'data': data};
       }
-      var err = 'Failed to toggle task';
-      try {
-        final d = jsonDecode(response.body);
-        if (d is Map && d['error'] != null) err = d['error'].toString();
-      } catch (_) {}
-      return {'success': false, 'error': err};
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
     } catch (e) {
-      return {'success': false, 'error': 'Toggle error: $e'};
+      return {'success': false, 'error': '$label error: $e'};
     }
   }
 
@@ -1253,27 +1376,50 @@ class ApiService {
     return body;
   }
 
-  Future<Map<String, dynamic>> updateTaskAssignees(int taskId, List<int> assigneeIds) {
-    return updateTask(taskId, {'assignee_ids': assigneeIds});
+  Future<Map<String, dynamic>> updateTaskAssignees(
+    int taskId,
+    List<int> assigneeIds, {
+    int projectId = 0,
+    Map<String, dynamic>? task,
+  }) {
+    return updateTask(
+      taskId,
+      {'assignee_ids': assigneeIds},
+      projectId: projectId,
+      task: task,
+    );
   }
 
-  Future<Map<String, dynamic>> updateTask(int taskId, Map<String, dynamic> data) async {
+  /// PATCH task — project-scoped when [projectId] or task.project is known (aims-webapps).
+  Future<Map<String, dynamic>> updateTask(
+    int taskId,
+    Map<String, dynamic> data, {
+    int projectId = 0,
+    Map<String, dynamic>? task,
+  }) async {
+    final pid = projectId > 0 ? projectId : _projectIdFromTask(task);
+    final scoped = pid != null && pid > 0;
+    final url = scoped
+        ? AppConfig.projectTaskUrl(pid, taskId)
+        : '${AppConfig.tasksUrl}$taskId/';
+    final body = scoped ? Map<String, dynamic>.from(data) : _taskPatchBody(data);
+
     try {
       final response = await _authorizedPatch(
-        Uri.parse('${AppConfig.tasksUrl}$taskId/'),
-        body: jsonEncode(_taskPatchBody(data)),
+        Uri.parse(url),
+        body: jsonEncode(body),
       );
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
-      }
-      try {
-        final body = jsonDecode(response.body) as Map<String, dynamic>;
-        final err = body['error'] ?? body['detail'];
-        if (err != null) {
-          return {'success': false, 'error': err is String ? err : err.toString()};
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          return {'success': true, 'data': _normalizeTaskMap(decoded)};
         }
-      } catch (_) {}
-      return {'success': false, 'error': 'Failed to update task (${response.statusCode})'};
+        return {'success': true, 'data': decoded};
+      }
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1375,22 +1521,30 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> updateSubTask(int taskId, int subtaskId, Map<String, dynamic> data) async {
+  Future<Map<String, dynamic>> updateSubTask(
+    int taskId,
+    int subtaskId,
+    Map<String, dynamic> data, {
+    int projectId = 0,
+    Map<String, dynamic>? task,
+  }) async {
+    final pid = projectId > 0 ? projectId : _projectIdFromTask(task);
+    final url = pid != null && pid > 0
+        ? AppConfig.projectSubtaskUrl(pid, taskId, subtaskId)
+        : '${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/';
+
     try {
-      final response = await http
-          .patch(Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/'), headers: _getHeaders(), body: jsonEncode(data))
-          .timeout(Duration(seconds: 10));
+      final response = await _authorizedPatch(
+        Uri.parse(url),
+        body: jsonEncode(data),
+      );
       if (response.statusCode == 200) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
-      try {
-        final body = jsonDecode(response.body) as Map<String, dynamic>;
-        final err = body['error'] ?? body['detail'];
-        if (err != null) {
-          return {'success': false, 'error': err is String ? err : err.toString()};
-        }
-      } catch (_) {}
-      return {'success': false, 'error': 'Failed to update subtask (${response.statusCode})'};
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -2025,16 +2179,9 @@ class ApiService {
       if (decoded is! Map) {
         return {'success': false, 'error': 'Unexpected attendance response format'};
       }
-      final data = Map<String, dynamic>.from(decoded);
-      final currentRaw = data['current_attendance'];
-      final current = currentRaw is Map ? Map<String, dynamic>.from(currentRaw) : null;
-      if (!attendanceIsOpen(current)) {
-        final open = await _findOpenAttendanceFromList();
-        if (attendanceIsOpen(open)) {
-          data['current_attendance'] = open;
-        }
-      }
-      return {'success': true, 'data': data};
+      // Trust /current/ as source of truth — do not override with stale open rows
+      // from the attendance list (caused clock-out UI to stay "clocked in").
+      return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -2056,18 +2203,6 @@ class ApiService {
       }
     } catch (_) {}
     return {'success': false, 'error': err};
-  }
-
-  Future<Map<String, dynamic>?> _findOpenAttendanceFromList() async {
-    final list = await getAttendanceList();
-    if (list['success'] != true) return null;
-    final raw = list['data'] as List<dynamic>? ?? [];
-    for (final item in raw) {
-      if (item is Map && attendanceIsOpen(Map<String, dynamic>.from(item))) {
-        return Map<String, dynamic>.from(item);
-      }
-    }
-    return null;
   }
 
   Future<Map<String, dynamic>> getAttendanceList() async {

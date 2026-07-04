@@ -5,9 +5,12 @@ import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_quick_menu.dart';
 import '../widgets/empty_state.dart';
+import '../utils/task_helpers.dart';
+import '../widgets/task_action_buttons.dart';
 import '../widgets/task_status_dropdown.dart';
 import '../widgets/kanban_assignee_picker.dart';
 import '../widgets/project_vault_tab.dart';
@@ -245,7 +248,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
       setState(() => _isLoading = false);
       final err = r['error'];
       if (mounted && err != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$err')));
+        AppToast.error(context, '$err');
       }
     }
   }
@@ -378,9 +381,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
           );
           if (!mounted) return;
           if (r['success'] != true) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(r['error']?.toString() ?? 'Could not create project')),
-            );
+            AppToast.error(context, r['error']?.toString() ?? 'Could not create project');
           }
           _loadProjects();
         }, style: ElevatedButton.styleFrom(
@@ -1048,9 +1049,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
                                 if (r['success'] == true) {
                                   _loadProjects();
                                 } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('${r['error']}')),
-                                  );
+                                  AppToast.updateFailed(context, '${r['error']}');
                                 }
                               } else if (v == 'restore') {
                                 final r = await widget.apiService.restoreProject(pid);
@@ -1058,9 +1057,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
                                 if (r['success'] == true) {
                                   _loadProjects();
                                 } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(content: Text('${r['error']}')),
-                                  );
+                                  AppToast.updateFailed(context, '${r['error']}');
                                 }
                               }
                             },
@@ -1327,14 +1324,17 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
       selectedIds: _taskAssigneeIds(taskMap),
     );
     if (ids == null || !mounted) return;
-    final r = await widget.apiService.updateTaskAssignees(taskMap['id'] as int, ids);
+    final r = await widget.apiService.updateTaskAssignees(
+      taskMap['id'] as int,
+      ids,
+      projectId: widget.projectId,
+      task: taskMap,
+    );
     if (!mounted) return;
     if (r['success'] == true) {
       _load(silent: true);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not update assignees')),
-      );
+      AppToast.updateFailed(context, r['error']?.toString());
     }
   }
 
@@ -1447,14 +1447,21 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   }
 
   Future<void> _toggleTaskComplete(dynamic t) async {
-    final r = await widget.apiService.toggleTask(t['id'] as int);
+    final id = int.tryParse('${t['id']}');
+    if (id == null) return;
+    final done = taskIsCompleted(t);
+    final taskMap = t is Map ? Map<String, dynamic>.from(t) : null;
+    final r = await widget.apiService.setTaskCompleted(
+      id,
+      completed: !done,
+      projectId: widget.projectId,
+      task: taskMap,
+    );
     if (!mounted) return;
     if (r['success'] == true) {
       _load();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not update task')),
-      );
+      AppToast.updateFailed(context, r['error']?.toString());
     }
   }
 
@@ -1477,11 +1484,9 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     if (!mounted) return;
     if (r['success'] == true) {
       _load();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Task deleted')));
+      AppToast.success(context, 'Task deleted');
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not delete task')),
-      );
+      AppToast.error(context, r['error']?.toString() ?? 'Could not delete task');
     }
   }
 
@@ -1497,17 +1502,15 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     if (!mounted) return;
     if (up['success'] == true) {
       _load();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File uploaded')));
+      AppToast.success(context, 'File uploaded');
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(up['error']?.toString() ?? 'Upload failed')),
-      );
+      AppToast.error(context, up['error']?.toString() ?? 'Upload failed');
     }
   }
 
   Future<void> _showEditTaskKanban(dynamic t) async {
     final taskId = t['id'] as int;
-    final r = await widget.apiService.getTask(taskId);
+    final r = await widget.apiService.getTask(taskId, projectId: widget.projectId);
     if (!mounted) return;
     Map<String, dynamic> task;
     if (r['success'] == true && r['data'] != null) {
@@ -1623,7 +1626,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
             ElevatedButton(
               onPressed: () async {
                 if (nc.text.trim().isEmpty) {
-                  messenger.showSnackBar(const SnackBar(content: Text('Enter a task name')));
+                  AppToast.warning(dialogCtx, 'Enter a task name');
                   return;
                 }
                 final body = <String, dynamic>{
@@ -1636,13 +1639,19 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                 if (d.isNotEmpty) body['due_date'] = d;
                 if (assignee != null) body['assignee_id'] = assignee;
                 final nav = Navigator.of(dialogCtx);
-                final res = await widget.apiService.updateTask(taskId, body);
+                final res = await widget.apiService.updateTask(
+                  taskId,
+                  body,
+                  projectId: widget.projectId,
+                  task: task,
+                );
                 if (!mounted) return;
                 if (res['success'] == true) {
                   nav.pop();
                   _load();
+                  AppToast.updated(context, message: 'Task updated');
                 } else {
-                  messenger.showSnackBar(SnackBar(content: Text(res['error']?.toString() ?? 'Could not save')));
+                  AppToast.saveFailed(dialogCtx, res['error']?.toString());
                 }
               },
               style: ElevatedButton.styleFrom(
@@ -2735,9 +2744,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
       _load(silent: true);
     } else {
       _restoreProject(snapshot);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not move task')),
-      );
+      AppToast.updateFailed(context, r['error']?.toString());
     }
   }
 
@@ -2928,7 +2935,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     final sc = t['subtask_count'] ?? 0;
     final cs = t['completed_subtask_count'] ?? 0;
     final pr = (t['subtask_progress'] ?? 0).toDouble();
-    final done = t['completed'] == true;
+    final done = taskIsCompleted(t);
     final canDelete = t['can_delete'] == true;
     final pri = (t['priority'] ?? 'medium').toString();
     final taskId = t['id'];
@@ -3057,14 +3064,30 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                           ],
                         ],
                       ),
-                      const SizedBox(height: 6),
-                      TaskStatusDropdown(
-                        key: ValueKey<String>('kt_${t['id']}_${t['status']}_${t['completed']}'),
-                        taskId: t['id'] as int,
-                        task: t,
-                        apiService: widget.apiService,
-                        onUpdated: () => _load(silent: true),
-                        compact: true,
+                      const SizedBox(height: 8),
+                      GestureDetector(
+                        onTap: () {},
+                        behavior: HitTestBehavior.opaque,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            TaskStatusDropdown(
+                              key: ValueKey<String>('kt_${t['id']}_${t['status']}_${t['completed']}'),
+                              taskId: t['id'] as int,
+                              task: t,
+                              projectId: widget.projectId,
+                              apiService: widget.apiService,
+                              onUpdated: () => _load(silent: true),
+                              compact: true,
+                            ),
+                            const SizedBox(height: 8),
+                            TaskCompleteButton(
+                              isCompleted: done,
+                              compact: true,
+                              onPressed: () => _toggleTaskComplete(t),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),

@@ -6,6 +6,8 @@ import '../app_session.dart';
 import '../config.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
+import '../utils/platform_capabilities.dart';
 import '../widgets/app_primary_button.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/glass_card.dart';
@@ -109,9 +111,7 @@ class _ProfilePageState extends State<ProfilePage> {
     } else {
       setState(() => _loading = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(r['error']?.toString() ?? 'Could not load profile')),
-        );
+        AppToast.error(context, r['error']?.toString() ?? 'Could not load profile');
       }
     }
   }
@@ -144,13 +144,9 @@ class _ProfilePageState extends State<ProfilePage> {
       await prefs.setString('designation', _desigCtrl.text.trim());
       if (!mounted) return;
       setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profile saved')),
-      );
+      AppToast.saved(context, message: 'Profile saved');
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Save failed')),
-      );
+      AppToast.saveFailed(context, r['error']?.toString());
     }
   }
 
@@ -179,14 +175,10 @@ class _ProfilePageState extends State<ProfilePage> {
         await prefs.setString('profile_photo_url', url);
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Photo updated')),
-      );
+      AppToast.updated(context, message: 'Photo updated');
     } else {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(up['error']?.toString() ?? 'Upload failed')),
-      );
+      AppToast.error(context, up['error']?.toString() ?? 'Upload failed');
     }
   }
 
@@ -216,7 +208,9 @@ class _ProfilePageState extends State<ProfilePage> {
           Text('Profile & settings', style: AppTheme.pageTitle),
           const SizedBox(height: 4),
           Text(
-            'Account, photo, screenshot consent, and alerts',
+            PlatformCapabilities.screenshotMonitoring
+                ? 'Account, photo, screenshot consent, and alerts'
+                : 'Account, photo, and alerts',
             style: AppTheme.caption,
           ),
           const SizedBox(height: 16),
@@ -348,43 +342,67 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
           ),
           const SizedBox(height: 14),
-          GlassCard(
-            child: Column(
-              children: [
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text('Screenshot monitoring', style: AppTheme.sectionTitle),
-                  subtitle: Text(
-                    'Allow screen captures while clocked in. Server will reject uploads if disabled.',
-                    style: AppTheme.caption,
+          if (PlatformCapabilities.screenshotMonitoring)
+            GlassCard(
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('Screenshot monitoring', style: AppTheme.sectionTitle),
+                    subtitle: Text(
+                      'Allow screen captures while clocked in. Server will reject uploads if disabled.',
+                      style: AppTheme.caption,
+                    ),
+                    value: _consent,
+                    activeThumbColor: AppTheme.primaryBright,
+                    onChanged: (v) => setState(() {
+                      _consent = v;
+                      AppSession.setConsent(v);
+                    }),
                   ),
-                  value: _consent,
-                  activeThumbColor: AppTheme.primaryBright,
-                  onChanged: (v) => setState(() {
-                    _consent = v;
-                    AppSession.setConsent(v);
-                  }),
-                ),
-                Divider(color: AppTheme.border, height: 1),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text('Notification sound', style: AppTheme.sectionTitle),
-                  subtitle: Text(
-                    'Play a short sound when new alerts arrive',
-                    style: AppTheme.caption,
+                  Divider(color: AppTheme.border, height: 1),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('Notification sound', style: AppTheme.sectionTitle),
+                    subtitle: Text(
+                      'Play a short sound when new alerts arrive',
+                      style: AppTheme.caption,
+                    ),
+                    value: _sound,
+                    activeThumbColor: AppTheme.primaryBright,
+                    onChanged: _toggleSound,
                   ),
-                  value: _sound,
-                  activeThumbColor: AppTheme.primaryBright,
-                  onChanged: _toggleSound,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Capture interval: ${AppConfig.screenshotInterval}s (build flag SCREENSHOT_INTERVAL_SEC)',
-                  style: AppTheme.caption.copyWith(fontSize: 11),
-                ),
-              ],
+                  const SizedBox(height: 4),
+                  Text(
+                    'Capture interval: ${AppConfig.screenshotInterval}s (build flag SCREENSHOT_INTERVAL_SEC)',
+                    style: AppTheme.caption.copyWith(fontSize: 11),
+                  ),
+                ],
+              ),
+            )
+          else
+            GlassCard(
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text('Notification sound', style: AppTheme.sectionTitle),
+                    subtitle: Text(
+                      'Play a short sound when new alerts arrive',
+                      style: AppTheme.caption,
+                    ),
+                    value: _sound,
+                    activeThumbColor: AppTheme.primaryBright,
+                    onChanged: _toggleSound,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Screenshot monitoring is available on Windows, Linux, and macOS desktop apps only.',
+                    style: AppTheme.caption.copyWith(fontSize: 11),
+                  ),
+                ],
+              ),
             ),
-          ),
           if (widget.onOpenP2P != null) ...[
             const SizedBox(height: 14),
             GlassCard(

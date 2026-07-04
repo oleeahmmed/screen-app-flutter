@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
+import '../utils/task_helpers.dart';
 
 /// Normalized task status for dropdown (matches Django `Task.STATUS_CHOICES`).
 String taskStatusValueFromMap(dynamic t) {
@@ -106,6 +108,8 @@ class TaskStatusDropdown extends StatefulWidget {
   final ApiService apiService;
   final VoidCallback onUpdated;
   final bool compact;
+  /// When set (e.g. project kanban), overrides task map project id.
+  final int projectId;
 
   const TaskStatusDropdown({
     super.key,
@@ -114,6 +118,7 @@ class TaskStatusDropdown extends StatefulWidget {
     required this.apiService,
     required this.onUpdated,
     this.compact = false,
+    this.projectId = 0,
   });
 
   @override
@@ -128,15 +133,47 @@ class _TaskStatusDropdownState extends State<TaskStatusDropdown> {
     final current = taskStatusValueFromMap(widget.task);
     if (v == current) return;
     setState(() => _busy = true);
-    final r = await widget.apiService.updateTask(widget.taskId, {'status': v});
+    final taskMap = widget.task is Map ? Map<String, dynamic>.from(widget.task as Map) : null;
+    final projectId = widget.projectId > 0
+        ? widget.projectId
+        : (taskProjectIdFrom(widget.task) ?? 0);
+    Map<String, dynamic> r;
+    if (v == 'completed') {
+      r = await widget.apiService.setTaskCompleted(
+        widget.taskId,
+        completed: true,
+        projectId: projectId,
+        task: taskMap,
+      );
+    } else if (current == 'completed' && v != 'completed') {
+      r = await widget.apiService.setTaskCompleted(
+        widget.taskId,
+        completed: false,
+        projectId: projectId,
+        task: taskMap,
+      );
+      if (r['success'] == true && v != 'pending') {
+        r = await widget.apiService.updateTask(
+          widget.taskId,
+          {'status': v},
+          projectId: projectId,
+          task: taskMap,
+        );
+      }
+    } else {
+      r = await widget.apiService.updateTask(
+        widget.taskId,
+        {'status': v},
+        projectId: projectId,
+        task: taskMap,
+      );
+    }
     if (!mounted) return;
     setState(() => _busy = false);
     if (r['success'] == true) {
       widget.onUpdated();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not update status')),
-      );
+      AppToast.updateFailed(context, r['error']?.toString());
     }
   }
 
@@ -185,6 +222,8 @@ class SubtaskStatusDropdown extends StatefulWidget {
   final dynamic subtask;
   final ApiService apiService;
   final VoidCallback onUpdated;
+  final int projectId;
+  final dynamic task;
 
   const SubtaskStatusDropdown({
     super.key,
@@ -193,6 +232,8 @@ class SubtaskStatusDropdown extends StatefulWidget {
     required this.subtask,
     required this.apiService,
     required this.onUpdated,
+    this.projectId = 0,
+    this.task,
   });
 
   @override
@@ -207,15 +248,21 @@ class _SubtaskStatusDropdownState extends State<SubtaskStatusDropdown> {
     final current = subtaskStatusValueFromMap(widget.subtask);
     if (v == current) return;
     setState(() => _busy = true);
-    final r = await widget.apiService.updateSubTask(widget.taskId, widget.subtaskId, {'status': v});
+    final taskMap = widget.task is Map ? Map<String, dynamic>.from(widget.task as Map) : null;
+    final pid = widget.projectId > 0 ? widget.projectId : (taskProjectIdFrom(widget.task) ?? 0);
+    final r = await widget.apiService.updateSubTask(
+      widget.taskId,
+      widget.subtaskId,
+      {'status': v},
+      projectId: pid,
+      task: taskMap,
+    );
     if (!mounted) return;
     setState(() => _busy = false);
     if (r['success'] == true) {
       widget.onUpdated();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not update status')),
-      );
+      AppToast.updateFailed(context, r['error']?.toString());
     }
   }
 

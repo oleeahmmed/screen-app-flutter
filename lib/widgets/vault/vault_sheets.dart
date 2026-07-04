@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../../services/api_service.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/app_toast.dart';
 
 /// Share a vault entry with company employees.
 Future<void> showVaultShareSheet({
@@ -108,14 +109,10 @@ class _VaultShareSheetState extends State<_VaultShareSheet> {
       widget.onChanged?.call();
       await _load();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Shared successfully'), backgroundColor: AppTheme.success),
-        );
+        AppToast.success(context, 'Shared successfully');
       }
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Share failed'), backgroundColor: AppTheme.danger),
-      );
+      AppToast.error(context, r['error']?.toString() ?? 'Share failed');
     }
   }
 
@@ -126,9 +123,7 @@ class _VaultShareSheetState extends State<_VaultShareSheet> {
       widget.onChanged?.call();
       await _load();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Remove failed'), backgroundColor: AppTheme.danger),
-      );
+      AppToast.error(context, r['error']?.toString() ?? 'Remove failed');
     }
   }
 

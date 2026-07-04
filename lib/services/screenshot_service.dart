@@ -1,4 +1,4 @@
-// screenshot_service.dart — periodic screenshot upload (Windows, Android, Linux)
+// screenshot_service.dart — periodic screenshot upload (Windows, Linux, macOS)
 
 import 'dart:async';
 import 'dart:io';
@@ -6,15 +6,14 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'api_service.dart';
 import 'activity_detection_service.dart';
-import 'android_screenshot_channel.dart';
 import 'image_compress_util.dart';
 import '../config.dart';
 import '../app_session.dart';
+import '../utils/platform_capabilities.dart';
 
 class ScreenshotService {
-  /// Platforms with a working capture implementation.
-  static bool get isPlatformSupported =>
-      Platform.isWindows || Platform.isAndroid || Platform.isLinux;
+  /// Platforms with a working capture implementation (desktop only).
+  static bool get isPlatformSupported => PlatformCapabilities.screenshotMonitoring;
 
   static String get platformLabel {
     if (Platform.isWindows) return 'Windows';
@@ -31,7 +30,6 @@ class ScreenshotService {
   int _captureCount = 0;
   DateTime _lastActivityTime = DateTime.now();
   bool _isUserActive = true;
-  bool _androidProjectionReady = false;
   static const int idleThresholdSeconds = 60;
   static const bool enableDebugLogs = true;
 
@@ -90,10 +88,6 @@ class ScreenshotService {
     _debugLog('Screenshot service started ($platformLabel)');
     _debugLog('Capture interval: ${interval}s');
 
-    if (Platform.isAndroid) {
-      await _prepareAndroidCapture();
-    }
-
     _screenshotTimer = Timer.periodic(Duration(seconds: interval), (_) async {
       await _captureOnce();
     });
@@ -104,18 +98,6 @@ class ScreenshotService {
 
     // First capture runs in background — must not block clock-in UI.
     unawaited(_captureOnce());
-  }
-
-  Future<void> _prepareAndroidCapture() async {
-    await AndroidScreenshotChannel.requestAndroidPermissions();
-    await AndroidScreenshotChannel.startForeground();
-    _androidProjectionReady =
-        await AndroidScreenshotChannel.requestScreenCapturePermission();
-    if (!_androidProjectionReady) {
-      _debugLog(
-        'Android screen capture permission denied — allow "Screen capture" when prompted',
-      );
-    }
   }
 
   Future<void> _captureOnce() async {
@@ -131,16 +113,10 @@ class ScreenshotService {
 
       if (Platform.isWindows) {
         captured = await _captureWindowsPowerShell();
-      } else if (Platform.isAndroid) {
-        if (!_androidProjectionReady) {
-          _androidProjectionReady =
-              await AndroidScreenshotChannel.isPermissionGranted();
-        }
-        if (_androidProjectionReady) {
-          captured = await AndroidScreenshotChannel.capture();
-        }
       } else if (Platform.isLinux) {
         captured = await _captureLinuxNative();
+      } else if (Platform.isMacOS) {
+        captured = await _captureMacOS();
       }
 
       if (captured != null && captured.isNotEmpty) {
@@ -209,6 +185,31 @@ try {
       return null;
     } catch (e) {
       _debugLog('Windows capture error: $e');
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _captureMacOS() async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final tempFile =
+          '${tempDir.path}${Platform.pathSeparator}mac_capture_${DateTime.now().millisecondsSinceEpoch}.png';
+      final result = await Process.run(
+        'screencapture',
+        ['-x', tempFile],
+        runInShell: false,
+      ).timeout(const Duration(seconds: 12));
+      if (result.exitCode != 0) return null;
+
+      final file = File(tempFile);
+      if (await file.exists()) {
+        final bytes = await file.readAsBytes();
+        await file.delete().catchError((_) {});
+        if (bytes.isNotEmpty) return bytes;
+      }
+      return null;
+    } catch (e) {
+      _debugLog('macOS capture error: $e');
       return null;
     }
   }
@@ -322,13 +323,7 @@ try {
 
   Future<void> _uploadImage(Uint8List imageBytes) async {
     try {
-      Uint8List uploadBytes;
-      if (Platform.isAndroid) {
-        // Native side already returns JPEG.
-        uploadBytes = imageBytes;
-      } else {
-        uploadBytes = compressToJpeg(imageBytes, maxWidth: 720, quality: 70);
-      }
+      final uploadBytes = compressToJpeg(imageBytes, maxWidth: 720, quality: 70);
 
       final activityStatus = activityDetection.analyzeScreenshot(imageBytes);
       if (activityStatus['is_idle'] == true) {
@@ -358,11 +353,6 @@ try {
     _isRunning = false;
     _screenshotTimer?.cancel();
     _activityCheckTimer?.cancel();
-    if (Platform.isAndroid) {
-      await AndroidScreenshotChannel.releaseProjection();
-      await AndroidScreenshotChannel.stopForeground();
-      _androidProjectionReady = false;
-    }
     _debugLog('Screenshot service stopped');
   }
 

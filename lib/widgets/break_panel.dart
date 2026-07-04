@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../services/screenshot_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/platform_capabilities.dart';
 
 /// BRB break controls — uses `/api/breaks/` endpoints.
 class BreakPanel extends StatefulWidget {
@@ -580,7 +581,9 @@ Future<void> showBreakStartSheet({
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Choose when you\'ll be back. Screenshots pause while on break.',
+                  PlatformCapabilities.screenshotMonitoring
+                      ? 'Choose when you\'ll be back. Screenshots pause while on break.'
+                      : 'Choose when you\'ll be back.',
                   style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12),
                 ),
                 const SizedBox(height: 16),

@@ -1,3 +1,5 @@
+import 'utils/platform_capabilities.dart';
+
 /// In-memory session flags (synced from API + SharedPreferences).
 class AppSession {
   AppSession._();
@@ -10,5 +12,5 @@ class AppSession {
   }
 
   static bool get mayCaptureScreenshots =>
-      screenshotMonitoringConsent;
+      PlatformCapabilities.screenshotMonitoring && screenshotMonitoringConsent;
 }

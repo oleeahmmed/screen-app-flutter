@@ -11,11 +11,16 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../config.dart';
 import '../services/api_service.dart';
+import '../services/app_navigation.dart';
+import '../widgets/app_tab_shell.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
+import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
+import '../utils/task_helpers.dart';
 import '../widgets/app_quick_menu.dart';
 import '../widgets/kanban_assignee_picker.dart';
+import '../widgets/task_action_buttons.dart';
 import '../widgets/task_status_dropdown.dart';
 
 String _displayStr(dynamic v) {
@@ -115,20 +120,26 @@ void openTaskDetailPage(
   List<dynamic> stages = const [],
   bool isManager = false,
   VoidCallback? onClosed,
+  VoidCallback? onLogout,
 }) {
-  Navigator.of(context, rootNavigator: true).push<void>(
+  Navigator.of(context).push<void>(
     MaterialPageRoute(
       fullscreenDialog: false,
-      builder: (_) => TaskDetailPage(
-        apiService: apiService,
-        taskId: taskId,
-        projectId: projectId,
-        projectName: projectName,
-        customerName: customerName,
-        initialTask: initialTask,
-        employees: employees,
-        stages: stages,
-        isManager: isManager,
+      builder: (_) => AppTabShell(
+        selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, 4),
+        unreadNotifs: AppNavigation.instance.unreadNotifs,
+        onLogout: onLogout,
+        child: TaskDetailPage(
+          apiService: apiService,
+          taskId: taskId,
+          projectId: projectId,
+          projectName: projectName,
+          customerName: customerName,
+          initialTask: initialTask,
+          employees: employees,
+          stages: stages,
+          isManager: isManager,
+        ),
       ),
     ),
   ).then((_) => onClosed?.call());
@@ -277,9 +288,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       final ids = body['assignee_ids'];
       if (ids is List && ids.isEmpty) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('At least one assignee is required')),
-        );
+        AppToast.warning(context, 'At least one assignee is required');
         return;
       }
     }
@@ -287,7 +296,12 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       _saving = true;
       _saveHint = 'Saving…';
     });
-    final r = await widget.apiService.updateTask(widget.taskId, body);
+    final r = await widget.apiService.updateTask(
+      widget.taskId,
+      body,
+      projectId: widget.projectId,
+      task: _task,
+    );
     if (!mounted) return;
     if (r['success'] == true) {
       if (r['data'] is Map) {
@@ -308,9 +322,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
         _saving = false;
         _saveHint = '';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not save')),
-      );
+      AppToast.saveFailed(context, r['error']?.toString());
     }
   }
 
@@ -495,9 +507,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     _autoSaveTimer?.cancel();
     await _flushTextAutoSave();
     if (_assigneeIds.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('At least one assignee is required')),
-      );
+      AppToast.warning(context, 'At least one assignee is required');
       return;
     }
     final s = _snapshot;
@@ -522,17 +532,13 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     }
     if (body.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('All changes saved')),
-      );
+      AppToast.saved(context, message: 'All changes saved');
       return;
     }
     await _patchPartial(body);
     if (!mounted) return;
     if (_saveHint == 'Saved') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Changes saved')),
-      );
+      AppToast.saved(context, message: 'Changes saved');
     }
   }
 
@@ -556,9 +562,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   void _removeAssignee(int userId) {
     if (_assigneeIds.length <= 1) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('At least one assignee is required')),
-      );
+      AppToast.warning(context, 'At least one assignee is required');
       return;
     }
     final next = List<int>.from(_assigneeIds)..remove(userId);
@@ -625,11 +629,9 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     if (up['success'] == true) {
       await _load();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Uploaded $name')));
+      AppToast.success(context, 'Uploaded $name');
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(up['error']?.toString() ?? 'Upload failed')),
-      );
+      AppToast.error(context, up['error']?.toString() ?? 'Upload failed');
     }
   }
 
@@ -656,9 +658,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       }
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Copy a file in Explorer, then Paste — or drag files here')),
-    );
+    AppToast.info(context, 'Copy a file in Explorer, then Paste — or drag files here');
   }
 
   Future<void> _loadActivity() async {
@@ -726,9 +726,26 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   void _shareTask() {
     final link = '${AppConfig.apiBaseUrl.replaceAll('/api', '')}/monitor/project/${widget.projectId}/?task=${widget.taskId}';
     Clipboard.setData(ClipboardData(text: link));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Task link copied to clipboard')),
+    AppToast.success(context, 'Task link copied to clipboard');
+  }
+
+  Future<void> _toggleComplete() async {
+    if (_task == null) return;
+    final done = taskIsCompleted(_task);
+    final r = await widget.apiService.setTaskCompleted(
+      widget.taskId,
+      completed: !done,
+      projectId: widget.projectId,
+      task: _task,
     );
+    if (!mounted) return;
+    if (r['success'] == true) {
+      await _load();
+      if (!mounted) return;
+      AppToast.updated(context, message: done ? 'Task reopened' : 'Task completed');
+    } else {
+      AppToast.updateFailed(context, r['error']?.toString());
+    }
   }
 
   @override
@@ -1256,9 +1273,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     if (r['success'] == true) {
       await _load();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Could not delete')),
-      );
+      AppToast.error(context, r['error']?.toString() ?? 'Could not delete');
     }
   }
 
@@ -1958,112 +1973,20 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   Widget _buildFooter() {
     final compact = Responsive.isMobile(context);
-    final hint = _saveHint.isNotEmpty
-        ? _saveHint
-        : (compact ? 'Auto-saves' : 'Auto-saves · Ctrl+S · Esc');
-
     return Container(
       padding: EdgeInsets.fromLTRB(compact ? 12 : 20, 12, compact ? 12 : 20, 14),
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
       ),
-      child: compact
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (hint.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      hint,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: _saveHint == 'Saved'
-                            ? const Color(0xFF10B981)
-                            : Colors.white.withValues(alpha: 0.35),
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _dirty ? _discard : null,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white70,
-                          side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                        child: const Text('Discard'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 2,
-                      child: FilledButton.icon(
-                        onPressed: _saving ? null : _saveAll,
-                        icon: _saving
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                              )
-                            : const Icon(Icons.check, size: 16),
-                        label: const Text('Save'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppTheme.primary,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            )
-          : Row(
-              children: [
-                OutlinedButton(
-                  onPressed: _dirty ? _discard : null,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white70,
-                    side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  ),
-                  child: const Text('Discard'),
-                ),
-                const SizedBox(width: 12),
-                Flexible(
-                  child: Text(
-                    hint,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _saveHint == 'Saved'
-                          ? const Color(0xFF10B981)
-                          : Colors.white.withValues(alpha: 0.25),
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-                const Spacer(),
-                if (_saving)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 12),
-                    child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary)),
-                  ),
-                FilledButton.icon(
-                  onPressed: _saving ? null : _saveAll,
-                  icon: const Icon(Icons.check, size: 16),
-                  label: const Text('Save Changes'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppTheme.primary,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                  ),
-                ),
-              ],
-            ),
+      child: TaskDetailFooterActions(
+        dirty: _dirty,
+        saving: _saving,
+        isCompleted: _task != null && taskIsCompleted(_task),
+        saveHint: _saveHint,
+        onDiscard: _dirty ? _discard : null,
+        onSave: _saveAll,
+        onToggleComplete: _toggleComplete,
+      ),
     );
   }
 
@@ -2073,6 +1996,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       builder: (ctx) => _SubtaskEditDialog(
         apiService: widget.apiService,
         taskId: widget.taskId,
+        projectId: widget.projectId,
         employees: _employees,
         subtask: st,
         onSaved: _load,
@@ -2092,6 +2016,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 class _SubtaskEditDialog extends StatefulWidget {
   final ApiService apiService;
   final int taskId;
+  final int projectId;
   final List<dynamic> employees;
   final dynamic subtask;
   final Future<void> Function() onSaved;
@@ -2099,6 +2024,7 @@ class _SubtaskEditDialog extends StatefulWidget {
   const _SubtaskEditDialog({
     required this.apiService,
     required this.taskId,
+    this.projectId = 0,
     required this.employees,
     required this.onSaved,
     this.subtask,
@@ -2172,9 +2098,7 @@ class _SubtaskEditDialogState extends State<_SubtaskEditDialog> {
     if (r['success'] == true) {
       await _loadAttachments();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(r['error']?.toString() ?? 'Upload failed')),
-      );
+      AppToast.error(context, r['error']?.toString() ?? 'Upload failed');
     }
   }
 
@@ -2202,7 +2126,12 @@ class _SubtaskEditDialogState extends State<_SubtaskEditDialog> {
     if (_assigneeId != null) body['assignee_id'] = _assigneeId;
     body['due_date'] = _dueDate;
     if (_isEdit) {
-      await widget.apiService.updateSubTask(widget.taskId, widget.subtask['id'], body);
+      await widget.apiService.updateSubTask(
+        widget.taskId,
+        widget.subtask['id'],
+        body,
+        projectId: widget.projectId,
+      );
     } else {
       await widget.apiService.createSubTask(
         widget.taskId,

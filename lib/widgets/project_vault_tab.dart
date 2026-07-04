@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
 import 'vault/vault_sheets.dart';
 
 /// Project credentials vault — `/api/projects/{id}/vault/`.
@@ -389,9 +390,12 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   }
 
   void _snack(String msg, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: color),
-    );
+    final type = color == AppTheme.success
+        ? AppToastType.success
+        : color == AppTheme.warning
+            ? AppToastType.warning
+            : AppToastType.error;
+    AppToast.show(context, message: msg, type: type);
   }
 
   InputDecoration _inputDeco(String label) {

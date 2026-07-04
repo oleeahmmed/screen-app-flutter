@@ -6,6 +6,8 @@ import '../services/api_service.dart';
 import '../services/screenshot_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
+import '../services/app_navigation.dart';
+import '../widgets/app_tab_shell.dart';
 import '../widgets/hub_quick_actions.dart';
 import 'projects_page.dart';
 import 'tasks_page.dart';
@@ -46,7 +48,16 @@ class _WorkHubPageState extends State<WorkHubPage> with SingleTickerProviderStat
   }
 
   void _openTool(Widget page) {
-    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AppTabShell(
+          selectedIndex: 1,
+          unreadNotifs: AppNavigation.instance.unreadNotifs,
+          onLogout: widget.onLogout,
+          child: page,
+        ),
+      ),
+    );
   }
 
   @override
@@ -134,7 +145,7 @@ class _WorkHubPageState extends State<WorkHubPage> with SingleTickerProviderStat
                               children: [
                                 Icon(Icons.assignment_turned_in_outlined, size: 17),
                                 SizedBox(width: 7),
-                                Text('My tasks'),
+                                Text('My Tasks'),
                               ],
                             ),
                           ),

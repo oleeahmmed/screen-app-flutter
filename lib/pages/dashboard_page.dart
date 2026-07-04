@@ -10,6 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../app_session.dart';
 import '../services/api_service.dart';
 import '../services/screenshot_service.dart';
+import '../utils/app_toast.dart';
+import '../utils/platform_capabilities.dart';
 import '../services/user_data_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialog.dart';
@@ -42,7 +44,6 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> {
   bool _isClockedIn = false;
   bool _onBreak = false;
-  Duration _workDuration = Duration.zero;
   Duration _todayWorkDuration = Duration.zero;
   late DateTime _clockInTime;
   late DateTime _now;
@@ -53,6 +54,7 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _isProcessing = false;
   DateTime? _breakStartTime;
   int _completedBreakSeconds = 0;
+  List<Map<String, dynamic>> _todayBreaks = [];
   int _breakRefresh = 0;
   int _reportRefresh = 0;
 
@@ -62,38 +64,40 @@ class _DashboardPageState extends State<DashboardPage> {
     _now = DateTime.now();
     _clockInTime = _now;
     _loadUserData();
-    _loadAttendance().then((_) => _loadBreakInfo());
+    _loadAttendance();
     _startClock();
   }
 
   Future<void> _loadBreakInfo() async {
-    if (!_isClockedIn) {
-      if (mounted) {
-        setState(() {
-          _onBreak = false;
-          _breakStartTime = null;
-          _completedBreakSeconds = 0;
-        });
-      }
-      return;
-    }
-
-    final statusR = await widget.apiService.getBreakStatus();
+    final statusR = _isClockedIn ? await widget.apiService.getBreakStatus() : null;
     final myR = await widget.apiService.getMyBreaks();
     if (!mounted) return;
 
     var onBreak = _onBreak;
     DateTime? breakStart = _breakStartTime;
     var completedSecs = _completedBreakSeconds;
+    var breaks = _todayBreaks;
 
     if (myR['success'] == true) {
       final data = myR['data'] as Map<String, dynamic>? ?? {};
       final summary = data['summary'] as Map<String, dynamic>?;
-      final totalMin = summary?['total_break_minutes'];
-      completedSecs = (totalMin is int ? totalMin : int.tryParse('$totalMin') ?? 0) * 60;
+      final totalSecs = summary?['total_break_seconds'];
+      if (totalSecs != null) {
+        completedSecs = totalSecs is int ? totalSecs : int.tryParse('$totalSecs') ?? 0;
+      } else {
+        final totalMin = summary?['total_break_minutes'];
+        completedSecs = (totalMin is int ? totalMin : int.tryParse('$totalMin') ?? 0) * 60;
+      }
+      final rawBreaks = data['breaks'];
+      if (rawBreaks is List) {
+        breaks = rawBreaks
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
     }
 
-    if (statusR['success'] == true) {
+    if (statusR != null && statusR['success'] == true) {
       final st = statusR['data'] as Map<String, dynamic>? ?? {};
       onBreak = st['on_break'] == true;
       if (onBreak && st['break'] is Map) {
@@ -102,6 +106,9 @@ class _DashboardPageState extends State<DashboardPage> {
       } else if (!onBreak) {
         breakStart = null;
       }
+    } else if (!_isClockedIn) {
+      onBreak = false;
+      breakStart = null;
     }
 
     if (mounted) {
@@ -109,16 +116,79 @@ class _DashboardPageState extends State<DashboardPage> {
         _onBreak = onBreak;
         _breakStartTime = breakStart;
         _completedBreakSeconds = completedSecs;
+        _todayBreaks = breaks;
       });
+      if (_isClockedIn && _serverNetTotalSeconds != null) {
+        _syncNetWorkFromServer(_serverNetTotalSeconds!);
+      }
     }
   }
 
+  int? _serverNetTotalSeconds;
+
   Duration get _todayBreakDuration {
-    var total = Duration(seconds: _completedBreakSeconds);
-    if (_onBreak && _breakStartTime != null) {
-      total += _now.difference(_breakStartTime!);
+    if (_todayBreaks.isNotEmpty || _onBreak) {
+      return Duration(seconds: _allTodayBreakSeconds());
+    }
+    return Duration(seconds: _completedBreakSeconds);
+  }
+
+  int _allTodayBreakSeconds([DateTime? at]) {
+    final now = at ?? _now;
+    var total = 0;
+    for (final b in _todayBreaks) {
+      final start = _parseApiDateTime(b['break_start']);
+      if (start == null) continue;
+      final actualBack = _parseApiDateTime(b['actual_back']);
+      if (actualBack != null) {
+        total += actualBack.difference(start).inSeconds.clamp(0, 86400 * 2);
+      } else if (_onBreak && _breakStartTime != null && start.isAtSameMomentAs(_breakStartTime!)) {
+        total += now.difference(_breakStartTime!).inSeconds.clamp(0, 86400 * 2);
+      }
+    }
+    if (total == 0 && _completedBreakSeconds > 0) {
+      return _completedBreakSeconds;
     }
     return total;
+  }
+
+  int _sessionBreakSeconds([DateTime? at]) {
+    if (!_isClockedIn) return 0;
+    final now = at ?? _now;
+    var total = 0;
+    for (final b in _todayBreaks) {
+      final start = _parseApiDateTime(b['break_start']);
+      if (start == null || start.isBefore(_clockInTime)) continue;
+      final actualBack = _parseApiDateTime(b['actual_back']);
+      if (actualBack != null) {
+        total += actualBack.difference(start).inSeconds.clamp(0, 86400 * 2);
+      } else if (_onBreak && _breakStartTime != null && start.isAtSameMomentAs(_breakStartTime!)) {
+        total += now.difference(_breakStartTime!).inSeconds.clamp(0, 86400 * 2);
+      }
+    }
+    return total;
+  }
+
+  Duration get _sessionNetDuration {
+    if (!_isClockedIn) return Duration.zero;
+    final gross = _now.difference(_clockInTime);
+    final net = gross - Duration(seconds: _sessionBreakSeconds());
+    return net.isNegative ? Duration.zero : net;
+  }
+
+  Duration get _todayNetWork {
+    if (!_isClockedIn) return _todayWorkDuration;
+    return _todayWorkDuration + _sessionNetDuration;
+  }
+
+  void _syncNetWorkFromServer(int netTotalSeconds) {
+    if (!_isClockedIn) {
+      setState(() => _todayWorkDuration = Duration(seconds: netTotalSeconds));
+      return;
+    }
+    final sessionNet = _sessionNetDuration.inSeconds;
+    final prior = (netTotalSeconds - sessionNet).clamp(0, netTotalSeconds);
+    setState(() => _todayWorkDuration = Duration(seconds: prior));
   }
 
   bool _attendanceIsOpen(Map<String, dynamic>? att) {
@@ -149,18 +219,13 @@ class _DashboardPageState extends State<DashboardPage> {
     return null;
   }
 
-  void _applyOpenSession(Map<String, dynamic> current, {int? totalSeconds}) {
+  void _applyOpenSession(Map<String, dynamic> current) {
     final checkIn = _parseApiDateTime(current['check_in']) ?? DateTime.now();
     final now = DateTime.now();
-    final sessionSeconds = now.difference(checkIn).inSeconds.clamp(0, 86400 * 2);
-    final total = totalSeconds ?? sessionSeconds;
-    final priorSeconds = (total - sessionSeconds).clamp(0, total);
 
     setState(() {
       _isClockedIn = true;
       _clockInTime = checkIn;
-      _workDuration = Duration.zero;
-      _todayWorkDuration = Duration(seconds: priorSeconds);
       _now = now;
     });
   }
@@ -169,9 +234,26 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() {
       _isClockedIn = false;
       _onBreak = false;
-      _workDuration = Duration.zero;
       _todayWorkDuration = Duration(seconds: totalSeconds);
+      _serverNetTotalSeconds = totalSeconds;
     });
+  }
+
+  /// Sync UI to clocked-out when server session is already closed.
+  Future<void> _forceClosedSession() async {
+    final result = await widget.apiService.getCurrentAttendance();
+    if (!mounted) return;
+    if (result['success'] == true) {
+      final data = result['data'] is Map
+          ? Map<String, dynamic>.from(result['data'] as Map)
+          : <String, dynamic>{};
+      final todayDuration = data['today_work_duration'] is Map
+          ? Map<String, dynamic>.from(data['today_work_duration'] as Map)
+          : null;
+      _applyClosedSession(_parseSeconds(todayDuration?['total_seconds']));
+      return;
+    }
+    _applyClosedSession(_todayWorkDuration.inSeconds);
   }
 
   Future<void> _loadAttendance() async {
@@ -189,15 +271,26 @@ class _DashboardPageState extends State<DashboardPage> {
         ? Map<String, dynamic>.from(data['today_work_duration'] as Map)
         : null;
     final totalSeconds = _parseSeconds(todayDuration?['total_seconds']);
+    final breakDuration = data['today_break_duration'] is Map
+        ? Map<String, dynamic>.from(data['today_break_duration'] as Map)
+        : null;
+    final breakSeconds = _parseSeconds(breakDuration?['total_seconds']);
+    _serverNetTotalSeconds = totalSeconds;
+    if (breakSeconds > 0) {
+      _completedBreakSeconds = breakSeconds;
+    }
 
     if (_attendanceIsOpen(current)) {
-      _applyOpenSession(current!, totalSeconds: totalSeconds);
+      _applyOpenSession(current!);
+      _syncNetWorkFromServer(totalSeconds);
+      await _loadBreakInfo();
 
       if (AppSession.mayCaptureScreenshots && widget.screenshotService?.isRunning != true) {
         widget.screenshotService?.startCapture();
       }
     } else {
       _applyClosedSession(totalSeconds);
+      await _loadBreakInfo();
       if (widget.screenshotService?.isRunning == true) {
         widget.screenshotService?.stopCapture();
       }
@@ -277,9 +370,11 @@ class _DashboardPageState extends State<DashboardPage> {
           _showSnackBar('Checked out successfully', AppTheme.success);
         } else {
           final err = result['error']?.toString() ?? 'Unknown error';
-          final alreadyOut = err.toLowerCase().contains('no active check-in');
+          final errLower = err.toLowerCase();
+          final alreadyOut = errLower.contains('no active check-in') ||
+              errLower.contains('attendance state did not update');
           if (alreadyOut) {
-            await _loadAttendance();
+            await _forceClosedSession();
             await _loadBreakInfo();
             widget.screenshotService?.stopCapture();
             if (mounted) setState(() => _breakRefresh++);
@@ -305,7 +400,7 @@ class _DashboardPageState extends State<DashboardPage> {
           if (mounted) setState(() => _breakRefresh++);
           if (AppSession.mayCaptureScreenshots) {
             unawaited(widget.screenshotService?.startCapture());
-            if (Platform.isLinux) {
+            if (Platform.isLinux || Platform.isMacOS) {
               _showSnackBar(
                 'Checked in — screen capture runs in background',
                 AppTheme.success,
@@ -313,11 +408,13 @@ class _DashboardPageState extends State<DashboardPage> {
             } else {
               _showSnackBar('Checked in — monitoring active', AppTheme.success);
             }
-          } else {
+          } else if (PlatformCapabilities.screenshotMonitoring) {
             _showSnackBar(
               'Checked in — enable screenshots under Me → Profile',
               AppTheme.warning,
             );
+          } else {
+            _showSnackBar('Checked in successfully', AppTheme.success);
           }
         } else {
           await AppDialog.alert(
@@ -333,9 +430,14 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   void _showSnackBar(String message, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: color, duration: const Duration(seconds: 2)),
-    );
+    final type = color == AppTheme.success
+        ? AppToastType.success
+        : color == AppTheme.warning
+            ? AppToastType.warning
+            : color == AppTheme.danger
+                ? AppToastType.error
+                : AppToastType.info;
+    AppToast.show(context, message: message, type: type, duration: const Duration(seconds: 2));
   }
 
   String _initials() {
@@ -349,11 +451,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isClockedIn) {
-      _workDuration = _now.difference(_clockInTime);
-    }
-
-    final todayTotal = _todayWorkDuration + (_isClockedIn ? _workDuration : Duration.zero);
+    final todayTotal = _todayNetWork;
     final todayBreak = _todayBreakDuration;
 
     return GestureDetector(
@@ -546,7 +644,7 @@ class _DashboardPageState extends State<DashboardPage> {
             Text(
               _onBreak
                   ? 'Session paused · clocked in at ${DateFormat('HH:mm').format(_clockInTime)}'
-                  : 'Session · ${_formatDuration(_workDuration)} since ${DateFormat('HH:mm').format(_clockInTime)}',
+                  : 'Session · ${_formatDuration(_sessionNetDuration)} since ${DateFormat('HH:mm').format(_clockInTime)}',
               textAlign: TextAlign.center,
               style: AppTheme.caption.copyWith(fontSize: 11),
             ),

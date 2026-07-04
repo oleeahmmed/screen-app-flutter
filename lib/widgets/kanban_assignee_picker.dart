@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../utils/app_toast.dart';
+
 /// Multi-select assignee picker (same flow as web `openKanbanAssigneePicker`).
 Future<List<int>?> showKanbanAssigneePicker({
   required BuildContext context,
@@ -90,9 +92,7 @@ Future<List<int>?> showKanbanAssigneePicker({
                 FilledButton(
                   onPressed: () {
                     if (requireAtLeastOne && selected.isEmpty) {
-                      ScaffoldMessenger.of(ctx).showSnackBar(
-                        const SnackBar(content: Text('Select at least one assignee')),
-                      );
+                      AppToast.warning(ctx, 'Select at least one assignee');
                       return;
                     }
                     Navigator.pop(ctx, selected.toList()..sort());

@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
 import 'app_bottom_sheet.dart';
 import 'empty_state.dart';
 import 'glass_card.dart';
@@ -439,9 +440,7 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
     setState(() => _submitting = false);
     if (r['success'] == true) {
       Navigator.of(context, rootNavigator: true).pop(true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Daily report submitted'), backgroundColor: Color(0xFF22C55E)),
-      );
+      AppToast.saved(context, message: 'Daily report submitted');
     } else {
       setState(() => _error = r['error']?.toString() ?? 'Submit failed');
     }

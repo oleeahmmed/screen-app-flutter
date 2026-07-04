@@ -25,7 +25,7 @@ import 'widgets/privacy_notice_dialog.dart';
 import 'widgets/closing_report_panel.dart';
 import 'widgets/tool_page_scaffold.dart';
 import 'widgets/notification_banner.dart';
-import 'widgets/app_top_bar.dart';
+import 'widgets/app_tab_shell.dart';
 import 'services/app_navigation.dart';
 import 'utils/platform_capabilities.dart';
 
@@ -143,6 +143,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       if (_isLoggedIn && mounted) _onNavSelected(3);
     };
     AppNavigation.instance.onSelectTab = _onNavSelected;
+    AppNavigation.instance.onNavigateToTab = _navigateToTab;
     AppNavigation.instance.onLogout = _handleLogout;
     AppNavigation.instance.onOpenDailyReport = _openDailyReportTool;
     AppNavigation.instance.onOpenActivity = _openActivityTool;
@@ -315,6 +316,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void _onUnreadCountChanged(int count) {
     if (!mounted) return;
     setState(() => _unreadNotifs = count);
+    AppNavigation.instance.unreadNotifs = count;
+  }
+
+  void _syncNavState() {
+    AppNavigation.instance.selectedTabIndex = _currentIndex;
+    AppNavigation.instance.unreadNotifs = _unreadNotifs;
+  }
+
+  void _navigateToTab(int i) {
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    _onNavSelected(i);
   }
 
   @override
@@ -424,12 +436,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void _openP2P() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => ToolPageScaffold(
-          title: 'File transfer',
-          subtitle: 'Send files directly between devices',
-          scrollable: false,
+        builder: (_) => AppTabShell(
+          selectedIndex: AppNavigation.instance.selectedTabIndex,
+          unreadNotifs: _unreadNotifs,
           onLogout: _handleLogout,
-          child: Peer2PeerPage(apiService: _apiService, embedded: true),
+          child: ToolPageScaffold(
+            title: 'File transfer',
+            subtitle: 'Send files directly between devices',
+            scrollable: false,
+            onLogout: _handleLogout,
+            child: Peer2PeerPage(apiService: _apiService, embedded: true),
+          ),
         ),
       ),
     );
@@ -439,9 +456,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => DailyReportToolPage(
-          apiService: _apiService,
+        builder: (_) => AppTabShell(
+          selectedIndex: AppNavigation.instance.selectedTabIndex,
+          unreadNotifs: _unreadNotifs,
           onLogout: _handleLogout,
+          child: DailyReportToolPage(
+            apiService: _apiService,
+            onLogout: _handleLogout,
+          ),
         ),
       ),
     );
@@ -451,9 +473,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => ActivityToolPage(
-          apiService: _apiService,
+        builder: (_) => AppTabShell(
+          selectedIndex: AppNavigation.instance.selectedTabIndex,
+          unreadNotifs: _unreadNotifs,
           onLogout: _handleLogout,
+          child: ActivityToolPage(
+            apiService: _apiService,
+            onLogout: _handleLogout,
+          ),
         ),
       ),
     );
@@ -463,9 +490,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => VaultHubPage(
-          apiService: _apiService,
+        builder: (_) => AppTabShell(
+          selectedIndex: AppNavigation.instance.selectedTabIndex,
+          unreadNotifs: _unreadNotifs,
           onLogout: _handleLogout,
+          child: VaultHubPage(
+            apiService: _apiService,
+            onLogout: _handleLogout,
+          ),
         ),
       ),
     );
@@ -491,48 +523,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       );
     }
 
-    final showBottomNav = MediaQuery.sizeOf(context).width < 768;
+    _syncNavState();
 
-    return Scaffold(
-      backgroundColor: AppTheme.bgDeep,
-      body: Column(
-        children: [
-          AppTopBar(
-            selectedIndex: _currentIndex,
-            onSelected: _onNavSelected,
-            unreadNotifs: _unreadNotifs,
-            onLogout: _handleLogout,
-          ),
-          Expanded(
-            child: IndexedStack(
-              index: _currentIndex,
-              children: _mainStackChildren(),
-            ),
-          ),
-        ],
+    return AppTabShell(
+      selectedIndex: _currentIndex,
+      unreadNotifs: _unreadNotifs,
+      onLogout: _handleLogout,
+      child: IndexedStack(
+        index: _currentIndex,
+        children: _mainStackChildren(),
       ),
-      bottomNavigationBar: showBottomNav
-          ? AppTheme.glassBlur(
-        topRadius: 0,
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-            child: NavigationBar(
-              selectedIndex: _currentIndex,
-              backgroundColor: Colors.transparent,
-              surfaceTintColor: Colors.transparent,
-              shadowColor: Colors.transparent,
-              elevation: 0,
-              height: 64,
-              indicatorColor: AppTheme.primary.withValues(alpha: 0.22),
-              onDestinationSelected: _onNavSelected,
-              destinations: _navBarDestinations(),
-            ),
-          ),
-        ),
-      )
-          : null,
     );
   }
 
@@ -544,51 +544,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         _dashboardPage = null;
       }
     });
+    _syncNavState();
     _ensurePageBuilt(i);
     if (i == 3) _refreshNotificationBadge();
   }
-
-  List<NavigationDestination> _navBarDestinations() => [
-        const NavigationDestination(
-          icon: Icon(Icons.home_outlined),
-          selectedIcon: Icon(Icons.home_rounded),
-          label: 'Home',
-        ),
-        const NavigationDestination(
-          icon: Icon(Icons.work_outline_rounded),
-          selectedIcon: Icon(Icons.work_rounded),
-          label: 'Work',
-        ),
-        const NavigationDestination(
-          icon: Icon(Icons.chat_bubble_outline_rounded),
-          selectedIcon: Icon(Icons.chat_rounded),
-          label: 'Chat',
-        ),
-        NavigationDestination(
-          icon: Badge(
-            isLabelVisible: _unreadNotifs > 0,
-            label: Text(_unreadNotifs > 9 ? '9+' : '$_unreadNotifs'),
-            child: const Icon(Icons.notifications_outlined),
-          ),
-          selectedIcon: Badge(
-            isLabelVisible: _unreadNotifs > 0,
-            label: Text(_unreadNotifs > 9 ? '9+' : '$_unreadNotifs'),
-            child: const Icon(Icons.notifications_rounded),
-          ),
-          label: 'Alerts',
-        ),
-        const NavigationDestination(
-          icon: Icon(Icons.person_outline_rounded),
-          selectedIcon: Icon(Icons.person_rounded),
-          label: 'Me',
-        ),
-      ];
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     LocalNotificationService.onTap = null;
     AppNavigation.instance.onSelectTab = null;
+    AppNavigation.instance.onNavigateToTab = null;
     _stopNotifications();
     _notificationService.dispose();
     _screenshotService.stopCapture();
