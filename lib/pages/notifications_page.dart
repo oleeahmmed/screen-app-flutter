@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 
 import '../services/api_service.dart';
+import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/notification_ui.dart';
+import '../utils/platform_capabilities.dart';
 import '../utils/responsive.dart';
 
 class NotificationsPage extends StatefulWidget {
@@ -165,9 +167,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
     final mobile = Responsive.isMobile(context);
     final pad = Responsive.pagePadding(context);
 
-    return Container(
-      decoration: AppTheme.screenGradient(),
+    return AppTheme.homeGlassBackground(
       child: SafeArea(
+        bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -245,6 +247,12 @@ class _NotificationsPageState extends State<NotificationsPage> {
           icon: const Icon(Icons.refresh_rounded, color: AppTheme.textMuted),
           tooltip: 'Refresh',
         ),
+        if (PlatformCapabilities.peerToPeerFileTransfer)
+          IconButton(
+            onPressed: () => AppNavigation.instance.openP2P(),
+            icon: const Icon(Icons.swap_horiz_rounded, color: AppTheme.accent, size: 22),
+            tooltip: 'Peer-to-peer file transfer',
+          ),
       ],
     );
   }
@@ -279,6 +287,13 @@ class _NotificationsPageState extends State<NotificationsPage> {
           icon: const Icon(Icons.refresh_rounded, color: AppTheme.textMuted, size: 20),
           visualDensity: VisualDensity.compact,
         ),
+        if (PlatformCapabilities.peerToPeerFileTransfer)
+          IconButton(
+            onPressed: () => AppNavigation.instance.openP2P(),
+            icon: const Icon(Icons.swap_horiz_rounded, color: AppTheme.accent, size: 22),
+            visualDensity: VisualDensity.compact,
+            tooltip: 'Peer-to-peer file transfer',
+          ),
       ],
     );
   }

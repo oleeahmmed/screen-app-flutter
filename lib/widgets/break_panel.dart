@@ -7,6 +7,9 @@ import '../services/screenshot_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/platform_capabilities.dart';
 
+/// Called when break starts or ends. [breakStart] is set when entering break.
+typedef BreakChangedCallback = void Function(bool onBreak, {DateTime? breakStart});
+
 /// BRB break controls — uses `/api/breaks/` endpoints.
 class BreakPanel extends StatefulWidget {
   final ApiService apiService;
@@ -17,7 +20,7 @@ class BreakPanel extends StatefulWidget {
   final bool alwaysVisible;
   /// Home dashboard: one Break button opens duration picker sheet.
   final bool compact;
-  final ValueChanged<bool>? onBreakChanged;
+  final BreakChangedCallback? onBreakChanged;
 
   const BreakPanel({
     super.key,
@@ -69,6 +72,22 @@ class _BreakPanelState extends State<BreakPanel> {
     });
   }
 
+  DateTime? _breakStartFrom(Map<String, dynamic>? brk) {
+    if (brk == null) return null;
+    return _parseDt(brk['break_start']);
+  }
+
+  void _notifyBreakChanged(bool onBreak, {Map<String, dynamic>? breakData}) {
+    if (onBreak) {
+      widget.onBreakChanged?.call(
+        true,
+        breakStart: _breakStartFrom(breakData) ?? DateTime.now(),
+      );
+    } else {
+      widget.onBreakChanged?.call(false);
+    }
+  }
+
   Future<void> _fetchStatus() async {
     if (!widget.isClockedIn) {
       final wasOnBreak = _onBreak;
@@ -80,7 +99,7 @@ class _BreakPanelState extends State<BreakPanel> {
           _loading = false;
         });
       }
-      if (wasOnBreak) widget.onBreakChanged?.call(false);
+      if (wasOnBreak) _notifyBreakChanged(false);
       return;
     }
     if (mounted) setState(() => _loading = true);
@@ -97,7 +116,10 @@ class _BreakPanelState extends State<BreakPanel> {
           _activeBreak = data['break'] as Map<String, dynamic>?;
         });
         if (nextOnBreak != wasOnBreak) {
-          widget.onBreakChanged?.call(nextOnBreak);
+          _notifyBreakChanged(
+            nextOnBreak,
+            breakData: data['break'] as Map<String, dynamic>?,
+          );
         }
         if (_onBreak && widget.screenshotService?.isRunning == true) {
           _screenshotsPausedForBreak = true;
@@ -117,19 +139,10 @@ class _BreakPanelState extends State<BreakPanel> {
     return DateTime.tryParse(v.toString())?.toLocal();
   }
 
-  Future<void> _startBreak(int minutes) async {
-    final expectedBack = DateTime.now().add(Duration(minutes: minutes));
-    await _startBreakAt(expectedBack);
-  }
-
-  Future<void> _startBreakAt(DateTime expectedBack) async {
+  Future<void> _startBreakNow() async {
     if (_busy || !widget.isClockedIn) return;
-    if (!expectedBack.isAfter(DateTime.now())) {
-      _showSnack('Return time must be in the future', Colors.red);
-      return;
-    }
     setState(() => _busy = true);
-    final r = await widget.apiService.startBreak(expectedBack);
+    final r = await widget.apiService.startBreak();
     if (!mounted) return;
     if (r['success'] == true) {
       final data = r['data'] as Map<String, dynamic>? ?? {};
@@ -142,7 +155,41 @@ class _BreakPanelState extends State<BreakPanel> {
         _activeBreak = data['break'] as Map<String, dynamic>?;
         _busy = false;
       });
-      widget.onBreakChanged?.call(true);
+      _notifyBreakChanged(true, breakData: data['break'] as Map<String, dynamic>?);
+      await _fetchStatus();
+      _showSnack('Break started', Colors.amber.shade700);
+    } else {
+      setState(() => _busy = false);
+      _showSnack(r['error']?.toString() ?? 'Could not start break', Colors.red);
+    }
+  }
+
+  Future<void> _startBreak(int minutes) async {
+    final expectedBack = DateTime.now().add(Duration(minutes: minutes));
+    await _startBreakAt(expectedBack);
+  }
+
+  Future<void> _startBreakAt(DateTime expectedBack) async {
+    if (_busy || !widget.isClockedIn) return;
+    if (!expectedBack.isAfter(DateTime.now())) {
+      _showSnack('Return time must be in the future', Colors.red);
+      return;
+    }
+    setState(() => _busy = true);
+    final r = await widget.apiService.startBreak(expectedBack: expectedBack);
+    if (!mounted) return;
+    if (r['success'] == true) {
+      final data = r['data'] as Map<String, dynamic>? ?? {};
+      if (widget.screenshotService?.isRunning == true) {
+        _screenshotsPausedForBreak = true;
+        await widget.screenshotService?.stopCapture();
+      }
+      setState(() {
+        _onBreak = true;
+        _activeBreak = data['break'] as Map<String, dynamic>?;
+        _busy = false;
+      });
+      _notifyBreakChanged(true, breakData: data['break'] as Map<String, dynamic>?);
       await _fetchStatus();
       _showSnack('Break started — back by ${DateFormat('HH:mm').format(expectedBack)}', Colors.amber.shade700);
     } else {
@@ -222,7 +269,7 @@ class _BreakPanelState extends State<BreakPanel> {
         _activeBreak = null;
         _busy = false;
       });
-      widget.onBreakChanged?.call(false);
+      _notifyBreakChanged(false);
       await _fetchStatus();
       _showSnack('Welcome back!', const Color(0xFF22C55E));
     } else {
@@ -437,7 +484,7 @@ class _BreakPanelState extends State<BreakPanel> {
                     apiService: widget.apiService,
                     screenshotService: widget.screenshotService,
                     onStarted: () {
-                      widget.onBreakChanged?.call(true);
+                      _notifyBreakChanged(true);
                       _fetchStatus();
                     },
                   ),
@@ -478,6 +525,7 @@ class _BreakPanelState extends State<BreakPanel> {
           spacing: 8,
           runSpacing: 8,
           children: [
+            _presetChip('Break now', _startBreakNow, icon: Icons.play_arrow_rounded),
             ..._presets.map((m) => _presetChip('${m}m', () => _startBreak(m))),
             _presetChip('Custom', _showCustomBreakDialog, icon: Icons.tune_rounded),
           ],
@@ -598,7 +646,7 @@ Future<void> showBreakStartSheet({
                         onPressed: () async {
                           Navigator.pop(ctx);
                           final expected = DateTime.now().add(Duration(minutes: m));
-                          final r = await apiService.startBreak(expected);
+                          final r = await apiService.startBreak(expectedBack: expected);
                           if (!context.mounted) return;
                           if (r['success'] == true) {
                             if (screenshotService?.isRunning == true) {
@@ -654,7 +702,7 @@ Future<void> showBreakStartSheet({
                         );
                         minutesCtrl.dispose();
                         if (picked == null || !context.mounted) return;
-                        final r = await apiService.startBreak(picked);
+                        final r = await apiService.startBreak(expectedBack: picked);
                         if (!context.mounted) return;
                         if (r['success'] == true) {
                           if (screenshotService?.isRunning == true) {

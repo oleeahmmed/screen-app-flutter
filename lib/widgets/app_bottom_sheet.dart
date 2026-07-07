@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// Glass-styled bottom sheet helper.
+/// Task-themed bottom sheet helper.
 class AppBottomSheet {
   AppBottomSheet._();
 
@@ -25,36 +25,42 @@ class AppBottomSheet {
         initialChildSize: initialChildSize,
         minChildSize: minChildSize,
         maxChildSize: maxChildSize,
-        builder: (_, scrollCtrl) => AppTheme.glassBlur(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: AppTheme.sectionTitle.copyWith(fontSize: 16),
+        builder: (_, scrollCtrl) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          child: DecoratedBox(
+            decoration: AppTheme.taskCardDecoration(borderRadius: 20).copyWith(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: AppTheme.sectionTitle.copyWith(fontSize: 16),
+                        ),
                       ),
-                    ),
-                    if (trailing != null) trailing,
-                    IconButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
-                    ),
-                  ],
+                      if (trailing != null) trailing,
+                      IconButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              Expanded(
-                child: SingleChildScrollView(
-                  controller: scrollCtrl,
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                  child: child,
+                Expanded(
+                  child: SingleChildScrollView(
+                    controller: scrollCtrl,
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                    child: child,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

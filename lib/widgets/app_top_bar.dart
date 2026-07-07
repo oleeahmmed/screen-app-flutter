@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
+import '../utils/platform_capabilities.dart';
 import 'app_quick_menu.dart';
 
 /// Persistent top bar: branding, section tabs (wide screens), quick menu.
@@ -20,7 +22,7 @@ class AppTopBar extends StatelessWidget {
 
   static const _tabs = <(IconData, IconData, String)>[
     (Icons.home_outlined, Icons.home_rounded, 'Home'),
-    (Icons.work_outline_rounded, Icons.work_rounded, 'Work'),
+    (Icons.assignment_outlined, Icons.assignment_rounded, 'My Task'),
     (Icons.chat_bubble_outline_rounded, Icons.chat_rounded, 'Chat'),
     (Icons.notifications_outlined, Icons.notifications_rounded, 'Alerts'),
     (Icons.person_outline_rounded, Icons.person_rounded, 'Me'),
@@ -57,6 +59,13 @@ class AppTopBar extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
+              if (selectedIndex == AppNavigation.tabAlerts &&
+                  PlatformCapabilities.peerToPeerFileTransfer)
+                IconButton(
+                  onPressed: () => AppNavigation.instance.openP2P(),
+                  tooltip: 'Peer-to-peer file transfer',
+                  icon: const Icon(Icons.swap_horiz_rounded, color: AppTheme.accent, size: 24),
+                ),
               AppQuickMenuButton(onLogout: onLogout),
             ],
           ),

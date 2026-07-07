@@ -170,9 +170,9 @@ class _ClosingReportPanelState extends State<ClosingReportPanel> {
         child: Ink(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: AppTheme.glassPanel(borderRadius: 16).copyWith(
+          decoration: AppTheme.taskCardDecoration(borderRadius: 16).copyWith(
             border: Border.all(
-              color: (_pending ? AppTheme.warning : Colors.white).withValues(alpha: _pending ? 0.35 : 0.1),
+              color: (_pending ? AppTheme.warning : AppTheme.primaryBright).withValues(alpha: _pending ? 0.35 : 0.12),
             ),
           ),
           child: Row(
@@ -288,7 +288,7 @@ class _ClosingReportPanelState extends State<ClosingReportPanel> {
   }
 
   BoxDecoration _cardDecoration({required Color accent, bool highlight = false}) {
-    return AppTheme.glassPanel(borderRadius: 16).copyWith(
+    return AppTheme.taskCardDecoration(borderRadius: 16).copyWith(
       border: Border.all(color: accent.withValues(alpha: highlight ? 0.45 : 0.15)),
     );
   }
@@ -451,22 +451,16 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
     final maxH = MediaQuery.sizeOf(context).height * 0.88;
 
     return Dialog(
-      backgroundColor: AppTheme.surface2,
-      surfaceTintColor: Colors.transparent,
-      elevation: 24,
-      shadowColor: Colors.black.withValues(alpha: 0.6),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
       insetPadding: AppTheme.dialogInsets(context),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-      ),
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: AppTheme.dialogMaxWidth(context, max: 520),
           maxHeight: maxH,
         ),
-        child: ColoredBox(
-          color: AppTheme.surface2,
+        child: DecoratedBox(
+          decoration: AppTheme.taskCardDecoration(borderRadius: 20),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
             child: Column(
@@ -478,10 +472,7 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
                     Container(
                       width: 40,
                       height: 40,
-                      decoration: BoxDecoration(
-                        color: AppTheme.primary.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      decoration: AppTheme.taskFieldDecoration(borderRadius: 12),
                       child: const Icon(Icons.assignment_outlined, color: AppTheme.primaryBright, size: 20),
                     ),
                     const SizedBox(width: 12),
@@ -515,8 +506,9 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
                 const SizedBox(height: 12),
                 Expanded(
                   child: SingleChildScrollView(
-                    child: ColoredBox(
-                      color: AppTheme.surface2,
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: AppTheme.taskFieldDecoration(borderRadius: 14),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -528,7 +520,7 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
                           const SizedBox(height: 12),
                           Text(
                             'Dependencies (optional)',
-                            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600),
                           ),
                           const SizedBox(height: 6),
                           if (_loadingEmployees)
@@ -563,10 +555,10 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
                                               _dependencyIds.remove(id);
                                             }
                                           }),
-                                  selectedColor: AppTheme.primary.withValues(alpha: 0.35),
+                                  selectedColor: AppTheme.featureVault.withValues(alpha: 0.35),
                                   checkmarkColor: Colors.white,
                                   labelStyle: TextStyle(color: selected ? Colors.white : AppTheme.textMuted),
-                                  backgroundColor: AppTheme.bgDeep,
+                                  backgroundColor: Colors.white.withValues(alpha: 0.06),
                                   side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
                                 );
                               }).toList(),
@@ -589,7 +581,7 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
                           onPressed: _submitting ? null : () => Navigator.of(context, rootNavigator: true).pop(false),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: AppTheme.textMuted,
-                            side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+                            side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
                             padding: const EdgeInsets.symmetric(vertical: 14),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ),
@@ -599,43 +591,23 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
                     if (!widget.required) const SizedBox(width: 10),
                     Expanded(
                       flex: widget.required ? 1 : 2,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          gradient: LinearGradient(
-                            colors: [
-                              AppTheme.primary,
-                              AppTheme.primary.withValues(alpha: 0.85),
-                            ],
+                      child: FilledButton(
+                        onPressed: _submitting ? null : _submit,
+                        style: AppTheme.taskPrimaryButtonStyle().copyWith(
+                          padding: WidgetStateProperty.all(
+                            const EdgeInsets.symmetric(vertical: 14),
                           ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppTheme.primary.withValues(alpha: 0.35),
-                              blurRadius: 12,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
                         ),
-                        child: FilledButton(
-                          onPressed: _submitting ? null : _submit,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: Colors.transparent,
-                            shadowColor: Colors.transparent,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: _submitting
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                )
-                              : Text(
-                                  widget.existingReport != null ? 'Update report' : 'Submit report',
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                        ),
+                        child: _submitting
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : Text(
+                                widget.existingReport != null ? 'Update report' : 'Submit report',
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
                       ),
                     ),
                   ],
@@ -654,28 +626,19 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
       children: [
         Text(
           label,
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontSize: 12),
+          style: TextStyle(
+            color: AppTheme.textMuted.withValues(alpha: 0.9),
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         TextField(
           controller: c,
           maxLines: maxLines,
           enabled: !_submitting,
-          style: const TextStyle(color: Colors.white, fontSize: 13),
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: AppTheme.bgDeep,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
-              borderSide: const BorderSide(color: Color(0xFF6366F1)),
-            ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          ),
+          style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+          decoration: AppTheme.taskInputDecoration(null),
         ),
       ],
     );

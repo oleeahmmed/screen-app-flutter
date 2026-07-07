@@ -126,7 +126,7 @@ void openTaskDetailPage(
     MaterialPageRoute(
       fullscreenDialog: false,
       builder: (_) => AppTabShell(
-        selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, 4),
+        selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
         unreadNotifs: AppNavigation.instance.unreadNotifs,
         onLogout: onLogout,
         child: TaskDetailPage(
@@ -783,10 +783,10 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
             return KeyEventResult.ignored;
           },
           child: Scaffold(
-      backgroundColor: AppTheme.bgDeep,
-      body: Container(
-        decoration: AppTheme.screenGradient(),
+      backgroundColor: Colors.transparent,
+      body: AppTheme.homeGlassBackground(
         child: SafeArea(
+        bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -870,8 +870,9 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     ];
     return Container(
       padding: EdgeInsets.fromLTRB(compact ? 8 : 16, 10, 8, 10),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppTheme.border)),
+      decoration: AppTheme.taskCardDecoration(borderRadius: 0).copyWith(
+        borderRadius: BorderRadius.zero,
+        boxShadow: [],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -907,11 +908,11 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: AppTheme.primary.withValues(alpha: 0.2),
+                  color: AppTheme.featureVault.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: AppTheme.primary.withValues(alpha: 0.45)),
+                  border: Border.all(color: AppTheme.featureVault.withValues(alpha: 0.45)),
                 ),
-                child: Text(taskKey, style: const TextStyle(color: AppTheme.primary, fontSize: 11, fontWeight: FontWeight.w700)),
+                child: Text(taskKey, style: const TextStyle(color: AppTheme.featureVault, fontSize: 11, fontWeight: FontWeight.w700)),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -941,10 +942,10 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     final compact = Responsive.isMobile(context);
     final tabBar = TabBar(
       controller: _tabCtrl,
-      indicatorColor: AppTheme.primary,
+      indicatorColor: AppTheme.featureVault,
       indicatorWeight: 2.5,
-      labelColor: Colors.white,
-      unselectedLabelColor: Colors.white38,
+      labelColor: AppTheme.featureVault,
+      unselectedLabelColor: AppTheme.textMuted,
       labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1),
       tabs: const [
         Tab(text: 'DETAILS'),
@@ -1180,7 +1181,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   Widget _descModeBtn(String label, bool active, VoidCallback onTap) {
     return Material(
-      color: active ? AppTheme.primary.withValues(alpha: 0.25) : Colors.transparent,
+      color: active ? AppTheme.featureVault.withValues(alpha: 0.25) : Colors.transparent,
       borderRadius: BorderRadius.circular(6),
       child: InkWell(
         onTap: onTap,
@@ -1190,7 +1191,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           child: Text(
             label,
             style: TextStyle(
-              color: active ? AppTheme.primary : Colors.white38,
+              color: active ? AppTheme.featureVault : AppTheme.textMuted,
               fontSize: 11,
               fontWeight: FontWeight.w600,
             ),
@@ -1470,7 +1471,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
               children: [
                 Checkbox(
                   value: done,
-                  activeColor: AppTheme.primary,
+                  activeColor: AppTheme.featureVault,
                   onChanged: (_) => _toggleSubtask(st),
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
@@ -1551,9 +1552,10 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
             icon: const Icon(Icons.add, size: 14),
             label: const Text('Add / Change', style: TextStyle(fontSize: 12)),
             style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white70,
-              side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+              foregroundColor: AppTheme.featureVault,
+              side: BorderSide(color: AppTheme.featureVault.withValues(alpha: 0.4)),
               padding: const EdgeInsets.symmetric(vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
           ),
         const SizedBox(height: 16),
@@ -1608,7 +1610,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
             value: _progressPct(t) / 100,
             minHeight: 6,
             backgroundColor: Colors.black.withValues(alpha: 0.4),
-            color: AppTheme.primary,
+            color: AppTheme.featureVault,
           ),
         ),
         const SizedBox(height: 4),
@@ -1623,7 +1625,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
             () => _isAttachmentRequired = v ?? false,
             {'is_attachment_required': v ?? false},
           ),
-          activeColor: AppTheme.primary,
+          activeColor: AppTheme.featureVault,
           checkColor: Colors.white,
           dense: true,
           contentPadding: EdgeInsets.zero,
@@ -1697,7 +1699,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     }
 
     return Container(
-      color: AppTheme.surface.withValues(alpha: 0.5),
+      color: AppTheme.surface2.withValues(alpha: 0.72),
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -1733,11 +1735,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
+      decoration: AppTheme.taskFieldDecoration(borderRadius: 10),
       child: Row(
         children: [
           CircleAvatar(
@@ -1785,9 +1783,9 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   ];
 
   static const _priorityOptions = [
-    ('low', 'Low', Color(0xFF71717A)),
-    ('medium', 'Medium', Color(0xFF3B82F6)),
-    ('high', 'High', Color(0xFFEF4444)),
+    ('low', 'Low', AppTheme.success),
+    ('medium', 'Medium', AppTheme.warning),
+    ('high', 'High', AppTheme.danger),
   ];
 
   static const _typeOptions = [
@@ -1812,16 +1810,12 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
         const SizedBox(height: 4),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.3),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-          ),
+          decoration: AppTheme.taskFieldDecoration(borderRadius: 10),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
               value: current,
               isExpanded: true,
-              dropdownColor: const Color(0xFF1e293b),
+              dropdownColor: AppTheme.surface2,
               style: const TextStyle(color: Colors.white, fontSize: 12),
               items: options
                   .map(
@@ -1862,11 +1856,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           borderRadius: BorderRadius.circular(8),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.3),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-            ),
+            decoration: AppTheme.taskFieldDecoration(borderRadius: 10),
             child: Row(
               children: [
                 const Icon(Icons.calendar_today, size: 14, color: Colors.white38),
@@ -1976,7 +1966,8 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     return Container(
       padding: EdgeInsets.fromLTRB(compact ? 12 : 20, 12, compact ? 12 : 20, 14),
       decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+        color: AppTheme.surface2.withValues(alpha: 0.92),
+        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
       ),
       child: TaskDetailFooterActions(
         dirty: _dirty,
@@ -2004,13 +1995,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     );
   }
 
-  BoxDecoration _cardDeco() {
-    return BoxDecoration(
-      color: AppTheme.surface2.withValues(alpha: 0.88),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-    );
-  }
+  BoxDecoration _cardDeco() => AppTheme.taskCardDecoration(borderRadius: 12);
 }
 
 class _SubtaskEditDialog extends StatefulWidget {
@@ -2149,16 +2134,7 @@ class _SubtaskEditDialogState extends State<_SubtaskEditDialog> {
     await widget.onSaved();
   }
 
-  InputDecoration _inputDeco(String? hint) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
-      filled: true,
-      fillColor: Colors.black.withValues(alpha: 0.3),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-    );
-  }
+  InputDecoration _inputDeco(String? hint) => AppTheme.taskInputDecoration(hint);
 
   Widget _field(String label, Widget child) {
     return Column(
@@ -2202,7 +2178,7 @@ class _SubtaskEditDialogState extends State<_SubtaskEditDialog> {
                   Expanded(
                     child: _field('Priority', DropdownButtonFormField<String>(
                       initialValue: ['low', 'medium', 'high'].contains(_priority) ? _priority : 'medium',
-                      dropdownColor: const Color(0xFF1e293b),
+                      dropdownColor: AppTheme.surface2,
                       style: const TextStyle(color: Colors.white, fontSize: 13),
                       decoration: _inputDeco(null),
                       items: const [
@@ -2217,7 +2193,7 @@ class _SubtaskEditDialogState extends State<_SubtaskEditDialog> {
                   Expanded(
                     child: _field('Status', DropdownButtonFormField<String>(
                       initialValue: ['to_do', 'in_progress', 'done'].contains(_status) ? _status : 'to_do',
-                      dropdownColor: const Color(0xFF1e293b),
+                      dropdownColor: AppTheme.surface2,
                       style: const TextStyle(color: Colors.white, fontSize: 13),
                       decoration: _inputDeco(null),
                       items: const [
@@ -2236,7 +2212,7 @@ class _SubtaskEditDialogState extends State<_SubtaskEditDialog> {
                   Expanded(
                     child: _field('Assignee', DropdownButtonFormField<int?>(
                       initialValue: _assigneeId,
-                      dropdownColor: const Color(0xFF1e293b),
+                      dropdownColor: AppTheme.surface2,
                       style: const TextStyle(color: Colors.white, fontSize: 13),
                       decoration: _inputDeco(null),
                       items: [
@@ -2339,6 +2315,7 @@ class _SubtaskEditDialogState extends State<_SubtaskEditDialog> {
         TextButton(onPressed: _saving ? null : () => Navigator.pop(context), child: const Text('Cancel')),
         FilledButton(
           onPressed: _saving ? null : _save,
+          style: AppTheme.taskPrimaryButtonStyle(),
           child: _saving
               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : const Text('Save'),

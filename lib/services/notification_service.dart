@@ -30,6 +30,9 @@ class NotificationService {
   final _pushController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get pushStream => _pushController.stream;
 
+  final _presenceController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get presenceStream => _presenceController.stream;
+
   void Function(int count)? onUnreadCountChanged;
 
   Duration get _pollInterval {
@@ -202,6 +205,10 @@ class NotificationService {
     }
 
     final type = data['type']?.toString() ?? '';
+    if (type == 'user_status') {
+      _presenceController.add(data);
+      return;
+    }
     if (type != 'notification' && type != 'task_notification') return;
 
     await refreshUnreadCount();
@@ -225,5 +232,6 @@ class NotificationService {
   void dispose() {
     stop();
     _pushController.close();
+    _presenceController.close();
   }
 }

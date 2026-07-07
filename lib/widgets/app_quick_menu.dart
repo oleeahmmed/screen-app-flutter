@@ -17,12 +17,12 @@ class AppQuickMenuButton extends StatelessWidget {
     this.onLogout,
   });
 
-  static const _destinations = [
-    (0, Icons.home_rounded, 'Home', 'Dashboard & clock'),
-    (1, Icons.work_rounded, 'Work', 'Projects & tasks'),
-    (2, Icons.chat_bubble_rounded, 'Chat', 'Messages'),
-    (3, Icons.notifications_rounded, 'Alerts', 'Notifications'),
-    (4, Icons.person_rounded, 'Profile', 'Settings & account'),
+  static final _destinations = [
+    (AppNavigation.tabHome, Icons.home_rounded, 'Home', 'Dashboard & clock'),
+    (AppNavigation.tabMyTasks, Icons.assignment_rounded, 'My Task', 'Assigned tasks'),
+    (AppNavigation.tabChat, Icons.chat_bubble_rounded, 'Chat', 'Messages'),
+    (AppNavigation.tabAlerts, Icons.notifications_rounded, 'Alerts', 'Notifications'),
+    (AppNavigation.tabProfile, Icons.person_rounded, 'Profile', 'Settings & account'),
   ];
 
   Future<void> _confirmLogout(BuildContext context) async {
@@ -154,6 +154,16 @@ class AppQuickMenuButton extends StatelessWidget {
                             AppNavigation.instance.openVault();
                           },
                         ),
+                        ListTile(
+                          leading: const Icon(Icons.folder_open_rounded, color: AppTheme.primaryBright),
+                          title: const Text('Project', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+                          subtitle: Text('Browse & manage projects', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            AppNavigation.instance.openProject();
+                          },
+                        ),
                         const Divider(color: Colors.white12, height: 20),
                         Text(
                           'Navigate',
@@ -242,6 +252,15 @@ class AppQuickMenuButton extends StatelessWidget {
             Icon(Icons.lock_outline_rounded, color: Color(0xFFA78BFA), size: 18),
             SizedBox(width: 10),
             Text('Vault', style: TextStyle(color: AppTheme.textPrimary)),
+          ]),
+        ),
+        PopupMenuItem<int>(
+          value: -5,
+          onTap: () => AppNavigation.instance.openProject(),
+          child: const Row(children: [
+            Icon(Icons.folder_open_rounded, color: AppTheme.primaryBright, size: 18),
+            SizedBox(width: 10),
+            Text('Project', style: TextStyle(color: AppTheme.textPrimary)),
           ]),
         ),
         const PopupMenuDivider(),

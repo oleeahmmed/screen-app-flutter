@@ -199,6 +199,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
   int? _projectDeptId;
   String _status = '';
   String _priority = '';
+  bool _filtersExpanded = false;
   late final TextEditingController _searchCtrl;
   Timer? _searchDebounce;
 
@@ -472,108 +473,224 @@ class _ProjectsPageState extends State<ProjectsPage> {
     );
   }
 
-  Widget _buildEmbeddedFilterBar(double padH) {
+  int get _activeFilterCount {
+    var n = 0;
+    if (_customerId != null) n++;
+    if (_userId != null) n++;
+    if (_projectDeptId != null) n++;
+    if (_status.isNotEmpty) n++;
+    if (_priority.isNotEmpty) n++;
+    if (_sort != 'newest') n++;
+    return n;
+  }
+
+  Widget _buildProjectsToolbar(double padH) {
     return Padding(
       padding: EdgeInsets.fromLTRB(padH, 4, padH, 8),
-      child: LayoutBuilder(
-        builder: (context, c) {
-          final wide = c.maxWidth >= 760;
-          final search = TextField(
-            controller: _searchCtrl,
-            onChanged: (_) => _scheduleSearchReload(),
-            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-            decoration: _searchDecoration(),
-          );
-          final status = _inlineFilterDropdown<String>(
-            value: _status.isEmpty ? null : _status,
-            hint: 'All Status',
-            items: const [
-              DropdownMenuItem<String?>(value: null, child: Text('All Status')),
-              DropdownMenuItem(value: 'planning', child: Text('Planning')),
-              DropdownMenuItem(value: 'active', child: Text('Active')),
-              DropdownMenuItem(value: 'on_hold', child: Text('On hold')),
-              DropdownMenuItem(value: 'completed', child: Text('Completed')),
-              DropdownMenuItem(value: 'cancelled', child: Text('Cancelled')),
-            ],
-            onChanged: (v) {
-              setState(() => _status = v ?? '');
-              _loadProjects();
-            },
-          );
-          final priority = _inlineFilterDropdown<String>(
-            value: _priority.isEmpty ? null : _priority,
-            hint: 'All Priority',
-            items: const [
-              DropdownMenuItem<String?>(value: null, child: Text('All Priority')),
-              DropdownMenuItem(value: 'low', child: Text('Low')),
-              DropdownMenuItem(value: 'medium', child: Text('Medium')),
-              DropdownMenuItem(value: 'high', child: Text('High')),
-              DropdownMenuItem(value: 'critical', child: Text('Critical')),
-            ],
-            onChanged: (v) {
-              setState(() => _priority = v ?? '');
-              _loadProjects();
-            },
-          );
-          final sort = _inlineFilterDropdown<String>(
-            value: _sort,
-            hint: 'Sort',
-            items: const [
-              DropdownMenuItem(value: 'newest', child: Text('Newest first')),
-              DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
-              DropdownMenuItem(value: 'name_asc', child: Text('Name A–Z')),
-              DropdownMenuItem(value: 'name_desc', child: Text('Name Z–A')),
-              DropdownMenuItem(value: 'progress_desc', child: Text('Progress high → low')),
-              DropdownMenuItem(value: 'progress_asc', child: Text('Progress low → high')),
-            ],
-            onChanged: (v) {
-              if (v == null) return;
-              setState(() => _sort = v);
-              _loadProjects();
-            },
-          );
-          if (wide) {
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: AppTheme.taskCardDecoration(borderRadius: 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Expanded(flex: 4, child: search),
+                Expanded(
+                  child: TextField(
+                    controller: _searchCtrl,
+                    onChanged: (_) => _scheduleSearchReload(),
+                    style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+                    decoration: _searchDecoration(),
+                  ),
+                ),
                 const SizedBox(width: 8),
-                Expanded(flex: 2, child: status),
-                const SizedBox(width: 8),
-                Expanded(flex: 2, child: priority),
-                const SizedBox(width: 8),
-                Expanded(flex: 2, child: sort),
+                Material(
+                  color: _filtersExpanded
+                      ? AppTheme.featureVault.withValues(alpha: 0.22)
+                      : AppTheme.taskFieldDecoration().color,
+                  borderRadius: BorderRadius.circular(10),
+                  child: InkWell(
+                    onTap: () => setState(() => _filtersExpanded = !_filtersExpanded),
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _filtersExpanded ? Icons.filter_list_off_rounded : Icons.filter_list_rounded,
+                            size: 18,
+                            color: _filtersExpanded ? AppTheme.featureVault : AppTheme.textMuted,
+                          ),
+                          if (_activeFilterCount > 0) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppTheme.featureVault.withValues(alpha: 0.25),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '$_activeFilterCount',
+                                style: const TextStyle(
+                                  color: AppTheme.featureVault,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
                 const SizedBox(width: 6),
-                _iconBtn(Icons.add, AppTheme.primary, _showCreateProjectDialog),
                 _iconBtn(Icons.refresh_rounded, AppTheme.surface2.withValues(alpha: 0.65), _loadProjects),
-              ],
-            );
-          }
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              search,
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(child: status),
-                  const SizedBox(width: 8),
-                  Expanded(child: priority),
+                if (!_archived) ...[
+                  const SizedBox(width: 6),
+                  FilledButton.icon(
+                    onPressed: _showCreateProjectDialog,
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('Create', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
                 ],
+              ],
+            ),
+            if (_filtersExpanded) ...[
+              const SizedBox(height: 12),
+              _filterDropdown<int>(
+                value: _customerId,
+                hint: 'Client',
+                items: [
+                  const DropdownMenuItem<int?>(value: null, child: Text('All clients')),
+                  ..._customers.map(
+                    (c) => DropdownMenuItem<int?>(
+                      value: _metaInt(c['id']),
+                      child: Text('${c['name'] ?? ''}', overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+                ],
+                onChanged: (v) {
+                  setState(() => _customerId = v);
+                  _loadProjects();
+                },
+              ),
+              const SizedBox(height: 8),
+              _filterDropdown<int>(
+                value: _userId,
+                hint: 'Team member',
+                items: [
+                  const DropdownMenuItem<int?>(value: null, child: Text('Anyone')),
+                  ..._employees.map(
+                    (e) => DropdownMenuItem<int?>(
+                      value: _metaInt(e['user_id']),
+                      child: Text('${e['full_name'] ?? ''}', overflow: TextOverflow.ellipsis),
+                    ),
+                  ),
+                ],
+                onChanged: (v) {
+                  setState(() => _userId = v);
+                  _loadProjects();
+                },
+              ),
+              const SizedBox(height: 8),
+              _filterDropdown<int>(
+                value: _projectDeptId,
+                hint: 'Project department',
+                items: [
+                  const DropdownMenuItem<int?>(value: null, child: Text('All departments')),
+                  ..._projectDepts.map(
+                    (d) => DropdownMenuItem<int?>(
+                      value: _metaInt(d['id']),
+                      child: Text(
+                        '${d['project_name'] ?? ''} · ${d['name'] ?? ''}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: (v) {
+                  setState(() => _projectDeptId = v);
+                  _loadProjects();
+                },
               ),
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Expanded(child: sort),
+                  Expanded(
+                    child: _inlineFilterDropdown<String>(
+                      value: _status.isEmpty ? null : _status,
+                      hint: 'All Status',
+                      items: const [
+                        DropdownMenuItem<String?>(value: null, child: Text('All Status')),
+                        DropdownMenuItem(value: 'planning', child: Text('Planning')),
+                        DropdownMenuItem(value: 'active', child: Text('Active')),
+                        DropdownMenuItem(value: 'on_hold', child: Text('On hold')),
+                        DropdownMenuItem(value: 'completed', child: Text('Completed')),
+                        DropdownMenuItem(value: 'cancelled', child: Text('Cancelled')),
+                      ],
+                      onChanged: (v) {
+                        setState(() => _status = v ?? '');
+                        _loadProjects();
+                      },
+                    ),
+                  ),
                   const SizedBox(width: 8),
-                  _iconBtn(Icons.add, AppTheme.primary, _showCreateProjectDialog),
-                  const SizedBox(width: 6),
-                  _iconBtn(Icons.refresh_rounded, AppTheme.surface2.withValues(alpha: 0.65), _loadProjects),
+                  Expanded(
+                    child: _inlineFilterDropdown<String>(
+                      value: _priority.isEmpty ? null : _priority,
+                      hint: 'All Priority',
+                      items: const [
+                        DropdownMenuItem<String?>(value: null, child: Text('All Priority')),
+                        DropdownMenuItem(value: 'low', child: Text('Low')),
+                        DropdownMenuItem(value: 'medium', child: Text('Medium')),
+                        DropdownMenuItem(value: 'high', child: Text('High')),
+                        DropdownMenuItem(value: 'critical', child: Text('Critical')),
+                      ],
+                      onChanged: (v) {
+                        setState(() => _priority = v ?? '');
+                        _loadProjects();
+                      },
+                    ),
+                  ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              _inlineFilterDropdown<String>(
+                value: _sort,
+                hint: 'Sort',
+                items: const [
+                  DropdownMenuItem(value: 'newest', child: Text('Newest first')),
+                  DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
+                  DropdownMenuItem(value: 'name_asc', child: Text('Name A–Z')),
+                  DropdownMenuItem(value: 'name_desc', child: Text('Name Z–A')),
+                  DropdownMenuItem(value: 'progress_desc', child: Text('Progress high → low')),
+                  DropdownMenuItem(value: 'progress_asc', child: Text('Progress low → high')),
+                ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _sort = v);
+                  _loadProjects();
+                },
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _resetFilters,
+                  child: const Text('Reset filters', style: TextStyle(color: AppTheme.featureVault)),
+                ),
               ),
             ],
-          );
-        },
+          ],
+        ),
       ),
     );
   }
@@ -583,44 +700,37 @@ class _ProjectsPageState extends State<ProjectsPage> {
     final padH = widget.embeddedInParent ? Responsive.pagePadding(context) : 24.0;
 
     final header = Padding(
-      padding: EdgeInsets.fromLTRB(padH, widget.embeddedInParent ? 6 : 20, padH, 8),
+      padding: EdgeInsets.fromLTRB(padH, widget.embeddedInParent ? 6 : 12, padH, 4),
       child: Row(
         children: [
           if (!widget.embeddedInParent)
-            Icon(Icons.folder_open, color: AppTheme.featureVault, size: 28),
+            const Icon(Icons.folder_open_rounded, color: AppTheme.featureVault, size: 26),
           if (!widget.embeddedInParent) const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _archived ? 'Archived projects' : 'All projects',
+                  widget.embeddedInParent ? 'Project' : (_archived ? 'Archived projects' : 'Projects'),
                   style: TextStyle(
-                    fontSize: widget.embeddedInParent ? 16 : 24,
+                    fontSize: widget.embeddedInParent ? 18 : 22,
                     fontWeight: FontWeight.bold,
-                    color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
+                    color: AppTheme.textPrimary,
                   ),
                 ),
                 Text(
                   '${_projects.length} project${_projects.length == 1 ? '' : 's'}',
-                  style: TextStyle(
-                    color: AppTheme.textMuted,
-                    fontSize: 11,
-                  ),
+                  style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
                 ),
               ],
             ),
           ),
-          if (!_archived)
-            _iconBtn(Icons.add, AppTheme.primary, _showCreateProjectDialog),
-          if (!_archived) const SizedBox(width: 6),
-          _iconBtn(Icons.refresh_rounded, AppTheme.surface2.withValues(alpha: 0.65), _loadProjects),
         ],
       ),
     );
 
     final archiveChips = Padding(
-      padding: EdgeInsets.symmetric(horizontal: padH),
+      padding: EdgeInsets.fromLTRB(padH, 0, padH, 4),
       child: Wrap(
         spacing: 8,
         runSpacing: 8,
@@ -630,191 +740,27 @@ class _ProjectsPageState extends State<ProjectsPage> {
             selected: !_archived,
             onSelected: (_) => _setArchived(false),
             selectedColor: AppTheme.primary.withValues(alpha: 0.35),
-            labelStyle: TextStyle(
-              color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
-              fontSize: 13,
-            ),
+            labelStyle: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
           ),
           ChoiceChip(
             label: const Text('Archived'),
             selected: _archived,
             onSelected: (_) => _setArchived(true),
             selectedColor: AppTheme.primary.withValues(alpha: 0.35),
-            labelStyle: TextStyle(
-              color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
-              fontSize: 13,
-            ),
+            labelStyle: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
           ),
         ],
       ),
     );
 
-    final searchField = Padding(
-      padding: EdgeInsets.symmetric(horizontal: padH),
-      child: TextField(
-        controller: _searchCtrl,
-        onChanged: (_) => _scheduleSearchReload(),
-        style: TextStyle(
-          color: widget.embeddedInParent ? AppTheme.textPrimary : Colors.white,
-          fontSize: 14,
-        ),
-        decoration: _searchDecoration(),
-      ),
-    );
-
-    final filtersPanel = Padding(
-      padding: EdgeInsets.symmetric(horizontal: padH),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          initiallyExpanded: !widget.embeddedInParent,
-          tilePadding: EdgeInsets.zero,
-          childrenPadding: const EdgeInsets.only(bottom: 8),
-          title: Text(
-            'Filters',
-            style: TextStyle(
-              color: AppTheme.textPrimary.withValues(alpha: widget.embeddedInParent ? 0.9 : 0.7),
-              fontWeight: FontWeight.w600,
-              fontSize: 13,
-            ),
-          ),
-          children: [
-            _filterDropdown<int>(
-              value: _customerId,
-              hint: 'Client',
-              items: [
-                const DropdownMenuItem<int?>(value: null, child: Text('All clients')),
-                ..._customers.map(
-                  (c) => DropdownMenuItem<int?>(
-                    value: _metaInt(c['id']),
-                    child: Text('${c['name'] ?? ''}', overflow: TextOverflow.ellipsis),
-                  ),
-                ),
-              ],
-              onChanged: (v) {
-                setState(() => _customerId = v);
-                _loadProjects();
-              },
-            ),
-            _filterDropdown<int>(
-              value: _userId,
-              hint: 'Team member',
-              items: [
-                const DropdownMenuItem<int?>(value: null, child: Text('Anyone')),
-                ..._employees.map(
-                  (e) => DropdownMenuItem<int?>(
-                    value: _metaInt(e['user_id']),
-                    child: Text('${e['full_name'] ?? ''}', overflow: TextOverflow.ellipsis),
-                  ),
-                ),
-              ],
-              onChanged: (v) {
-                setState(() => _userId = v);
-                _loadProjects();
-              },
-            ),
-            _filterDropdown<int>(
-              value: _projectDeptId,
-              hint: 'Project department',
-              items: [
-                const DropdownMenuItem<int?>(value: null, child: Text('All departments')),
-                ..._projectDepts.map(
-                  (d) => DropdownMenuItem<int?>(
-                    value: _metaInt(d['id']),
-                    child: Text(
-                      '${d['project_name'] ?? ''} ? ${d['name'] ?? ''}',
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-              ],
-              onChanged: (v) {
-                setState(() => _projectDeptId = v);
-                _loadProjects();
-              },
-            ),
-            _filterDropdown<String>(
-              value: _status.isEmpty ? null : _status,
-              hint: 'Status',
-              items: const [
-                DropdownMenuItem<String?>(value: null, child: Text('Any status')),
-                DropdownMenuItem(value: 'planning', child: Text('Planning')),
-                DropdownMenuItem(value: 'active', child: Text('Active')),
-                DropdownMenuItem(value: 'on_hold', child: Text('On hold')),
-                DropdownMenuItem(value: 'completed', child: Text('Completed')),
-                DropdownMenuItem(value: 'cancelled', child: Text('Cancelled')),
-              ],
-              onChanged: (v) {
-                setState(() => _status = v ?? '');
-                _loadProjects();
-              },
-            ),
-            _filterDropdown<String>(
-              value: _priority.isEmpty ? null : _priority,
-              hint: 'Priority',
-              items: const [
-                DropdownMenuItem<String?>(value: null, child: Text('Any priority')),
-                DropdownMenuItem(value: 'low', child: Text('Low')),
-                DropdownMenuItem(value: 'medium', child: Text('Medium')),
-                DropdownMenuItem(value: 'high', child: Text('High')),
-                DropdownMenuItem(value: 'critical', child: Text('Critical')),
-              ],
-              onChanged: (v) {
-                setState(() => _priority = v ?? '');
-                _loadProjects();
-              },
-            ),
-            _filterDropdown<String>(
-              value: _sort,
-              hint: 'Sort',
-              items: const [
-                DropdownMenuItem(value: 'newest', child: Text('Newest first')),
-                DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
-                DropdownMenuItem(value: 'name_asc', child: Text('Name A–Z')),
-                DropdownMenuItem(value: 'name_desc', child: Text('Name Z–A')),
-                DropdownMenuItem(value: 'progress_desc', child: Text('Progress high → low')),
-                DropdownMenuItem(value: 'progress_asc', child: Text('Progress low → high')),
-              ],
-              onChanged: (v) {
-                if (v == null) return;
-                setState(() => _sort = v);
-                _loadProjects();
-              },
-            ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: _resetFilters,
-                child: Text(
-                  'Reset filters',
-                  style: TextStyle(
-                    color: widget.embeddedInParent ? AppTheme.primary : AppTheme.featureVault,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-
     final scrollBody = CustomScrollView(
-      slivers: widget.embeddedInParent
-          ? [
-              SliverToBoxAdapter(child: _buildEmbeddedFilterBar(padH)),
-              const SliverToBoxAdapter(child: SizedBox(height: 4)),
-              _projectGridSliver(padH),
-            ]
-          : [
-              SliverToBoxAdapter(child: header),
-              SliverToBoxAdapter(child: archiveChips),
-              const SliverToBoxAdapter(child: SizedBox(height: 8)),
-              SliverToBoxAdapter(child: searchField),
-              const SliverToBoxAdapter(child: SizedBox(height: 8)),
-              SliverToBoxAdapter(child: filtersPanel),
-              const SliverToBoxAdapter(child: SizedBox(height: 6)),
-              _projectGridSliver(padH),
-            ],
+      slivers: [
+        SliverToBoxAdapter(child: header),
+        SliverToBoxAdapter(child: archiveChips),
+        SliverToBoxAdapter(child: _buildProjectsToolbar(padH)),
+        const SliverToBoxAdapter(child: SizedBox(height: 4)),
+        _projectGridSliver(padH),
+      ],
     );
 
     if (widget.embeddedInParent) {
@@ -1150,19 +1096,6 @@ class _ProjectsPageState extends State<ProjectsPage> {
                     style: TextStyle(color: muted, fontSize: 10),
                   ),
                 ],
-                const SizedBox(height: 14),
-                Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
-                const SizedBox(height: 10),
-                Center(
-                  child: TextButton.icon(
-                    onPressed: openDetail,
-                    icon: const Icon(Icons.visibility_outlined, size: 16, color: AppTheme.primaryBright),
-                    label: const Text(
-                      'View Detail',
-                      style: TextStyle(color: AppTheme.primaryBright, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
@@ -2248,9 +2181,9 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     final stats = _project?['stats'] as Map<String, dynamic>? ?? {};
     final totalTasks = stats['total_tasks'] ?? 0;
     return Scaffold(
-      body: Container(
-        decoration: AppTheme.screenGradient(),
+      body: AppTheme.homeGlassBackground(
         child: SafeArea(
+          bottom: false,
           child: _isLoading && _project == null
               ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright))
               : _project == null
@@ -2332,8 +2265,11 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     }
 
     return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 10, pad, 8),
-      child: Column(
+      padding: EdgeInsets.fromLTRB(pad, 8, pad, 6),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: AppTheme.taskCardDecoration(borderRadius: 16),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -2433,17 +2369,14 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
           ),
         ],
       ),
+      ),
     );
   }
 
   Widget _headerStatPill(String value, String label, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
+      decoration: AppTheme.taskFieldDecoration(borderRadius: 10),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -2759,11 +2692,9 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
         final hi = candidate.isNotEmpty;
         return Container(
           margin: const EdgeInsets.only(right: 12),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: hi ? 0.08 : 0.03),
-            borderRadius: BorderRadius.circular(14),
+          decoration: AppTheme.taskCardDecoration(borderRadius: 14).copyWith(
             border: Border.all(
-              color: hi ? AppTheme.success : Colors.white.withValues(alpha: 0.06),
+              color: hi ? AppTheme.success : Colors.white.withValues(alpha: 0.08),
               width: hi ? 2 : 1,
             ),
           ),
@@ -2949,52 +2880,42 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
           borderRadius: BorderRadius.circular(12),
           onTap: () => _openTaskDetailPage(t),
           child: Container(
-            decoration: BoxDecoration(
-              color: AppTheme.bgDeep.withValues(alpha: 0.72),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: stageColor.withValues(alpha: 0.35)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.2),
-                  blurRadius: 8,
-                  offset: const Offset(0, 3),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  height: 3,
-                  decoration: BoxDecoration(
-                    color: stageColor,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            decoration: AppTheme.taskCardDecoration(borderRadius: 12),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Text(
-                            'T-$taskId',
-                            style: const TextStyle(color: AppTheme.textMuted, fontSize: 10, fontWeight: FontWeight.w600),
-                          ),
-                          const Spacer(),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: _pc(pri).withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              pri[0].toUpperCase() + pri.substring(1),
-                              style: TextStyle(color: _pc(pri), fontSize: 9, fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                          PopupMenuButton<String>(
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _pc(pri),
+                          boxShadow: [BoxShadow(color: _pc(pri).withValues(alpha: 0.55), blurRadius: 6)],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'T-$taskId',
+                        style: const TextStyle(color: AppTheme.textMuted, fontSize: 10, fontWeight: FontWeight.w600),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _pc(pri).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          pri[0].toUpperCase() + pri.substring(1),
+                          style: TextStyle(color: _pc(pri), fontSize: 9, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      PopupMenuButton<String>(
                             padding: EdgeInsets.zero,
                             icon: const Icon(Icons.more_horiz, color: AppTheme.textMuted, size: 18),
                             color: AppTheme.surface2,
@@ -3089,10 +3010,8 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

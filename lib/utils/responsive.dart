@@ -47,6 +47,15 @@ class Responsive {
     return contentMaxWidth(context);
   }
 
+  /// Space reserved above [AppBottomNavBar] when [Scaffold.extendBody] is true.
+  static double bottomNavInset(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final compact = mq.size.width < 420;
+    final navHeight = compact ? 56.0 : 62.0;
+    const navChrome = 14.0; // AppBottomNavBar vertical padding
+    return mq.padding.bottom + navHeight + navChrome;
+  }
+
   static int projectGridColumns(BuildContext context) {
     final w = widthOf(context);
     if (w >= 1600) return 4;
@@ -62,6 +71,27 @@ class Responsive {
       mainAxisSpacing: embedded ? 12 : 14,
       crossAxisSpacing: embedded ? 12 : 14,
       childAspectRatio: cross >= 3 ? 0.72 : (cross == 2 ? 0.82 : 1.05),
+    );
+  }
+
+  /// My Task page — list on phone, grid on tablet/desktop.
+  static int taskGridColumns(BuildContext context) {
+    final w = widthOf(context);
+    if (w >= 1600) return 4;
+    if (w >= 1200) return 3;
+    if (w >= 800) return 2;
+    return 1;
+  }
+
+  static bool useTaskGrid(BuildContext context) => taskGridColumns(context) > 1;
+
+  static SliverGridDelegate taskGridDelegate(BuildContext context) {
+    final cross = taskGridColumns(context);
+    return SliverGridDelegateWithFixedCrossAxisCount(
+      crossAxisCount: cross,
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      mainAxisExtent: cross >= 4 ? 300 : (cross >= 3 ? 308 : 320),
     );
   }
 

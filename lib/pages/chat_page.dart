@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
+import '../services/notification_service.dart';
 import '../services/voice_recorder_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/empty_state.dart';
@@ -13,7 +15,13 @@ import '../utils/platform_capabilities.dart';
 
 class ChatPage extends StatefulWidget {
   final ApiService apiService;
-  const ChatPage({required this.apiService});
+  final NotificationService? notificationService;
+
+  const ChatPage({
+    super.key,
+    required this.apiService,
+    this.notificationService,
+  });
   @override
   State<ChatPage> createState() => _ChatPageState();
 }
@@ -31,6 +39,8 @@ class _ChatPageState extends State<ChatPage> {
   bool _isSending = false;
   String _searchQuery = '';
   Timer? _refreshTimer;
+  Timer? _usersPollTimer;
+  StreamSubscription<Map<String, dynamic>>? _presenceSub;
   bool _isRecording = false;
   int _recordSeconds = 0;
   Timer? _recordTimer;
@@ -57,11 +67,15 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _loadUsers();
+    _usersPollTimer = Timer.periodic(const Duration(seconds: 25), (_) => _loadUsers(silent: true));
+    _presenceSub = widget.notificationService?.presenceStream.listen(_onPresenceUpdate);
   }
 
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _usersPollTimer?.cancel();
+    _presenceSub?.cancel();
     _recordTimer?.cancel();
     _recProcess?.kill();
     _voiceRecorder?.dispose();
@@ -73,15 +87,61 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   // ─── Data Loading ───
-  Future<void> _loadUsers() async {
-    setState(() => _isLoadingUsers = true);
+  Future<void> _loadUsers({bool silent = false}) async {
+    if (!silent && mounted) setState(() => _isLoadingUsers = true);
     final result = await widget.apiService.getChatUsers();
-    if (result['success']) {
-      setState(() { _users = result['data'] ?? []; _isLoadingUsers = false; });
-    } else {
+    if (result['success'] && mounted) {
+      setState(() {
+        _users = result['data'] ?? [];
+        _isLoadingUsers = false;
+        if (_selectedUser != null) {
+          final id = _selectedUser['id'];
+          for (final u in _users) {
+            if (u['id'] == id) {
+              _selectedUser = u;
+              break;
+            }
+          }
+        }
+      });
+    } else if (mounted) {
       setState(() => _isLoadingUsers = false);
-      _showError('Failed to load users');
+      if (!silent) _showError('Failed to load users');
     }
+  }
+
+  void _onPresenceUpdate(Map<String, dynamic> data) {
+    final userId = data['user_id'];
+    final online = _parseOnline(data['is_online']);
+    if (!mounted || userId == null) return;
+    setState(() {
+      _users = _users.map((u) {
+        if (u['id'] == userId) {
+          return {...Map<String, dynamic>.from(u as Map), 'is_online': online};
+        }
+        return u;
+      }).toList();
+      if (_selectedUser != null && _selectedUser['id'] == userId) {
+        _selectedUser = {...Map<String, dynamic>.from(_selectedUser as Map), 'is_online': online};
+      }
+    });
+  }
+
+  bool _parseOnline(dynamic v) => v == true || v == 1 || v == 'true';
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) return parts.first[0].toUpperCase();
+    return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+  }
+
+  Color _avatarColor(int id) {
+    const colors = [
+      Color(0xFF3B82F6), Color(0xFF8B5CF6), Color(0xFF10B981),
+      Color(0xFFF59E0B), Color(0xFFEF4444), Color(0xFF06B6D4),
+    ];
+    return colors[id.abs() % colors.length];
   }
 
   Future<void> _loadGroups() async {
@@ -370,15 +430,16 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final isWide = MediaQuery.of(context).size.width > 600;
     final hasChat = _selectedUser != null || _selectedGroup != null;
     final listWidth = isWide ? (MediaQuery.of(context).size.width * 0.32).clamp(280.0, 420.0) : double.infinity;
+    final bottomInset = Responsive.bottomNavInset(context);
 
-    return Container(
-      decoration: AppTheme.screenGradient(),
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
       child: SafeArea(
         bottom: false,
         child: isWide
             ? Row(children: [
                 SizedBox(width: listWidth, child: _buildSidebar()),
-                Container(width: 1, color: AppTheme.border),
+                Container(width: 1, color: Colors.white.withValues(alpha: 0.08)),
                 Expanded(child: hasChat ? _buildChatArea() : _buildEmptyState()),
               ])
             : hasChat ? _buildChatArea() : _buildSidebar(),
@@ -397,12 +458,10 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             style: TextStyle(color: AppTheme.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
           ),
         ),
-        // Tabs: Direct | Groups
         Container(
-          decoration: BoxDecoration(
-            color: AppTheme.surface.withValues(alpha: 0.5),
-            border: Border(bottom: BorderSide(color: AppTheme.border)),
-          ),
+          margin: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 0, Responsive.pagePadding(context), 8),
+          padding: const EdgeInsets.all(4),
+          decoration: AppTheme.taskCardDecoration(borderRadius: 12),
           child: Row(
             children: [
               _buildTab('Direct', Icons.person, 'direct'),
@@ -412,30 +471,14 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         ),
         // Search
         Padding(
-          padding: EdgeInsets.all(16),
+          padding: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 0, Responsive.pagePadding(context), 8),
           child: TextField(
             controller: _searchController,
             onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
-            style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-            decoration: InputDecoration(
-              hintText: 'Search...',
-              hintStyle: TextStyle(color: AppTheme.textMuted, fontSize: 14),
-              filled: true,
-              fillColor: AppTheme.surface2.withValues(alpha: 0.5),
-              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppTheme.border),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppTheme.border),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppTheme.primary),
-              ),
-              prefixIcon: Icon(Icons.search, color: AppTheme.textMuted, size: 20),
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+            decoration: AppTheme.taskInputDecoration('Search...').copyWith(
+              prefixIcon: const Icon(Icons.search, color: AppTheme.textMuted, size: 20),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             ),
           ),
         ),
@@ -455,24 +498,21 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           setState(() { _currentTab = tab; });
           if (tab == 'group' && _groups.isEmpty) _loadGroups();
         },
-        child: Container(
-          padding: EdgeInsets.symmetric(vertical: 16),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                color: isActive ? AppTheme.primary : Colors.transparent,
-                width: 2,
-              ),
-            ),
+            color: isActive ? AppTheme.primary.withValues(alpha: 0.22) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 16, color: isActive ? AppTheme.primary : AppTheme.textMuted),
-              SizedBox(width: 8),
+              Icon(icon, size: 16, color: isActive ? AppTheme.primaryBright : AppTheme.textMuted),
+              const SizedBox(width: 8),
               Text(label, style: TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w600,
-                color: isActive ? AppTheme.primary : AppTheme.textMuted,
+                fontSize: 13, fontWeight: FontWeight.w600,
+                color: isActive ? AppTheme.textPrimary : AppTheme.textMuted,
               )),
             ],
           ),
@@ -498,40 +538,40 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       itemBuilder: (_, i) {
         final user = filtered[i];
         final isSelected = _selectedUser != null && _selectedUser['id'] == user['id'];
-        final isOnline = user['is_online'] == true;
+        final isOnline = _parseOnline(user['is_online']);
         final unread = user['unread_count'] ?? 0;
         final name = user['full_name'] ?? user['username'] ?? 'User';
         final designation = user['designation'] ?? 'Employee';
+        final uid = user['id'] is int ? user['id'] as int : int.tryParse('${user['id']}') ?? 0;
 
         return GestureDetector(
           onTap: () => _selectUser(user),
           child: Container(
-            margin: EdgeInsets.only(bottom: 4),
-            padding: EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isSelected ? AppTheme.primary.withValues(alpha: 0.2) : Colors.transparent,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isSelected ? AppTheme.primary.withValues(alpha: 0.3) : Colors.transparent,
-              ),
-            ),
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.all(12),
+            decoration: isSelected
+                ? AppTheme.taskCardDecoration(borderRadius: 12).copyWith(
+                    color: AppTheme.primary.withValues(alpha: 0.18),
+                    border: Border.all(color: AppTheme.primary.withValues(alpha: 0.4)),
+                  )
+                : AppTheme.taskFieldDecoration(borderRadius: 12),
             child: Row(
               children: [
-                // Avatar with online dot
                 Stack(
+                  clipBehavior: Clip.none,
                   children: [
                     CircleAvatar(
                       radius: 20,
-                      backgroundColor: AppTheme.surface2,
-                      child: Text(name[0].toUpperCase(),
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                      backgroundColor: _avatarColor(uid),
+                      child: Text(_initials(name),
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                     ),
                     Positioned(
                       bottom: 0, right: 0,
                       child: Container(
-                        width: 10, height: 10,
+                        width: 11, height: 11,
                         decoration: BoxDecoration(
-                          color: isOnline ? AppTheme.success : AppTheme.textMuted,
+                          color: isOnline ? const Color(0xFF34D399) : const Color(0xFF6B7280),
                           shape: BoxShape.circle,
                           border: Border.all(color: AppTheme.bgDeep, width: 2),
                         ),
@@ -609,15 +649,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                         return GestureDetector(
                           onTap: () => _selectGroup(group),
                           child: Container(
-                            margin: EdgeInsets.only(bottom: 4),
-                            padding: EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: isSelected ? AppTheme.primary.withValues(alpha: 0.2) : Colors.transparent,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: isSelected ? AppTheme.primary.withValues(alpha: 0.3) : Colors.transparent,
-                              ),
-                            ),
+                            margin: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.all(12),
+                            decoration: isSelected
+                                ? AppTheme.taskCardDecoration(borderRadius: 12).copyWith(
+                                    border: Border.all(color: AppTheme.primary.withValues(alpha: 0.35)),
+                                  )
+                                : AppTheme.taskFieldDecoration(borderRadius: 12),
                             child: Row(
                               children: [
                                 // Group avatar
@@ -683,53 +721,78 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final name = isGroup
         ? (_selectedGroup['name'] ?? 'Group')
         : (_selectedUser['full_name'] ?? _selectedUser['username'] ?? 'Chat');
+    final isOnline = !isGroup && _parseOnline(_selectedUser?['is_online']);
     final subtitle = isGroup
         ? '${_selectedGroup['member_count'] ?? 0} members'
-        : (_selectedUser['designation'] ?? 'Employee');
+        : (isOnline ? 'Online' : 'Offline');
+    final headerUid = !isGroup && _selectedUser != null
+        ? (_selectedUser['id'] is int ? _selectedUser['id'] as int : int.tryParse('${_selectedUser['id']}') ?? 0)
+        : 0;
 
     return Column(
       children: [
-        // ─── Chat Header ───
         Container(
           height: 72,
-          padding: EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            color: Color(0x1A1E293B),
-            border: Border(bottom: BorderSide(color: AppTheme.border)),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: AppTheme.taskCardDecoration(borderRadius: 0).copyWith(
+            borderRadius: BorderRadius.zero,
+            boxShadow: const [],
+            border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
           ),
           child: Row(
             children: [
               if (!isWide)
                 GestureDetector(
                   onTap: () => setState(() { _selectedUser = null; _selectedGroup = null; _refreshTimer?.cancel(); }),
-                  child: Padding(
+                  child: const Padding(
                     padding: EdgeInsets.only(right: 12),
                     child: Icon(Icons.arrow_back_ios, color: AppTheme.textMuted, size: 20),
                   ),
                 ),
-              // Avatar
-              Container(
-                width: 40, height: 40,
-                decoration: BoxDecoration(
-                  color: isGroup ? null : Color(0xFF475569),
-                  gradient: isGroup ? LinearGradient(colors: [AppTheme.primary, AppTheme.primaryBright]) : null,
-                  shape: BoxShape.circle,
+              if (isGroup)
+                Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: [AppTheme.primary, AppTheme.primaryBright]),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Center(child: Icon(Icons.group, color: Colors.white, size: 20)),
+                )
+              else
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: _avatarColor(headerUid),
+                      child: Text(_initials(name), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                    ),
+                    Positioned(
+                      bottom: 0, right: 0,
+                      child: Container(
+                        width: 11, height: 11,
+                        decoration: BoxDecoration(
+                          color: isOnline ? const Color(0xFF34D399) : const Color(0xFF6B7280),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: AppTheme.bgDeep, width: 2),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                child: Center(child: Icon(
-                  isGroup ? Icons.group : Icons.person,
-                  color: Colors.white, size: 20,
-                )),
-              ),
-              SizedBox(width: 12),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(name, style: TextStyle(
+                    Text(name, style: const TextStyle(
                       fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white,
                     ), overflow: TextOverflow.ellipsis),
-                    Text(subtitle, style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                    Text(subtitle, style: TextStyle(
+                      fontSize: 12,
+                      color: isOnline ? const Color(0xFF34D399) : AppTheme.textMuted,
+                    )),
                   ],
                 ),
               ),
@@ -749,43 +812,69 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           ),
         ),
 
-        // ─── Messages ───
         Expanded(
-          child: _messages.isEmpty
-              ? _buildEmpty('No messages yet\nStart the conversation!')
-              : ListView.builder(
-                  controller: _scrollController,
-                  padding: EdgeInsets.all(16),
-                  itemCount: _messages.length,
-                  itemBuilder: (_, i) => _buildMessageBubble(_messages[i]),
-                ),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: const Color(0xF20F172A),
+              gradient: RadialGradient(
+                center: Alignment.topCenter,
+                radius: 1.2,
+                colors: [
+                  AppTheme.primary.withValues(alpha: 0.08),
+                  Colors.transparent,
+                ],
+              ),
+            ),
+            child: _messages.isEmpty
+                ? _buildEmpty('No messages yet\nStart the conversation!')
+                : ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    itemCount: _messages.length,
+                    itemBuilder: (_, i) => _buildMessageBubble(_messages[i]),
+                  ),
+          ),
         ),
 
-        // ─── Input ───
-        if (_isRecording) Container(
-          padding: EdgeInsets.all(16),
-          decoration: BoxDecoration(color: Color(0x331E293B), border: Border(top: BorderSide(color: AppTheme.border))),
-          child: Row(children: [
-            Container(width: 12, height: 12, decoration: BoxDecoration(shape: BoxShape.circle, color: AppTheme.danger),
-              child: null),
-            SizedBox(width: 8),
-            Text('Recording ${_recordSeconds}s', style: TextStyle(color: AppTheme.danger, fontSize: 14, fontWeight: FontWeight.w600)),
-            Spacer(),
-            GestureDetector(onTap: _stopAndSendRecording, child: Container(width: 44, height: 44,
-              decoration: BoxDecoration(color: AppTheme.danger, shape: BoxShape.circle),
-              child: Icon(Icons.stop, color: Colors.white, size: 22))),
-          ]),
-        ) else Container(
-          padding: EdgeInsets.all(Responsive.isMobile(context) ? 10 : 16),
-          decoration: BoxDecoration(
-            color: AppTheme.surface.withValues(alpha: 0.55),
-            border: Border(top: BorderSide(color: AppTheme.border)),
-          ),
+        if (_isRecording)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0x331E293B),
+              border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+            ),
+            child: Row(children: [
+              Container(width: 12, height: 12, decoration: const BoxDecoration(shape: BoxShape.circle, color: AppTheme.danger)),
+              const SizedBox(width: 8),
+              Text('Recording ${_recordSeconds}s', style: const TextStyle(color: AppTheme.danger, fontSize: 14, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              GestureDetector(
+                onTap: _stopAndSendRecording,
+                child: Container(
+                  width: 44, height: 44,
+                  decoration: const BoxDecoration(color: AppTheme.danger, shape: BoxShape.circle),
+                  child: const Icon(Icons.stop, color: Colors.white, size: 22),
+                ),
+              ),
+            ]),
+          )
+        else
+          Container(
+            padding: EdgeInsets.fromLTRB(
+              Responsive.isMobile(context) ? 10 : 16,
+              10,
+              Responsive.isMobile(context) ? 10 : 16,
+              10,
+            ),
+            decoration: BoxDecoration(
+              color: AppTheme.surface.withValues(alpha: 0.35),
+              border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+            ),
           child: Row(
             children: [
               if (Responsive.isMobile(context))
                 PopupMenuButton<String>(
-                  icon: Icon(Icons.add_circle_outline, color: AppTheme.textMuted, size: 24),
+                  icon: const Icon(Icons.add_circle_outline, color: AppTheme.textMuted, size: 24),
                   color: AppTheme.surface2,
                   onSelected: (v) {
                     if (v == 'image') _pickImage();
@@ -799,15 +888,15 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               else ...[
                 GestureDetector(
                   onTap: _pickImage,
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 4),
+                  child: const Padding(
+                    padding: EdgeInsets.only(right: 4),
                     child: Icon(Icons.image, color: AppTheme.textMuted, size: 22),
                   ),
                 ),
                 GestureDetector(
                   onTap: _pickFile,
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 8),
+                  child: const Padding(
+                    padding: EdgeInsets.only(right: 8),
                     child: Icon(Icons.attach_file, color: AppTheme.textMuted, size: 22),
                   ),
                 ),
@@ -816,24 +905,20 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                 child: TextField(
                   controller: _msgController,
                   enabled: !_isSending,
-                  style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: 'Type a message...',
-                    hintStyle: TextStyle(color: AppTheme.textMuted, fontSize: 14),
-                    filled: true,
-                    fillColor: AppTheme.surface2.withValues(alpha: 0.5),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+                  decoration: AppTheme.taskInputDecoration('Type a message...').copyWith(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: AppTheme.border),
+                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: AppTheme.border),
+                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: AppTheme.primary),
+                      borderSide: BorderSide(color: AppTheme.featureVault.withValues(alpha: 0.6)),
                     ),
                   ),
                   onSubmitted: (_) => _sendMessage(),
@@ -883,88 +968,113 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     return Align(
       alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        margin: EdgeInsets.only(bottom: 8),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        margin: const EdgeInsets.only(bottom: 10),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
         child: GestureDetector(
           onLongPress: isOwn && !isDeleted ? () => _showMessageOptions(msg) : null,
-          child: Container(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              gradient: isOwn
-                  ? LinearGradient(colors: [AppTheme.primary, AppTheme.primaryBright], begin: Alignment.topLeft, end: Alignment.bottomRight)
-                  : null,
-              color: isOwn ? null : Color(0x1AFFFFFF),
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(18),
-                topRight: Radius.circular(18),
-                bottomLeft: isOwn ? Radius.circular(18) : Radius.zero,
-                bottomRight: isOwn ? Radius.zero : Radius.circular(18),
-              ),
-              border: isOwn ? null : Border.all(color: Color(0x0DFFFFFF)),
-              boxShadow: isOwn ? [BoxShadow(color: AppTheme.primary.withValues(alpha: 0.3), blurRadius: 12)] : null,
-            ),
-            child: Column(
-              crossAxisAlignment: isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-              children: [
-                if (!isOwn && isGroup)
-                  Padding(
-                    padding: EdgeInsets.only(bottom: 4),
-                    child: Text(senderName, style: TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600,
-                      color: Colors.white.withOpacity(0.75),
-                    )),
+          child: Column(
+            crossAxisAlignment: isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: isOwn ? const Color(0xFF2563EB) : const Color(0xE00F172A),
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(18),
+                    topRight: const Radius.circular(18),
+                    bottomLeft: Radius.circular(isOwn ? 18 : 4),
+                    bottomRight: Radius.circular(isOwn ? 4 : 18),
                   ),
-                // Message content based on type
-                if (isDeleted) Text('🗑️ This message was deleted', style: TextStyle(color: Colors.white54, fontSize: 14, fontStyle: FontStyle.italic))
-                else if (msgType == 'voice' && voiceUrl != null) GestureDetector(
-                  onTap: () => _playVoice(voiceUrl),
-                  child: Container(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(_playingUrl == voiceUrl ? Icons.stop_circle : Icons.play_circle_fill, color: isOwn ? Colors.white : AppTheme.primary, size: 28),
-                      SizedBox(width: 8),
-                      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('Voice Message', style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600)),
-                        Text(_playingUrl == voiceUrl ? 'Playing...' : 'Tap to play', style: TextStyle(color: Colors.white54, fontSize: 10)),
-                      ]),
-                    ])))
-                else if (msgType == 'image' && imageUrl != null) Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  ClipRRect(borderRadius: BorderRadius.circular(8),
-                    child: Image.network(imageUrl, width: 200, fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(width: 200, height: 100, color: Colors.white10, child: Icon(Icons.broken_image, color: Colors.white38)))),
-                  if (text.isNotEmpty) ...[SizedBox(height: 6), Text(text, style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 14))],
-                ])
-                else if (msgType == 'file' && fileUrl != null) Container(padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.insert_drive_file, color: AppTheme.primary, size: 24),
-                    SizedBox(width: 8),
-                    Flexible(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(fileName, style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
-                      Text('Tap to download', style: TextStyle(color: Colors.white54, fontSize: 10)),
-                    ])),
-                  ]))
-                else Text(text, style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 14, height: 1.5)),
-                SizedBox(height: 4),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+                  border: isOwn ? null : Border.all(color: const Color(0x1F93C5FD)),
+                  boxShadow: isOwn
+                      ? [BoxShadow(color: AppTheme.primary.withValues(alpha: 0.25), blurRadius: 12)]
+                      : [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 8)],
+                ),
+                child: Column(
+                  crossAxisAlignment: isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                   children: [
-                    if (isEdited)
+                    if (!isOwn && isGroup)
                       Padding(
-                        padding: EdgeInsets.only(right: 4),
-                        child: Text('edited', style: TextStyle(
-                          fontSize: 10, color: Colors.white.withOpacity(0.5), fontStyle: FontStyle.italic,
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(senderName, style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600,
+                          color: Colors.white.withValues(alpha: 0.75),
                         )),
                       ),
-                    Text(time, style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.6))),
+                    if (isDeleted)
+                      Text('🗑️ This message was deleted', style: TextStyle(color: Colors.white.withValues(alpha: 0.54), fontSize: 14, fontStyle: FontStyle.italic))
+                    else if (msgType == 'voice' && voiceUrl != null)
+                      GestureDetector(
+                        onTap: () => _playVoice(voiceUrl),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(_playingUrl == voiceUrl ? Icons.stop_circle : Icons.play_circle_fill, color: isOwn ? Colors.white : AppTheme.primary, size: 28),
+                          const SizedBox(width: 8),
+                          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text('Voice Message', style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600)),
+                            Text(_playingUrl == voiceUrl ? 'Playing...' : 'Tap to play', style: TextStyle(color: Colors.white.withValues(alpha: 0.54), fontSize: 10)),
+                          ]),
+                        ]),
+                      )
+                    else if (msgType == 'image' && imageUrl != null)
+                      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.network(imageUrl, width: 220, fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(width: 220, height: 100, color: Colors.white10, child: const Icon(Icons.broken_image, color: Colors.white38))),
+                        ),
+                        if (text.isNotEmpty) ...[const SizedBox(height: 6), Text(text, style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 14))],
+                      ])
+                    else if (msgType == 'file' && fileUrl != null)
+                      GestureDetector(
+                        onTap: () => _openFileUrl(fileUrl),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          const Icon(Icons.insert_drive_file, color: AppTheme.primaryBright, size: 24),
+                          const SizedBox(width: 8),
+                          Flexible(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Text(fileName, style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
+                            Text('Tap to download', style: TextStyle(color: Colors.white.withValues(alpha: 0.54), fontSize: 10)),
+                          ])),
+                        ]),
+                      )
+                    else
+                      Text(text, style: TextStyle(color: isOwn ? Colors.white : const Color(0xFFE4E4E7), fontSize: 14, height: 1.5)),
+                    if (isOwn) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isEdited)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Text('edited', style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: 0.5), fontStyle: FontStyle.italic)),
+                            ),
+                          Text(time, style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: 0.65))),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
+              ),
+              if (!isOwn) ...[
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.only(left: 4),
+                  child: Text(time, style: TextStyle(fontSize: 10, color: AppTheme.textMuted.withValues(alpha: 0.9))),
+                ),
               ],
-            ),
+            ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _openFileUrl(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      _showError('Could not open file');
+    }
   }
 
   // ─── Message Options (Edit/Delete) ───

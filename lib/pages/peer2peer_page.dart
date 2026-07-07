@@ -42,6 +42,12 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
   double _progress = 0.0;
   String _statusText = '';
   bool _isConnected = false;
+  bool _signalingOk = false;
+  bool _peerFound = false;
+  bool _webrtcReady = false;
+  String _iceState = '';
+  int _bytesTransferred = 0;
+  Timer? _connectTimeout;
 
   RTCPeerConnection? _pc;
   RTCDataChannel? _dataChannel;
@@ -83,6 +89,8 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
   }
 
   void _cleanup() {
+    _connectTimeout?.cancel();
+    _connectTimeout = null;
     try {
       _dataChannel?.close();
     } catch (_) {}
@@ -99,6 +107,33 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     _myRole = null;
     _remoteReady = false;
     _pendingIce.clear();
+    _signalingOk = false;
+    _peerFound = false;
+    _webrtcReady = false;
+    _iceState = '';
+    _bytesTransferred = 0;
+  }
+
+  List<Map<String, dynamic>> _normalizeIceServers(List<Map<String, dynamic>> raw) {
+    final out = <Map<String, dynamic>>[];
+    for (final s in raw) {
+      final m = <String, dynamic>{};
+      final urls = s['urls'];
+      if (urls is List) {
+        m['urls'] = urls.map((e) => e.toString()).toList();
+      } else if (urls != null) {
+        m['urls'] = urls.toString();
+      } else {
+        continue;
+      }
+      if (s['username'] != null) m['username'] = s['username'].toString();
+      if (s['credential'] != null) m['credential'] = s['credential'].toString();
+      out.add(m);
+    }
+    if (out.isEmpty) {
+      out.add({'urls': 'stun:stun.l.google.com:19302'});
+    }
+    return out;
   }
 
   Future<void> _loadIceServers() async {
@@ -107,7 +142,9 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
       final data = r['data'] as Map<String, dynamic>? ?? {};
       final servers = data['ice_servers'] as List? ?? [];
       if (servers.isNotEmpty) {
-        _iceServers = servers.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+        _iceServers = _normalizeIceServers(
+          servers.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList(),
+        );
       }
     }
   }
@@ -178,27 +215,52 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
   }
 
   void _connectSignaling() {
+    _connectTimeout?.cancel();
     final token = widget.apiService.token ?? '';
-    if (_sessionId == null || token.isEmpty) return;
+    if (_sessionId == null || token.isEmpty) {
+      _showError('Not signed in — please log in again');
+      return;
+    }
     final wsUrl = AppConfig.p2pWsUrl(_sessionId!, token);
 
     try {
       _ws = connectWs(wsUrl);
       _wsAlive = true;
 
+      _connectTimeout = Timer(const Duration(seconds: 90), () {
+        if (!mounted) return;
+        if (!_webrtcReady && _mode != 'transferring' && _mode != 'complete') {
+          setState(() => _statusText = 'Connection timed out');
+          _showError(
+            'Connection timed out. Ensure Redis + ASGI (Daphne) are running and WebSocket is proxied.',
+          );
+        }
+      });
+
       _ws!.stream.listen(
         (msg) {
           try {
             _onSignal(jsonDecode(msg as String));
-          } catch (_) {}
-        },
-        onError: (_) {
-          _wsAlive = false;
-          if (mounted && _mode == 'sending') {
-            setState(() => _statusText = 'Waiting for receiver...');
+          } catch (e) {
+            debugPrint('P2P signal parse error: $e');
           }
         },
-        onDone: () => _wsAlive = false,
+        onError: (e) {
+          _wsAlive = false;
+          if (mounted) {
+            setState(() {
+              _signalingOk = false;
+              _statusText = 'Signaling error — check server WebSocket';
+            });
+            _showError('Signaling failed: $e');
+          }
+        },
+        onDone: () {
+          _wsAlive = false;
+          if (mounted && _mode != 'complete' && _mode != 'home') {
+            setState(() => _statusText = 'Signaling disconnected');
+          }
+        },
       );
     } catch (e) {
       _wsAlive = false;
@@ -217,52 +279,82 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
   Future<void> _onSignal(Map<String, dynamic> data) async {
     final type = data['type'] as String? ?? '';
 
-    switch (type) {
-      case 'room_full':
-        _showError('This transfer already has two devices connected.');
-        _cancel();
-      case 'peer_joined':
-        _peerName = data['username']?.toString();
-        if (mounted) {
-          setState(() {
-            _isConnected = true;
-            _statusText = 'Peer connected — negotiating...';
-          });
-        }
-      case 'peer_left':
-        if (mounted) {
-          setState(() {
-            _isConnected = false;
-            _statusText = 'Peer disconnected';
-          });
-        }
-      case 'role':
-        await _onRole(data['role']?.toString());
-      case 'offer':
-        await _onOffer(data['sdp'] as Map<String, dynamic>?);
-      case 'answer':
-        await _onAnswer(data['sdp'] as Map<String, dynamic>?);
-      case 'ice_candidate':
-        await _onRemoteIce(data['candidate'] as Map<String, dynamic>?);
-      case 'file_info':
-        _rxFileName = data['file_name']?.toString() ?? _rxFileName;
-        _expectedSize = data['file_size'] is int ? data['file_size'] as int : int.tryParse('${data['file_size']}') ?? _expectedSize;
-        if (data['sender_name'] != null) _peerName = data['sender_name']?.toString();
-        if (mounted) setState(() => _statusText = 'Incoming: $_rxFileName');
-      case 'transfer_complete':
-        if (mounted) {
-          setState(() {
-            _mode = 'complete';
-            _progress = 1.0;
-            _statusText = 'Transfer complete';
-          });
-        }
+    if (type == 'connected') {
+      if (mounted) {
+        setState(() {
+          _signalingOk = true;
+          _statusText = _mode == 'sending' ? 'Waiting for receiver...' : 'Signaling connected — finding peer...';
+        });
+      }
+      return;
+    }
+    if (type == 'room_full') {
+      _showError('This transfer already has two devices connected.');
+      _cancel();
+      return;
+    }
+    if (type == 'peer_joined') {
+      _peerName = data['username']?.toString();
+      if (mounted) {
+        setState(() {
+          _peerFound = true;
+          _isConnected = true;
+          _statusText = 'Peer found — setting up secure link...';
+        });
+      }
+      return;
+    }
+    if (type == 'peer_left') {
+      if (mounted) {
+        setState(() {
+          _isConnected = false;
+          _peerFound = false;
+          _webrtcReady = false;
+          _statusText = 'Peer disconnected';
+        });
+      }
+      return;
+    }
+    if (type == 'role') {
+      await _onRole(data['role']?.toString());
+      return;
+    }
+    if (type == 'offer') {
+      await _onOffer(data['sdp'] as Map<String, dynamic>?);
+      return;
+    }
+    if (type == 'answer') {
+      await _onAnswer(data['sdp'] as Map<String, dynamic>?);
+      return;
+    }
+    if (type == 'ice_candidate') {
+      await _onRemoteIce(data['candidate'] as Map<String, dynamic>?);
+      return;
+    }
+    if (type == 'file_info') {
+      _rxFileName = data['file_name']?.toString() ?? _rxFileName;
+      _expectedSize = data['file_size'] is int ? data['file_size'] as int : int.tryParse('${data['file_size']}') ?? _expectedSize;
+      if (data['sender_name'] != null) _peerName = data['sender_name']?.toString();
+      if (mounted) setState(() => _statusText = 'Incoming: $_rxFileName');
+      return;
+    }
+    if (type == 'transfer_complete') {
+      if (mounted) {
+        setState(() {
+          _mode = 'complete';
+          _progress = 1.0;
+          _statusText = 'Transfer complete';
+        });
+      }
     }
   }
 
   Future<void> _onRole(String? role) async {
     if (role == null || role.isEmpty) return;
     _myRole = role;
+    if (mounted) {
+      setState(() => _statusText = 'Negotiating WebRTC (${role == 'initiator' ? 'sender' : 'receiver'})...');
+    }
     await _initPc();
     if (role == 'initiator') {
       _dataChannel = await _pc!.createDataChannel('file', RTCDataChannelInit()..ordered = true);
@@ -271,16 +363,24 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
       await _pc!.setLocalDescription(offer);
       _wsSend({'type': 'offer', 'sdp': {'sdp': offer.sdp, 'type': offer.type}});
     } else {
-      _pc!.onDataChannel = (ch) {
-        _dataChannel = ch;
-        _setupDc(isSender: false);
-      };
+      _ensureDataChannelHandler(isSender: false);
     }
+  }
+
+  void _ensureDataChannelHandler({required bool isSender}) {
+    if (_pc == null || isSender) return;
+    _pc!.onDataChannel = (ch) {
+      _dataChannel = ch;
+      _setupDc(isSender: false);
+    };
   }
 
   Future<void> _onOffer(Map<String, dynamic>? sdp) async {
     if (sdp == null) return;
+    _myRole ??= 'responder';
     if (_pc == null) await _initPc();
+    _ensureDataChannelHandler(isSender: false);
+    if (mounted) setState(() => _statusText = 'Processing connection offer...');
     await _pc!.setRemoteDescription(RTCSessionDescription(sdp['sdp']?.toString(), sdp['type']?.toString()));
     _remoteReady = true;
     await _flushCandidates();
@@ -335,13 +435,32 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     });
 
     _pc!.onIceConnectionState = (s) {
+      final label = s.toString().split('.').last;
+      if (mounted) setState(() => _iceState = label);
       if (s == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           s == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+        _connectTimeout?.cancel();
         if (mounted) {
-          setState(() => _statusText = _myRole == 'initiator' ? 'Connected — waiting for accept...' : 'Connected — receiving...');
+          setState(() {
+            _webrtcReady = true;
+            _statusText = _myRole == 'initiator'
+                ? 'Connected — waiting for accept...'
+                : 'Connected — preparing receive...';
+          });
         }
       } else if (s == RTCIceConnectionState.RTCIceConnectionStateFailed) {
-        if (mounted) _showError('Connection failed — try again or check network');
+        if (mounted) {
+          _showError('Direct connection failed — try Wi‑Fi or configure TURN on server');
+          setState(() => _statusText = 'Connection failed (ICE)');
+        }
+      } else if (s == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        if (mounted) setState(() => _statusText = 'Connection interrupted');
+      }
+    };
+
+    _pc!.onConnectionState = (s) {
+      if (s == RTCPeerConnectionState.RTCPeerConnectionStateFailed && mounted) {
+        _showError('Peer connection failed — check network or TURN server');
       }
     };
   }
@@ -360,8 +479,9 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
         if (_expectedSize > 0 && mounted) {
           setState(() {
             _mode = 'transferring';
+            _bytesTransferred = _rxSize;
             _progress = _rxSize / _expectedSize;
-            _statusText = 'Receiving: ${(_progress * 100).toStringAsFixed(1)}%';
+            _statusText = 'Receiving: ${(_progress * 100).toStringAsFixed(1)}% · ${_fmtSize(_rxSize)} / ${_fmtSize(_expectedSize)}';
           });
         }
         return;
@@ -436,7 +556,8 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
       if (mounted) {
         setState(() {
           _progress = off / total;
-          _statusText = 'Sending: ${(_progress * 100).toStringAsFixed(1)}%';
+          _bytesTransferred = off;
+          _statusText = 'Sending: ${(_progress * 100).toStringAsFixed(1)}% · ${_fmtSize(off)} / ${_fmtSize(total)}';
         });
       }
       await Future.delayed(const Duration(milliseconds: 2));
@@ -488,6 +609,11 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
       _progress = 0;
       _statusText = '';
       _isConnected = false;
+      _signalingOk = false;
+      _peerFound = false;
+      _webrtcReady = false;
+      _iceState = '';
+      _bytesTransferred = 0;
       _sessionId = null;
     });
   }
@@ -505,6 +631,50 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     if (b < 1048576) return '${(b / 1024).toStringAsFixed(1)} KB';
     if (b < 1073741824) return '${(b / 1048576).toStringAsFixed(1)} MB';
     return '${(b / 1073741824).toStringAsFixed(2)} GB';
+  }
+
+  Widget _statusStepsPanel() {
+    final steps = <({String label, bool done, bool active})>[
+      (label: 'Signaling', done: _signalingOk, active: !_signalingOk),
+      (label: 'Peer found', done: _peerFound, active: _signalingOk && !_peerFound),
+      (label: 'WebRTC', done: _webrtcReady, active: _peerFound && !_webrtcReady),
+      (label: _mode == 'transferring' ? 'Transfer' : 'Connected', done: _mode == 'complete', active: _webrtcReady && _mode != 'complete'),
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: AppTheme.glassPanel(borderRadius: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Connection status', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
+          const SizedBox(height: 10),
+          ...steps.map((s) {
+            final color = s.done ? AppTheme.success : (s.active ? AppTheme.accent : AppTheme.textMuted);
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    s.done ? Icons.check_circle_rounded : (s.active ? Icons.radio_button_checked : Icons.radio_button_off),
+                    size: 18,
+                    color: color,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(s.label, style: TextStyle(fontSize: 13, color: color))),
+                  if (s.label == 'WebRTC' && _iceState.isNotEmpty)
+                    Text(_iceState, style: TextStyle(fontSize: 11, color: AppTheme.textMuted.withValues(alpha: 0.9))),
+                ],
+              ),
+            );
+          }),
+          if (_statusText.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(_statusText, style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+          ],
+        ],
+      ),
+    );
   }
 
   Widget _unsupportedPlatform() {
@@ -550,7 +720,14 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (_isConnected) _connectionBanner(),
+          if (_mode != 'home' && _mode != 'complete') ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: _statusStepsPanel(),
+            ),
+          ] else if (_isConnected) ...[
+            Padding(padding: const EdgeInsets.fromLTRB(12, 8, 12, 0), child: _connectionBanner()),
+          ],
           Expanded(child: _body()),
         ],
       );
@@ -810,8 +987,8 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
             ),
           ],
           const SizedBox(height: 24),
-          Text(_statusText, style: const TextStyle(fontSize: 14, color: AppTheme.textMuted)),
-          if (!_isConnected && _sessionId != null) ...[
+          _statusStepsPanel(),
+          if (!_peerFound && _sessionId != null) ...[
             const SizedBox(height: 16),
             const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary)),
           ],
@@ -829,57 +1006,54 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
 
   Widget _recvView() {
     if (_joinedSession) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (!_awaitingAccept) ...[
-                const CircularProgressIndicator(color: AppTheme.success, strokeWidth: 3),
-                const SizedBox(height: 20),
-              ] else ...[
-                Container(
-                  width: 64,
-                  height: 64,
-                  decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha: 0.15), shape: BoxShape.circle),
-                  child: const Icon(Icons.file_download_rounded, color: AppTheme.primaryBright, size: 32),
-                ),
-                const SizedBox(height: 20),
-              ],
-              Text(_statusText, style: const TextStyle(color: AppTheme.textMuted, fontSize: 14), textAlign: TextAlign.center),
-              if (_peerName != null) ...[
-                const SizedBox(height: 8),
-                Text('From: $_peerName', style: const TextStyle(color: AppTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.w600)),
-              ],
-              if (_awaitingAccept) ...[
-                const SizedBox(height: 8),
-                Text(_rxFileName, style: const TextStyle(color: AppTheme.accent, fontSize: 14)),
-                Text(_fmtSize(_expectedSize), style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: _acceptIncoming,
-                    icon: const Icon(Icons.check_circle_outline_rounded),
-                    label: const Text('Accept & receive'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppTheme.success,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            _statusStepsPanel(),
+            const SizedBox(height: 24),
+            if (!_awaitingAccept) ...[
+              const CircularProgressIndicator(color: AppTheme.success, strokeWidth: 3),
+              const SizedBox(height: 20),
+            ] else ...[
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha: 0.15), shape: BoxShape.circle),
+                child: const Icon(Icons.file_download_rounded, color: AppTheme.primaryBright, size: 32),
+              ),
+              const SizedBox(height: 20),
+            ],
+            if (_peerName != null) ...[
+              Text('From: $_peerName', style: const TextStyle(color: AppTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+            ],
+            if (_awaitingAccept) ...[
+              Text(_rxFileName, style: const TextStyle(color: AppTheme.accent, fontSize: 14)),
+              Text(_fmtSize(_expectedSize), style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _acceptIncoming,
+                  icon: const Icon(Icons.check_circle_outline_rounded),
+                  label: const Text('Accept & receive'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTheme.success,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   ),
                 ),
-              ],
-              const SizedBox(height: 24),
-              TextButton.icon(
-                onPressed: _cancel,
-                icon: const Icon(Icons.close_rounded, size: 18),
-                label: const Text('Cancel'),
-                style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
               ),
             ],
-          ),
+            const SizedBox(height: 24),
+            TextButton.icon(
+              onPressed: _cancel,
+              icon: const Icon(Icons.close_rounded, size: 18),
+              label: const Text('Cancel'),
+              style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+            ),
+          ],
         ),
       );
     }
@@ -970,6 +1144,13 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
             Text(_selectedFileName ?? _rxFileName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
             const SizedBox(height: 8),
             Text(_statusText, style: const TextStyle(fontSize: 14, color: AppTheme.textMuted)),
+            if (_bytesTransferred > 0) ...[
+              const SizedBox(height: 4),
+              Text(
+                '${_fmtSize(_bytesTransferred)} transferred',
+                style: const TextStyle(fontSize: 12, color: AppTheme.accent),
+              ),
+            ],
             if (_peerName != null) ...[
               const SizedBox(height: 4),
               Text('with $_peerName', style: const TextStyle(fontSize: 13, color: AppTheme.accent)),

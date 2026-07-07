@@ -28,8 +28,11 @@ class AppTabShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.bgDeep,
+    return DecoratedBox(
+      decoration: AppTheme.shellBackgroundDecoration,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        extendBody: true,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -47,6 +50,7 @@ class AppTabShell extends StatelessWidget {
         selectedIndex: selectedIndex,
         onSelected: _onTab,
         unreadNotifs: unreadNotifs,
+      ),
       ),
     );
   }

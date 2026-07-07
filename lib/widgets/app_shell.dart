@@ -38,9 +38,9 @@ class AppShell extends StatelessWidget {
     final pad = padding ?? EdgeInsets.all(Responsive.pagePadding(context));
     final hasHeader = header != null || title != null;
 
-    return Container(
-      decoration: AppTheme.screenGradient(),
+    return AppTheme.homeGlassBackground(
       child: SafeArea(
+        bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

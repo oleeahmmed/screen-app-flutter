@@ -69,6 +69,7 @@ class AppConfig {
   static String get checkInUrl => '$apiBaseUrl/attendance/checkin/';
   static String get checkOutUrl => '$apiBaseUrl/attendance/checkout/';
   static String get tasksUrl => '$apiBaseUrl/tasks/';
+  static String get myTasksUrl => '$apiBaseUrl/me/tasks/';
   static String get chatUsersUrl => '$apiBaseUrl/chat/users/';
   static String get chatConversationUrl => '$apiBaseUrl/chat/conversation/';
   static String get chatSendUrl => '$apiBaseUrl/chat/send/';
@@ -141,6 +142,7 @@ class AppConfig {
 
   static String get attendanceCurrentUrl => '$apiBaseUrl/attendance/current/';
   static String get attendanceListUrl => '$apiBaseUrl/attendance/';
+  static String get attendanceMyReportUrl => '$apiBaseUrl/attendance/my-report/';
   static String get closingReportsUrl => '$apiBaseUrl/closing-reports/';
   static String get closingReportsPendingUrl => '$apiBaseUrl/closing-reports/pending/';
 

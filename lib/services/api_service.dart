@@ -6,6 +6,7 @@ import 'package:http_parser/http_parser.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
+import 'attendance_cache.dart';
 import 'user_data_service.dart';
 
 class ApiService {
@@ -122,6 +123,11 @@ class ApiService {
         if (raw is Map) {
           final err = raw['message'] ?? raw['error'] ?? raw['detail'];
           if (err != null) {
+            final verified = await _verifyAttendanceAfterAction(verifySuccess);
+            if (verified['success'] == true) {
+              final current = await getCurrentAttendance();
+              if (current['success'] == true) return current;
+            }
             return {'success': false, 'error': err.toString()};
           }
         }
@@ -166,7 +172,7 @@ class ApiService {
       return {'success': false, 'error': 'Could not verify attendance status'};
     }
     final data = result['data'] as Map<String, dynamic>? ?? {};
-    final current = data['current_attendance'] as Map<String, dynamic>?;
+    final current = _attendanceMapFrom(data['current_attendance']);
     if (verifySuccess(current)) {
       return {'success': true, 'data': {'verified': true, 'current_attendance': current}};
     }
@@ -506,30 +512,94 @@ class ApiService {
     return false;
   }
 
+  Map<String, dynamic> _normalizeAttendancePayload(Map raw) {
+    final data = Map<String, dynamic>.from(raw);
+    for (final key in [
+      'current_attendance',
+      'today_work_duration',
+      'today_break_duration',
+      'today_gross_work_duration',
+      'effective_schedule',
+      'active_break',
+    ]) {
+      final v = data[key];
+      if (v is Map) data[key] = Map<String, dynamic>.from(v);
+    }
+    final sessions = data['sessions_today'];
+    if (sessions is List) {
+      data['sessions_today'] = sessions
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    }
+    return data;
+  }
+
+  Map<String, dynamic>? _attendanceMapFrom(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return null;
+  }
+
   Future<Map<String, dynamic>> checkIn() async {
     final current = await getCurrentAttendance();
     if (current['success'] == true) {
-      final att = current['data']?['current_attendance'] as Map<String, dynamic>?;
+      final att = _attendanceMapFrom(current['data']?['current_attendance']);
       if (attendanceIsOpen(att)) {
         return {
           'success': true,
-          'data': {'message': 'Already checked in', 'attendance': att},
+          'data': current['data'],
         };
       }
     }
-    return _postAttendanceAction(
+    final result = await _postAttendanceAction(
       uri: Uri.parse(AppConfig.checkInUrl),
       label: 'Check-in',
       verifySuccess: attendanceIsOpen,
     );
+    if (result['success'] != true) return result;
+
+    final raw = result['data'];
+    if (raw is Map && raw['today_work_duration'] != null) {
+      final data = _normalizeAttendancePayload(Map<String, dynamic>.from(raw));
+      await AttendanceCache.save(data);
+      return {'success': true, 'data': data};
+    }
+    return getCurrentAttendance();
   }
 
   Future<Map<String, dynamic>> checkOut() async {
-    return _postAttendanceAction(
+    final result = await _postAttendanceAction(
       uri: Uri.parse(AppConfig.checkOutUrl),
       label: 'Check-out',
       verifySuccess: (current) => !attendanceIsOpen(current),
     );
+
+    Future<Map<String, dynamic>> withSummary(Map<String, dynamic> ok) async {
+      final raw = ok['data'];
+      if (raw is Map && raw['today_work_duration'] != null) {
+        final data = _normalizeAttendancePayload(Map<String, dynamic>.from(raw));
+        await AttendanceCache.save(data);
+        return {'success': true, 'data': data};
+      }
+      final current = await getCurrentAttendance();
+      if (current['success'] == true) return current;
+      return ok;
+    }
+
+    if (result['success'] == true) {
+      return withSummary(result);
+    }
+
+    // Server may have closed the session even when HTTP response was an error.
+    final current = await getCurrentAttendance();
+    if (current['success'] == true) {
+      final data = current['data'] as Map<String, dynamic>? ?? {};
+      if (data['is_clocked_in'] != true) {
+        return withSummary(current);
+      }
+    }
+    return result;
   }
 
   Future<Map<String, dynamic>> _fetchTasksFromUrl(String url, String label) async {
@@ -550,14 +620,57 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getTasks() async {
+  Future<Map<String, dynamic>> getMyTasks({String? status, int? projectId}) async {
+    try {
+      final query = <String, String>{};
+      if (status == 'pending') query['status'] = 'pending';
+      if (status == 'completed') query['status'] = 'completed';
+      if (projectId != null) query['project_id'] = '$projectId';
+      final uri = Uri.parse(AppConfig.myTasksUrl).replace(queryParameters: query.isEmpty ? null : query);
+      final response = await _authorizedGet(uri);
+      if (response.statusCode == 200) {
+        final decoded = _decodeJsonBody(response.body, context: 'GET ${AppConfig.myTasksUrl}');
+        if (decoded is Map<String, dynamic>) {
+          final tasks = _normalizeTaskList(decoded['tasks'] ?? decoded);
+          final projects = (decoded['projects'] as List? ?? [])
+              .whereType<Map>()
+              .map((p) => Map<String, dynamic>.from(p))
+              .toList();
+          return {
+            'success': true,
+            'data': {
+              'tasks': tasks,
+              'projects': projects,
+              'pending_count': decoded['pending_count'],
+              'completed_count': decoded['completed_count'],
+              'count': decoded['count'],
+            },
+          };
+        }
+      }
+      if (response.statusCode == 404) {
+        return getTasks(mineOnly: true);
+      }
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
+    } catch (e) {
+      return {'success': false, 'error': 'My tasks error: $e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getTasks({bool mineOnly = false}) async {
     try {
       print('📋 Loading tasks...');
       final employeeId = await UserDataService.getEmployeeId();
       final userId = await UserDataService.getUserId();
 
       final endpoints = <(String, String)>[
-        (AppConfig.tasksUrl, 'GET /api/tasks/'),
+        (
+          mineOnly ? '${AppConfig.tasksUrl}?mine=true' : AppConfig.tasksUrl,
+          mineOnly ? 'GET /api/tasks/?mine=true' : 'GET /api/tasks/',
+        ),
         if (employeeId.isNotEmpty)
           (
             AppConfig.employeeTasksUrl(employeeId),
@@ -2168,21 +2281,33 @@ class ApiService {
     };
   }
 
-  Future<Map<String, dynamic>> getCurrentAttendance() async {
+  Future<Map<String, dynamic>> getCurrentAttendance({bool allowCache = true}) async {
     try {
       await ensureAuth();
       final response = await _authorizedGet(Uri.parse(AppConfig.attendanceCurrentUrl));
       if (response.statusCode != 200) {
+        if (allowCache) {
+          final cached = await AttendanceCache.load();
+          if (cached != null) {
+            return {'success': true, 'data': cached, 'from_cache': true};
+          }
+        }
         return {'success': false, 'error': 'Failed to load attendance (${response.statusCode})'};
       }
       final decoded = _safeJsonDecode(response.body);
       if (decoded is! Map) {
         return {'success': false, 'error': 'Unexpected attendance response format'};
       }
-      // Trust /current/ as source of truth — do not override with stale open rows
-      // from the attendance list (caused clock-out UI to stay "clocked in").
-      return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+      final data = _normalizeAttendancePayload(decoded);
+      await AttendanceCache.save(data);
+      return {'success': true, 'data': data};
     } catch (e) {
+      if (allowCache) {
+        final cached = await AttendanceCache.load();
+        if (cached != null) {
+          return {'success': true, 'data': cached, 'from_cache': true};
+        }
+      }
       return {'success': false, 'error': '$e'};
     }
   }
@@ -2543,7 +2668,13 @@ class ApiService {
       if (response.statusCode == 201) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
-      return {'success': false, 'error': 'Failed to create session: ${response.statusCode}'};
+      try {
+        final body = jsonDecode(response.body);
+        if (body is Map && body['error'] != null) {
+          return {'success': false, 'error': body['error'].toString()};
+        }
+      } catch (_) {}
+      return {'success': false, 'error': 'Failed to create session (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -2591,12 +2722,34 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> startBreak(DateTime expectedBack) async {
+  Future<Map<String, dynamic>> getMyAttendanceReport({String? date}) async {
     try {
       await ensureAuth();
+      var url = AppConfig.attendanceMyReportUrl;
+      if (date != null && date.isNotEmpty) url = '$url?date=$date';
+      final response = await _authorizedGet(Uri.parse(url));
+      if (response.statusCode != 200) {
+        return {'success': false, 'error': 'Failed to load attendance report (${response.statusCode})'};
+      }
+      final decoded = _safeJsonDecode(response.body);
+      if (decoded is! Map) {
+        return {'success': false, 'error': 'Unexpected report response format'};
+      }
+      return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> startBreak({DateTime? expectedBack}) async {
+    try {
+      await ensureAuth();
+      final body = expectedBack != null
+          ? jsonEncode({'expected_back': expectedBack.toUtc().toIso8601String()})
+          : '{}';
       final response = await _authorizedPost(
         Uri.parse(AppConfig.breaksStartUrl),
-        body: jsonEncode({'expected_back': expectedBack.toUtc().toIso8601String()}),
+        body: body,
       );
       return _parseBreakPost(response, failLabel: 'Could not start break');
     } catch (e) {

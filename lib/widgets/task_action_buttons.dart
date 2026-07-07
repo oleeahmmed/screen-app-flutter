@@ -189,12 +189,13 @@ class TaskDetailFooterActions extends StatelessWidget {
           : const Icon(Icons.check, size: 16),
       label: Text(compact ? 'Save' : 'Save Changes'),
       style: FilledButton.styleFrom(
-        backgroundColor: AppTheme.primary,
+        backgroundColor: AppTheme.featureVault,
         foregroundColor: Colors.white,
         padding: EdgeInsets.symmetric(
           horizontal: compact ? 16 : 20,
           vertical: 12,
         ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }

@@ -15,13 +15,11 @@ import 'data_privacy_notice_page.dart';
 
 class ProfilePage extends StatefulWidget {
   final ApiService apiService;
-  final VoidCallback? onOpenP2P;
   final VoidCallback? onLogout;
 
   const ProfilePage({
     super.key,
     required this.apiService,
-    this.onOpenP2P,
     this.onLogout,
   });
 
@@ -292,7 +290,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: _emailCtrl,
-                  decoration: const InputDecoration(labelText: 'Email'),
+                  decoration: AppTheme.taskLabeledInput('Email'),
                   style: const TextStyle(color: AppTheme.textPrimary),
                   keyboardType: TextInputType.emailAddress,
                 ),
@@ -302,7 +300,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     Expanded(
                       child: TextField(
                         controller: _firstCtrl,
-                        decoration: const InputDecoration(labelText: 'First name'),
+                        decoration: AppTheme.taskLabeledInput('First name'),
                         style: const TextStyle(color: AppTheme.textPrimary),
                       ),
                     ),
@@ -310,7 +308,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     Expanded(
                       child: TextField(
                         controller: _lastCtrl,
-                        decoration: const InputDecoration(labelText: 'Last name'),
+                        decoration: AppTheme.taskLabeledInput('Last name'),
                         style: const TextStyle(color: AppTheme.textPrimary),
                       ),
                     ),
@@ -319,23 +317,20 @@ class _ProfilePageState extends State<ProfilePage> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _phoneCtrl,
-                  decoration: const InputDecoration(labelText: 'Phone'),
+                  decoration: AppTheme.taskLabeledInput('Phone'),
                   style: const TextStyle(color: AppTheme.textPrimary),
                   keyboardType: TextInputType.phone,
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _desigCtrl,
-                  decoration: const InputDecoration(labelText: 'Designation'),
+                  decoration: AppTheme.taskLabeledInput('Designation'),
                   style: const TextStyle(color: AppTheme.textPrimary),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _deptCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Department',
-                    hintText: 'e.g. Engineering, Sales',
-                  ),
+                  decoration: AppTheme.taskLabeledInput('Department', hint: 'e.g. Engineering, Sales'),
                   style: const TextStyle(color: AppTheme.textPrimary),
                 ),
               ],
@@ -403,30 +398,6 @@ class _ProfilePageState extends State<ProfilePage> {
                 ],
               ),
             ),
-          if (widget.onOpenP2P != null) ...[
-            const SizedBox(height: 14),
-            GlassCard(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              onTap: widget.onOpenP2P,
-              child: Row(
-                children: [
-                  Icon(Icons.swap_horiz, color: AppTheme.accent),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Peer-to-peer transfer', style: AppTheme.sectionTitle),
-                        const SizedBox(height: 2),
-                        Text('Send files over local network', style: AppTheme.caption),
-                      ],
-                    ),
-                  ),
-                  Icon(Icons.chevron_right, color: AppTheme.textMuted.withValues(alpha: 0.7)),
-                ],
-              ),
-            ),
-          ],
           const SizedBox(height: 24),
           AppPrimaryButton(
             label: _saving ? 'Saving…' : 'Save changes',

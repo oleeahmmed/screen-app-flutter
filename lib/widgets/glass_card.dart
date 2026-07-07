@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// Glass panel wrapper — consistent padding, radius, optional tap.
+/// Card surface matching Project / My Task pages.
 class GlassCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
   final double borderRadius;
   final Color? borderColor;
   final VoidCallback? onTap;
+  final bool darker;
 
   const GlassCard({
     super.key,
@@ -17,23 +18,27 @@ class GlassCard extends StatelessWidget {
     this.borderRadius = 16,
     this.borderColor,
     this.onTap,
+    this.darker = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final decoration = AppTheme.glassPanel(borderRadius: borderRadius).copyWith(
+    final decoration = AppTheme.taskCardDecoration(borderRadius: borderRadius).copyWith(
+      color: AppTheme.surface2.withValues(alpha: darker ? 0.98 : 0.94),
       border: borderColor != null
           ? Border.all(color: borderColor!)
-          : Border.all(color: Colors.white.withValues(alpha: 0.1)),
+          : Border.all(color: Colors.white.withValues(alpha: 0.08)),
+    );
+
+    final content = Container(
+      width: double.infinity,
+      padding: padding,
+      decoration: decoration,
+      child: child,
     );
 
     if (onTap == null) {
-      return Container(
-        width: double.infinity,
-        padding: padding,
-        decoration: decoration,
-        child: child,
-      );
+      return content;
     }
 
     return Material(
@@ -41,12 +46,7 @@ class GlassCard extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(borderRadius),
-        child: Ink(
-          width: double.infinity,
-          padding: padding,
-          decoration: decoration,
-          child: child,
-        ),
+        child: content,
       ),
     );
   }
