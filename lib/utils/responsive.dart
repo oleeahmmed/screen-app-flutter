@@ -74,12 +74,12 @@ class Responsive {
     );
   }
 
-  /// My Task page — list on phone, grid on tablet/desktop.
+  /// My Task page — responsive grid (2+ columns on phones for less scrolling).
   static int taskGridColumns(BuildContext context) {
     final w = widthOf(context);
     if (w >= 1600) return 4;
-    if (w >= 1200) return 3;
-    if (w >= 800) return 2;
+    if (w >= 1100) return 3;
+    if (w >= 300) return 2;
     return 1;
   }
 
@@ -89,9 +89,9 @@ class Responsive {
     final cross = taskGridColumns(context);
     return SliverGridDelegateWithFixedCrossAxisCount(
       crossAxisCount: cross,
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      mainAxisExtent: cross >= 4 ? 300 : (cross >= 3 ? 308 : 320),
+      mainAxisSpacing: 10,
+      crossAxisSpacing: 10,
+      mainAxisExtent: cross >= 4 ? 196 : (cross >= 3 ? 188 : 172),
     );
   }
 

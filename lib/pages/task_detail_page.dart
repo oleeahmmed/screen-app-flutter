@@ -9,7 +9,6 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../config.dart';
 import '../services/api_service.dart';
 import '../services/app_navigation.dart';
 import '../widgets/app_tab_shell.dart';
@@ -122,25 +121,30 @@ void openTaskDetailPage(
   VoidCallback? onClosed,
   VoidCallback? onLogout,
 }) {
+  final mobile = MediaQuery.sizeOf(context).width < Responsive.mobileMax;
+  final page = TaskDetailPage(
+    apiService: apiService,
+    taskId: taskId,
+    projectId: projectId,
+    projectName: projectName,
+    customerName: customerName,
+    initialTask: initialTask,
+    employees: employees,
+    stages: stages,
+    isManager: isManager,
+  );
+
   Navigator.of(context).push<void>(
     MaterialPageRoute(
-      fullscreenDialog: false,
-      builder: (_) => AppTabShell(
-        selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
-        unreadNotifs: AppNavigation.instance.unreadNotifs,
-        onLogout: onLogout,
-        child: TaskDetailPage(
-          apiService: apiService,
-          taskId: taskId,
-          projectId: projectId,
-          projectName: projectName,
-          customerName: customerName,
-          initialTask: initialTask,
-          employees: employees,
-          stages: stages,
-          isManager: isManager,
-        ),
-      ),
+      fullscreenDialog: mobile,
+      builder: (_) => mobile
+          ? page
+          : AppTabShell(
+              selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
+              unreadNotifs: AppNavigation.instance.unreadNotifs,
+              onLogout: onLogout,
+              child: page,
+            ),
     ),
   ).then((_) => onClosed?.call());
 }
@@ -232,6 +236,8 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       _applyTaskToForm(_task!);
       _snapshot = _captureSnapshot();
       _loading = false;
+      final desc = _descCtrl.text;
+      if (descriptionLooksLikeHtml(desc)) _descPreview = true;
     }
     for (final c in [_titleCtrl, _descCtrl, _estHoursCtrl, _actHoursCtrl]) {
       c.addListener(_onTextChanged);
@@ -396,6 +402,9 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     if (results[2]['success'] == true) {
       final raw = results[2]['data'];
       _attachments = raw is List ? List<dynamic>.from(raw) : [];
+    }
+    if (Responsive.isMobile(context) && descriptionLooksLikeHtml(_descCtrl.text)) {
+      _descPreview = true;
     }
     setState(() => _loading = false);
   }
@@ -723,12 +732,6 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     );
   }
 
-  void _shareTask() {
-    final link = '${AppConfig.apiBaseUrl.replaceAll('/api', '')}/monitor/project/${widget.projectId}/?task=${widget.taskId}';
-    Clipboard.setData(ClipboardData(text: link));
-    AppToast.success(context, 'Task link copied to clipboard');
-  }
-
   Future<void> _toggleComplete() async {
     if (_task == null) return;
     final done = taskIsCompleted(_task);
@@ -751,7 +754,6 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     final t = _task;
-    final taskKey = t?['task_key']?.toString() ?? 'T-${widget.taskId}';
 
     return Shortcuts(
       shortcuts: const {
@@ -784,7 +786,8 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           },
           child: Scaffold(
       backgroundColor: Colors.transparent,
-      body: AppTheme.homeGlassBackground(
+      body: AppTheme.loginDashboardBackground(
+        context: context,
         child: SafeArea(
         bottom: false,
         child: Column(
@@ -837,7 +840,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
                     ],
                   ),
                 ),
-              _buildTopBar(taskKey),
+              _buildTopBar(),
               _buildTabBar(),
               Expanded(
                 child: TabBarView(
@@ -860,80 +863,40 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     );
   }
 
-  Widget _buildTopBar(String taskKey) {
+  Widget _buildTopBar() {
     final compact = Responsive.isMobile(context);
-    final crumbs = [
-      if (widget.customerName.isNotEmpty) 'Customers',
-      if (widget.customerName.isNotEmpty) widget.customerName,
-      if (widget.projectName.isNotEmpty) widget.projectName,
-      _titleCtrl.text.trim().isEmpty ? taskKey : _titleCtrl.text.trim(),
-    ];
-    return Container(
-      padding: EdgeInsets.fromLTRB(compact ? 8 : 16, 10, 8, 10),
-      decoration: AppTheme.taskCardDecoration(borderRadius: 0).copyWith(
-        borderRadius: BorderRadius.zero,
-        boxShadow: [],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              AppBackButton(color: AppTheme.textMuted),
-              Expanded(
-                child: Text(
-                  crumbs.join(' › '),
-                  style: AppTheme.caption.copyWith(fontSize: compact ? 10 : 11),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(compact ? 12 : 16, compact ? 8 : 10, compact ? 12 : 16, 0),
+      child: Container(
+        decoration: AppTheme.loginShell().copyWith(
+          borderRadius: BorderRadius.circular(compact ? 16 : 18),
+        ),
+        padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10, vertical: compact ? 8 : 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const AppBackButton(color: AppTheme.textMuted),
+            const SizedBox(width: 4),
+            Expanded(
+              child: TextField(
+                controller: _titleCtrl,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: compact ? 16 : 17,
+                  fontWeight: FontWeight.w700,
                 ),
-              ),
-              const AppQuickMenuButton(iconColor: AppTheme.textMuted, iconSize: 20),
-              IconButton(
-                onPressed: _shareTask,
-                icon: const Icon(Icons.share_outlined, color: Colors.white54, size: 20),
-                tooltip: 'Share',
-              ),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close, color: Colors.white54, size: 22),
-                tooltip: 'Close',
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppTheme.featureVault.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: AppTheme.featureVault.withValues(alpha: 0.45)),
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 8),
                 ),
-                child: Text(taskKey, style: const TextStyle(color: AppTheme.featureVault, fontSize: 11, fontWeight: FontWeight.w700)),
+                maxLines: 3,
+                minLines: 1,
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: TextField(
-                  controller: _titleCtrl,
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: compact ? 15 : 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    isDense: true,
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                  maxLines: 2,
-                ),
-              ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -942,57 +905,40 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     final compact = Responsive.isMobile(context);
     final tabBar = TabBar(
       controller: _tabCtrl,
-      indicatorColor: AppTheme.featureVault,
-      indicatorWeight: 2.5,
-      labelColor: AppTheme.featureVault,
+      indicatorColor: AppTheme.accent,
+      indicatorWeight: 2,
+      labelColor: AppTheme.textPrimary,
       unselectedLabelColor: AppTheme.textMuted,
-      labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1),
+      labelStyle: TextStyle(fontSize: compact ? 12 : 11, fontWeight: FontWeight.w700),
       tabs: const [
-        Tab(text: 'DETAILS'),
-        Tab(text: 'ACTIVITY'),
+        Tab(text: 'Details'),
+        Tab(text: 'Activity'),
       ],
     );
 
-    if (compact) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          tabBar,
-          if (_saveHint.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
-              child: Align(
-                alignment: Alignment.centerRight,
+    return Padding(
+      padding: EdgeInsets.fromLTRB(compact ? 12 : 16, 8, compact ? 12 : 16, 0),
+      child: Container(
+        decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Row(
+          children: [
+            Expanded(child: tabBar),
+            if (_saveHint.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
                 child: Text(
                   _saveHint,
                   style: TextStyle(
-                    color: _saveHint == 'Saved' ? const Color(0xFF10B981) : Colors.white38,
-                    fontSize: 11,
+                    color: _saveHint == 'Saved' ? AppTheme.success : AppTheme.textMuted,
+                    fontSize: 10,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-            ),
-        ],
-      );
-    }
-
-    return Row(
-      children: [
-        Expanded(child: tabBar),
-        if (_saveHint.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Text(
-              _saveHint,
-              style: TextStyle(
-                color: _saveHint == 'Saved' ? const Color(0xFF10B981) : Colors.white38,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-      ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -1014,10 +960,11 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           );
         }
         return SingleChildScrollView(
-          padding: EdgeInsets.only(bottom: Responsive.pagePadding(context)),
+          padding: EdgeInsets.only(bottom: Responsive.pagePadding(context) + 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (!wide) _buildMobileQuickProps(t),
               _buildLeftColumn(scrollable: false),
               _buildPropertiesSidebar(t, collapsible: true),
             ],
@@ -1029,17 +976,18 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   Widget _buildLeftColumn({bool scrollable = true}) {
     final pad = Responsive.pagePadding(context);
+    final gap = Responsive.isMobile(context) ? 16.0 : 22.0;
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _sectionHeader('DESCRIPTION', Icons.notes_rounded),
         const SizedBox(height: 8),
         _descriptionEditor(),
-        const SizedBox(height: 22),
+        SizedBox(height: gap),
         _sectionHeader('ATTACHMENTS', Icons.attach_file_rounded, trailing: _attachmentActions()),
         const SizedBox(height: 8),
         _attachmentsPanel(),
-        const SizedBox(height: 22),
+        SizedBox(height: gap),
         _sectionHeader('SUBTASKS', Icons.checklist_rounded, trailing: _subtaskAddButton()),
         const SizedBox(height: 8),
         _subtasksPanel(),
@@ -1057,39 +1005,42 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   Widget _sectionHeader(String title, IconData icon, {Widget? trailing}) {
     final compact = Responsive.isMobile(context);
+    final label = Text(
+      title[0].toUpperCase() + title.substring(1).toLowerCase(),
+      style: TextStyle(
+        color: AppTheme.textMuted.withValues(alpha: 0.95),
+        fontSize: compact ? 12 : 11,
+        fontWeight: FontWeight.w600,
+      ),
+    );
     if (compact && trailing != null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(icon, size: 14, color: Colors.white38),
+              Icon(icon, size: 14, color: AppTheme.accent),
               const SizedBox(width: 6),
-              Text(
-                title,
-                style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1),
-              ),
+              label,
             ],
           ),
-          const SizedBox(height: 6),
-          Align(alignment: Alignment.centerLeft, child: trailing),
+          const SizedBox(height: 8),
+          trailing,
         ],
       );
     }
     return Row(
       children: [
-        Icon(icon, size: 14, color: Colors.white38),
+        Icon(icon, size: 14, color: AppTheme.accent),
         const SizedBox(width: 6),
-        Text(
-          title,
-          style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1),
-        ),
+        label,
         if (trailing != null) ...[const Spacer(), trailing],
       ],
     );
   }
 
   Widget _descriptionEditor() {
+    final compact = Responsive.isMobile(context);
     return Container(
       decoration: _cardDeco(),
       child: Column(
@@ -1100,32 +1051,38 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
             decoration: BoxDecoration(
               border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06))),
             ),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  if (!_descPreview) ...[
-                    _toolBtn(Icons.format_bold, () => _wrapSelection('**', '**')),
-                    _toolBtn(Icons.format_italic, () => _wrapSelection('_', '_')),
-                    _toolBtn(Icons.format_list_bulleted, () => _wrapSelection('\n- ', '')),
-                    _toolBtn(Icons.format_list_numbered, () => _wrapSelection('\n1. ', '')),
-                    _toolBtn(Icons.link, () => _wrapSelection('[', '](url)')),
-                    _toolBtn(Icons.code, () => _wrapSelection('`', '`')),
-                    _toolBtn(Icons.format_quote, () => _wrapSelection('\n> ', '')),
-                    _toolBtn(Icons.undo, _descUndoAction),
-                    _toolBtn(Icons.redo, _descRedoAction),
-                  ],
-                  const SizedBox(width: 8),
-                  _descModeBtn('Edit', !_descPreview, () => setState(() => _descPreview = false)),
-                  const SizedBox(width: 4),
-                  _descModeBtn('Preview', _descPreview, () => setState(() => _descPreview = true)),
-                ],
-              ),
+            child: Row(
+              children: [
+                if (!compact && !_descPreview) ...[
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _toolBtn(Icons.format_bold, () => _wrapSelection('**', '**')),
+                          _toolBtn(Icons.format_italic, () => _wrapSelection('_', '_')),
+                          _toolBtn(Icons.format_list_bulleted, () => _wrapSelection('\n- ', '')),
+                          _toolBtn(Icons.format_list_numbered, () => _wrapSelection('\n1. ', '')),
+                          _toolBtn(Icons.link, () => _wrapSelection('[', '](url)')),
+                          _toolBtn(Icons.code, () => _wrapSelection('`', '`')),
+                          _toolBtn(Icons.format_quote, () => _wrapSelection('\n> ', '')),
+                          _toolBtn(Icons.undo, _descUndoAction),
+                          _toolBtn(Icons.redo, _descRedoAction),
+                        ],
+                      ),
+                    ),
+                  ),
+                ] else
+                  const Spacer(),
+                _descModeBtn('Edit', !_descPreview, () => setState(() => _descPreview = false)),
+                const SizedBox(width: 4),
+                _descModeBtn('Preview', _descPreview, () => setState(() => _descPreview = true)),
+              ],
             ),
           ),
           if (_descPreview)
             Container(
-              constraints: const BoxConstraints(minHeight: 160),
+              constraints: BoxConstraints(minHeight: compact ? 120 : 160),
               padding: const EdgeInsets.all(14),
               child: _descCtrl.text.trim().isEmpty
                   ? Text(
@@ -1133,7 +1090,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
                       style: TextStyle(color: Colors.white.withValues(alpha: 0.25), fontSize: 13),
                     )
                   : MarkdownBody(
-                      data: _descCtrl.text,
+                      data: descriptionPreviewMarkdown(_descCtrl.text),
                       selectable: true,
                       styleSheet: MarkdownStyleSheet(
                         p: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 13, height: 1.5),
@@ -1165,11 +1122,11 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
             TextField(
               controller: _descCtrl,
               maxLines: 10,
-              minLines: 6,
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 13, height: 1.5),
+              minLines: compact ? 4 : 6,
+              style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 13, height: 1.5),
               decoration: InputDecoration(
                 hintText: 'Add a description… (Markdown supported)',
-                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
+                hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.6)),
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.all(14),
               ),
@@ -1181,7 +1138,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   Widget _descModeBtn(String label, bool active, VoidCallback onTap) {
     return Material(
-      color: active ? AppTheme.featureVault.withValues(alpha: 0.25) : Colors.transparent,
+      color: active ? AppTheme.accent.withValues(alpha: 0.2) : Colors.transparent,
       borderRadius: BorderRadius.circular(6),
       child: InkWell(
         onTap: onTap,
@@ -1191,7 +1148,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           child: Text(
             label,
             style: TextStyle(
-              color: active ? AppTheme.featureVault : AppTheme.textMuted,
+              color: active ? AppTheme.accent : AppTheme.textMuted,
               fontSize: 11,
               fontWeight: FontWeight.w600,
             ),
@@ -1285,9 +1242,10 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   }
 
   Widget _attachmentsPanel() {
+    final compact = Responsive.isMobile(context);
     final panel = AnimatedContainer(
       duration: const Duration(milliseconds: 150),
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(compact ? 12 : 20),
       decoration: _cardDeco().copyWith(
         border: Border.all(
           color: _attachmentsDragOver ? AppTheme.primary : Colors.white.withValues(alpha: 0.08),
@@ -1471,7 +1429,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
               children: [
                 Checkbox(
                   value: done,
-                  activeColor: AppTheme.featureVault,
+                  activeColor: AppTheme.accent,
                   onChanged: (_) => _toggleSubtask(st),
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
@@ -1481,7 +1439,11 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
                     children: [
                       Text(
                         st['summary']?.toString() ?? '',
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                          color: AppTheme.textPrimary.withValues(alpha: 0.95),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                       const SizedBox(height: 6),
                       Wrap(
@@ -1525,6 +1487,26 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     );
   }
 
+  Widget _buildMobileQuickProps(Map<String, dynamic> t) {
+    final pad = Responsive.pagePadding(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(pad, 8, pad, 4),
+      child: Container(
+        decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
+        padding: const EdgeInsets.all(12),
+        child: TaskStatusDropdown(
+          key: ValueKey<String>('qs_${t['id']}_$_status'),
+          taskId: widget.taskId,
+          task: t,
+          projectId: widget.projectId,
+          apiService: widget.apiService,
+          onUpdated: _load,
+          compact: true,
+        ),
+      ),
+    );
+  }
+
   Widget _buildPropertiesSidebar(Map<String, dynamic> t, {bool collapsible = false}) {
     final people = _assigneeIds.map((id) {
       final emp = _employees.cast<Map?>().firstWhere(
@@ -1552,16 +1534,17 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
             icon: const Icon(Icons.add, size: 14),
             label: const Text('Add / Change', style: TextStyle(fontSize: 12)),
             style: OutlinedButton.styleFrom(
-              foregroundColor: AppTheme.featureVault,
-              side: BorderSide(color: AppTheme.featureVault.withValues(alpha: 0.4)),
+              foregroundColor: AppTheme.accent,
+              side: BorderSide(color: AppTheme.accent.withValues(alpha: 0.4)),
               padding: const EdgeInsets.symmetric(vertical: 10),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
           ),
         const SizedBox(height: 16),
         if (stackOnNarrow) ...[
-          _propDropdown('Status', _status, _statusOptions, (v) => _setField(() => _status = v, {'status': v})),
-          const SizedBox(height: 12),
+          if (!collapsible)
+            _propDropdown('Status', _status, _statusOptions, (v) => _setField(() => _status = v, {'status': v})),
+          if (!collapsible) const SizedBox(height: 12),
           _propDropdown('Priority', _priority, _priorityOptions, (v) => _setField(() => _priority = v, {'priority': v})),
           const SizedBox(height: 12),
           _propDropdown('Type', _taskType, _typeOptions, (v) => _setField(() => _taskType = v, {'task_type': v})),
@@ -1610,13 +1593,13 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
             value: _progressPct(t) / 100,
             minHeight: 6,
             backgroundColor: Colors.black.withValues(alpha: 0.4),
-            color: AppTheme.featureVault,
+            color: AppTheme.accent,
           ),
         ),
         const SizedBox(height: 4),
         Text(
           _progressLabel(t),
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 10),
+          style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 10),
         ),
         const SizedBox(height: 16),
         CheckboxListTile(
@@ -1625,18 +1608,18 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
             () => _isAttachmentRequired = v ?? false,
             {'is_attachment_required': v ?? false},
           ),
-          activeColor: AppTheme.featureVault,
+          activeColor: AppTheme.accent,
           checkColor: Colors.white,
           dense: true,
           contentPadding: EdgeInsets.zero,
           controlAffinity: ListTileControlAffinity.leading,
           title: Text(
             'Attachment required',
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 12),
+            style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.85), fontSize: 12),
           ),
           subtitle: Text(
             _attachments.isEmpty ? 'No files attached yet' : '${_attachments.length} file(s)',
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 10),
+            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 10),
           ),
         ),
         const SizedBox(height: 16),
@@ -1668,27 +1651,26 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           child: Theme(
             data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
             child: ExpansionTile(
-              initiallyExpanded: true,
-              iconColor: Colors.white54,
-              collapsedIconColor: Colors.white38,
+              initiallyExpanded: false,
+              iconColor: AppTheme.textMuted,
+              collapsedIconColor: AppTheme.textMuted,
               title: Row(
                 children: [
-                  Icon(Icons.settings_outlined, size: 16, color: Colors.white.withValues(alpha: 0.45)),
+                  const Icon(Icons.tune_rounded, size: 16, color: AppTheme.accent),
                   const SizedBox(width: 8),
                   Text(
-                    'PROPERTIES',
+                    'More properties',
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.7),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.5,
+                      color: AppTheme.textPrimary.withValues(alpha: 0.9),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ],
               ),
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                   child: fields,
                 ),
               ],
@@ -1699,7 +1681,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     }
 
     return Container(
-      color: AppTheme.surface2.withValues(alpha: 0.72),
+      decoration: _cardDeco(),
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -1707,15 +1689,14 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           children: [
             Row(
               children: [
-                Icon(Icons.settings_outlined, size: 14, color: Colors.white.withValues(alpha: 0.4)),
+                const Icon(Icons.tune_rounded, size: 14, color: AppTheme.accent),
                 const SizedBox(width: 6),
                 Text(
-                  'PROPERTIES',
+                  'Properties',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.4),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1,
+                    color: AppTheme.textMuted.withValues(alpha: 0.95),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -1735,7 +1716,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
-      decoration: AppTheme.taskFieldDecoration(borderRadius: 10),
+      decoration: _fieldDeco(),
       child: Row(
         children: [
           CircleAvatar(
@@ -1770,8 +1751,12 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Text(
-        text.toUpperCase(),
-        style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 10, fontWeight: FontWeight.w600),
+        text,
+        style: TextStyle(
+          color: AppTheme.textMuted.withValues(alpha: 0.9),
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -1806,11 +1791,11 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 10)),
+        Text(label, style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 10)),
         const SizedBox(height: 4),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: AppTheme.taskFieldDecoration(borderRadius: 10),
+          decoration: _fieldDeco(),
           child: DropdownButtonHideUnderline(
             child: DropdownButton<String>(
               value: current,
@@ -1849,14 +1834,14 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 10)),
+        Text(label, style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 10)),
         const SizedBox(height: 4),
         InkWell(
           onTap: () => _pickDate(field),
           borderRadius: BorderRadius.circular(8),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-            decoration: AppTheme.taskFieldDecoration(borderRadius: 10),
+            decoration: _fieldDeco(),
             child: Row(
               children: [
                 const Icon(Icons.calendar_today, size: 14, color: Colors.white38),
@@ -1887,7 +1872,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 10)),
+        Text(label, style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 10)),
         const SizedBox(height: 4),
         TextField(
           controller: ctrl,
@@ -1916,11 +1901,16 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   }
 
   Widget _buildActivityTab() {
+    final pad = Responsive.pagePadding(context);
     if (widget.projectId <= 0) {
       return Center(
-        child: Text(
-          'Activity log requires project context',
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 13),
+        child: Padding(
+          padding: EdgeInsets.all(pad),
+          child: Text(
+            'Activity log requires project context',
+            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13),
+            textAlign: TextAlign.center,
+          ),
         ),
       );
     }
@@ -1929,16 +1919,20 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     }
     if (_activity.isEmpty) {
       return Center(
-        child: Text(
-          _activityLoaded ? 'No activity yet' : 'Switch to this tab to load activity',
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 13),
+        child: Padding(
+          padding: EdgeInsets.all(pad),
+          child: Text(
+            _activityLoaded ? 'No activity yet' : 'Switch to this tab to load activity',
+            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13),
+            textAlign: TextAlign.center,
+          ),
         ),
       );
     }
     return ListView.separated(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.fromLTRB(pad, 12, pad, pad + 8),
       itemCount: _activity.length,
-      separatorBuilder: (_, __) => Divider(color: Colors.white.withValues(alpha: 0.06), height: 1),
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, i) {
         final a = _activity[i] as Map? ?? {};
         final user = a['user_name']?.toString() ?? 'Someone';
@@ -1947,15 +1941,43 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
         String when = ts;
         final dt = DateTime.tryParse(ts);
         if (dt != null) when = DateFormat('d MMM yyyy, HH:mm').format(dt.toLocal());
-        return ListTile(
-          contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-          leading: CircleAvatar(
-            radius: 16,
-            backgroundColor: const Color(0xFF334155),
-            child: Text(user.isNotEmpty ? user[0].toUpperCase() : '?', style: const TextStyle(fontSize: 11, color: Colors.white)),
+        return Container(
+          decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: const Color(0xFF334155),
+                child: Text(
+                  user.isNotEmpty ? user[0].toUpperCase() : '?',
+                  style: const TextStyle(fontSize: 11, color: Colors.white),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      summary,
+                      style: TextStyle(
+                        color: AppTheme.textPrimary.withValues(alpha: 0.95),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$user · $when',
+                      style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          title: Text(summary, style: const TextStyle(color: Colors.white, fontSize: 13)),
-          subtitle: Text('$user · $when', style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 11)),
         );
       },
     );
@@ -1964,19 +1986,23 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   Widget _buildFooter() {
     final compact = Responsive.isMobile(context);
     return Container(
-      padding: EdgeInsets.fromLTRB(compact ? 12 : 20, 12, compact ? 12 : 20, 14),
-      decoration: BoxDecoration(
-        color: AppTheme.surface2.withValues(alpha: 0.92),
-        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
+      decoration: AppTheme.loginShell().copyWith(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
       ),
-      child: TaskDetailFooterActions(
-        dirty: _dirty,
-        saving: _saving,
-        isCompleted: _task != null && taskIsCompleted(_task),
-        saveHint: _saveHint,
-        onDiscard: _dirty ? _discard : null,
-        onSave: _saveAll,
-        onToggleComplete: _toggleComplete,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(compact ? 12 : 20, 10, compact ? 12 : 20, compact ? 6 : 10),
+          child: TaskDetailFooterActions(
+            dirty: _dirty,
+            saving: _saving,
+            isCompleted: _task != null && taskIsCompleted(_task),
+            saveHint: _saveHint,
+            onDiscard: _dirty ? _discard : null,
+            onSave: _saveAll,
+            onToggleComplete: _toggleComplete,
+          ),
+        ),
       ),
     );
   }
@@ -1995,7 +2021,9 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     );
   }
 
-  BoxDecoration _cardDeco() => AppTheme.taskCardDecoration(borderRadius: 12);
+  BoxDecoration _cardDeco() => AppTheme.loginInsetDecoration(borderRadius: 14);
+
+  BoxDecoration _fieldDeco() => AppTheme.loginInsetDecoration(borderRadius: 10);
 }
 
 class _SubtaskEditDialog extends StatefulWidget {

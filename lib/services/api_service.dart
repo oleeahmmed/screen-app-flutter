@@ -6,7 +6,6 @@ import 'package:http_parser/http_parser.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
-import 'attendance_cache.dart';
 import 'user_data_service.dart';
 
 class ApiService {
@@ -70,113 +69,78 @@ class ApiService {
     return t.length <= max ? t : '${t.substring(0, max)}…';
   }
 
-  /// POST check-in / check-out with JSON body, empty body fallback, and attendance verify.
-  Future<Map<String, dynamic>> _postAttendanceAction({
-    required Uri uri,
-    required String label,
-    required bool Function(Map<String, dynamic>? current) verifySuccess,
-  }) async {
-    await ensureAuth();
-
-    Future<http.Response> sendJson() => http
-        .post(uri, headers: _jsonPostHeaders(), body: '{}')
-        .timeout(const Duration(seconds: 15));
-    Future<http.Response> sendEmpty() => http
-        .post(uri, headers: _authHeaderOnly())
-        .timeout(const Duration(seconds: 15));
-
-    http.Response? lastResponse;
-    for (final send in [sendJson, sendEmpty]) {
-      try {
-        var response = await send();
-        if (response.statusCode == 401 && await refreshAccessToken()) {
-          response = await send();
-        }
-        lastResponse = response;
-        final rawBody = response.body;
-
-        if (_looksLikeHtml(rawBody)) {
-          continue;
-        }
-
-        dynamic raw;
-        try {
-          raw = _safeJsonDecode(rawBody);
-        } catch (_) {
-          if (response.statusCode == 200 || response.statusCode == 201) {
-            final verified = await _verifyAttendanceAfterAction(verifySuccess);
-            if (verified['success'] == true) return verified;
-          }
-          continue;
-        }
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          if (raw is Map) {
-            final msg = raw['message']?.toString().toLowerCase() ?? '';
-            if (msg.contains('already checked in')) {
-              return {'success': true, 'data': raw};
-            }
-          }
-          return {'success': true, 'data': raw};
-        }
-
-        if (raw is Map) {
-          final err = raw['message'] ?? raw['error'] ?? raw['detail'];
-          if (err != null) {
-            final verified = await _verifyAttendanceAfterAction(verifySuccess);
-            if (verified['success'] == true) {
-              final current = await getCurrentAttendance();
-              if (current['success'] == true) return current;
-            }
-            return {'success': false, 'error': err.toString()};
-          }
-        }
-
-        if (response.statusCode == 401) {
-          return {'success': false, 'error': 'Session expired — please log in again'};
-        }
-        if (response.statusCode == 403) {
-          return {'success': false, 'error': 'Access denied — subscription may have expired'};
-        }
-      } catch (_) {
-        continue;
+  /// POST check-in / check-out — response body is applied directly in Flutter.
+  Future<Map<String, dynamic>> checkIn() async {
+    try {
+      await ensureAuth();
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.checkInUrl),
+        body: '{}',
+      );
+      if (response.statusCode == 401 && await refreshAccessToken()) {
+        return checkIn();
       }
-    }
-
-    final verified = await _verifyAttendanceAfterAction(verifySuccess);
-    if (verified['success'] == true) return verified;
-
-    if (lastResponse != null) {
-      final code = lastResponse!.statusCode;
-      final preview = _responsePreview(lastResponse!.body);
-      if (_looksLikeHtml(lastResponse!.body)) {
-        return {
-          'success': false,
-          'error': '$label failed — server returned a web page (HTTP $code). Log in again.',
-        };
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        return await _attendanceActionError(response, 'Check-in');
       }
-      return {
-        'success': false,
-        'error': '$label failed (HTTP $code): $preview',
-      };
+      final raw = _safeJsonDecode(response.body);
+      if (raw is! Map) {
+        return {'success': false, 'error': 'Invalid check-in response'};
+      }
+      return {'success': true, 'data': _normalizeClockPayload(raw)};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
     }
-
-    return {'success': false, 'error': '$label failed — network error. Check connection and try again.'};
   }
 
-  Future<Map<String, dynamic>> _verifyAttendanceAfterAction(
-    bool Function(Map<String, dynamic>? current) verifySuccess,
-  ) async {
-    final result = await getCurrentAttendance();
-    if (result['success'] != true) {
-      return {'success': false, 'error': 'Could not verify attendance status'};
+  Future<Map<String, dynamic>> checkOut() async {
+    try {
+      await ensureAuth();
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.checkOutUrl),
+        body: '{}',
+      );
+      if (response.statusCode == 401 && await refreshAccessToken()) {
+        return checkOut();
+      }
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        return await _attendanceActionError(response, 'Check-out');
+      }
+      final raw = _safeJsonDecode(response.body);
+      if (raw is! Map) {
+        return {'success': false, 'error': 'Invalid check-out response'};
+      }
+      return {'success': true, 'data': _normalizeClockPayload(raw)};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
     }
-    final data = result['data'] as Map<String, dynamic>? ?? {};
-    final current = _attendanceMapFrom(data['current_attendance']);
-    if (verifySuccess(current)) {
-      return {'success': true, 'data': {'verified': true, 'current_attendance': current}};
+  }
+
+  /// GET /attendance/current/ — used once on app open for initial status.
+  Future<Map<String, dynamic>> getClockStatus() async {
+    return getCurrentAttendance();
+  }
+
+  Map<String, dynamic> _normalizeClockPayload(Map raw) {
+    final data = Map<String, dynamic>.from(raw);
+    for (final key in [
+      'today_work_duration',
+      'today_break_duration',
+      'today_gross_work_duration',
+      'schedule',
+      'effective_schedule',
+      'active_break',
+    ]) {
+      final v = data[key];
+      if (v is Map) data[key] = Map<String, dynamic>.from(v);
     }
-    return {'success': false, 'error': 'Attendance state did not update'};
+    return data;
+  }
+
+  Map<String, dynamic>? _attendanceMapFrom(dynamic raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return null;
   }
 
   dynamic _decodeJsonBody(String body, {required String context}) {
@@ -512,94 +476,21 @@ class ApiService {
     return false;
   }
 
-  Map<String, dynamic> _normalizeAttendancePayload(Map raw) {
-    final data = Map<String, dynamic>.from(raw);
-    for (final key in [
-      'current_attendance',
-      'today_work_duration',
-      'today_break_duration',
-      'today_gross_work_duration',
-      'effective_schedule',
-      'active_break',
-    ]) {
-      final v = data[key];
-      if (v is Map) data[key] = Map<String, dynamic>.from(v);
-    }
-    final sessions = data['sessions_today'];
-    if (sessions is List) {
-      data['sessions_today'] = sessions
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-    }
-    return data;
-  }
-
-  Map<String, dynamic>? _attendanceMapFrom(dynamic raw) {
-    if (raw is Map<String, dynamic>) return raw;
-    if (raw is Map) return Map<String, dynamic>.from(raw);
-    return null;
-  }
-
-  Future<Map<String, dynamic>> checkIn() async {
-    final current = await getCurrentAttendance();
-    if (current['success'] == true) {
-      final att = _attendanceMapFrom(current['data']?['current_attendance']);
-      if (attendanceIsOpen(att)) {
-        return {
-          'success': true,
-          'data': current['data'],
-        };
+  Future<Map<String, dynamic>> _attendanceActionError(
+    http.Response response,
+    String label,
+  ) async {
+    var err = '$label failed (${response.statusCode})';
+    try {
+      final d = _safeJsonDecode(response.body);
+      if (d is Map) {
+        err = d['error']?.toString() ??
+            d['message']?.toString() ??
+            d['detail']?.toString() ??
+            err;
       }
-    }
-    final result = await _postAttendanceAction(
-      uri: Uri.parse(AppConfig.checkInUrl),
-      label: 'Check-in',
-      verifySuccess: attendanceIsOpen,
-    );
-    if (result['success'] != true) return result;
-
-    final raw = result['data'];
-    if (raw is Map && raw['today_work_duration'] != null) {
-      final data = _normalizeAttendancePayload(Map<String, dynamic>.from(raw));
-      await AttendanceCache.save(data);
-      return {'success': true, 'data': data};
-    }
-    return getCurrentAttendance();
-  }
-
-  Future<Map<String, dynamic>> checkOut() async {
-    final result = await _postAttendanceAction(
-      uri: Uri.parse(AppConfig.checkOutUrl),
-      label: 'Check-out',
-      verifySuccess: (current) => !attendanceIsOpen(current),
-    );
-
-    Future<Map<String, dynamic>> withSummary(Map<String, dynamic> ok) async {
-      final raw = ok['data'];
-      if (raw is Map && raw['today_work_duration'] != null) {
-        final data = _normalizeAttendancePayload(Map<String, dynamic>.from(raw));
-        await AttendanceCache.save(data);
-        return {'success': true, 'data': data};
-      }
-      final current = await getCurrentAttendance();
-      if (current['success'] == true) return current;
-      return ok;
-    }
-
-    if (result['success'] == true) {
-      return withSummary(result);
-    }
-
-    // Server may have closed the session even when HTTP response was an error.
-    final current = await getCurrentAttendance();
-    if (current['success'] == true) {
-      final data = current['data'] as Map<String, dynamic>? ?? {};
-      if (data['is_clocked_in'] != true) {
-        return withSummary(current);
-      }
-    }
-    return result;
+    } catch (_) {}
+    return {'success': false, 'error': err};
   }
 
   Future<Map<String, dynamic>> _fetchTasksFromUrl(String url, String label) async {
@@ -2281,33 +2172,19 @@ class ApiService {
     };
   }
 
-  Future<Map<String, dynamic>> getCurrentAttendance({bool allowCache = true}) async {
+  Future<Map<String, dynamic>> getCurrentAttendance() async {
     try {
       await ensureAuth();
       final response = await _authorizedGet(Uri.parse(AppConfig.attendanceCurrentUrl));
       if (response.statusCode != 200) {
-        if (allowCache) {
-          final cached = await AttendanceCache.load();
-          if (cached != null) {
-            return {'success': true, 'data': cached, 'from_cache': true};
-          }
-        }
         return {'success': false, 'error': 'Failed to load attendance (${response.statusCode})'};
       }
       final decoded = _safeJsonDecode(response.body);
       if (decoded is! Map) {
         return {'success': false, 'error': 'Unexpected attendance response format'};
       }
-      final data = _normalizeAttendancePayload(decoded);
-      await AttendanceCache.save(data);
-      return {'success': true, 'data': data};
+      return {'success': true, 'data': _normalizeClockPayload(decoded)};
     } catch (e) {
-      if (allowCache) {
-        final cached = await AttendanceCache.load();
-        if (cached != null) {
-          return {'success': true, 'data': cached, 'from_cache': true};
-        }
-      }
       return {'success': false, 'error': '$e'};
     }
   }
@@ -2751,6 +2628,24 @@ class ApiService {
         Uri.parse(AppConfig.breaksStartUrl),
         body: body,
       );
+      if (response.statusCode == 401 && await refreshAccessToken()) {
+        return startBreak(expectedBack: expectedBack);
+      }
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final raw = _safeJsonDecode(response.body);
+        if (raw is Map) {
+          final data = _normalizeClockPayload(raw);
+          return {'success': true, 'data': data};
+        }
+      }
+      if (response.statusCode == 400) {
+        final fail = await _parseBreakPost(response, failLabel: 'Could not start break');
+        final err = fail['error']?.toString().toLowerCase() ?? '';
+        if (err.contains('already on')) {
+          return getCurrentAttendance();
+        }
+        return fail;
+      }
       return _parseBreakPost(response, failLabel: 'Could not start break');
     } catch (e) {
       return {'success': false, 'error': '$e'};
@@ -2760,7 +2655,28 @@ class ApiService {
   Future<Map<String, dynamic>> endBreak() async {
     try {
       await ensureAuth();
-      final response = await _authorizedPost(Uri.parse(AppConfig.breaksBackUrl), body: '{}');
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.breaksBackUrl),
+        body: '{}',
+      );
+      if (response.statusCode == 401 && await refreshAccessToken()) {
+        return endBreak();
+      }
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final raw = _safeJsonDecode(response.body);
+        if (raw is Map) {
+          final data = _normalizeClockPayload(raw);
+          return {'success': true, 'data': data};
+        }
+      }
+      if (response.statusCode == 400) {
+        final fail = await _parseBreakPost(response, failLabel: 'Could not end break');
+        final err = fail['error']?.toString().toLowerCase() ?? '';
+        if (err.contains('no active break')) {
+          return getCurrentAttendance();
+        }
+        return fail;
+      }
       return _parseBreakPost(response, failLabel: 'Could not end break');
     } catch (e) {
       return {'success': false, 'error': '$e'};

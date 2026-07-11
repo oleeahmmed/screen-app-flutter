@@ -5,7 +5,11 @@ import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../services/screenshot_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
+
+/// Called after break API succeeds — parent should sync attendance from server.
+typedef BreakActionCallback = Future<void> Function();
 
 /// Called when break starts or ends. [breakStart] is set when entering break.
 typedef BreakChangedCallback = void Function(bool onBreak, {DateTime? breakStart});
@@ -157,10 +161,20 @@ class _BreakPanelState extends State<BreakPanel> {
       });
       _notifyBreakChanged(true, breakData: data['break'] as Map<String, dynamic>?);
       await _fetchStatus();
-      _showSnack('Break started', Colors.amber.shade700);
+      _showBreakToast(
+        title: 'Break Started',
+        message: 'Break started',
+        type: AppToastType.warning,
+        icon: Icons.local_cafe_rounded,
+      );
     } else {
       setState(() => _busy = false);
-      _showSnack(r['error']?.toString() ?? 'Could not start break', Colors.red);
+      _showBreakToast(
+        title: 'Break failed',
+        message: r['error']?.toString() ?? 'Could not start break',
+        type: AppToastType.error,
+        icon: Icons.local_cafe_rounded,
+      );
     }
   }
 
@@ -172,7 +186,11 @@ class _BreakPanelState extends State<BreakPanel> {
   Future<void> _startBreakAt(DateTime expectedBack) async {
     if (_busy || !widget.isClockedIn) return;
     if (!expectedBack.isAfter(DateTime.now())) {
-      _showSnack('Return time must be in the future', Colors.red);
+      _showBreakToast(
+        title: 'Invalid time',
+        message: 'Return time must be in the future',
+        type: AppToastType.error,
+      );
       return;
     }
     setState(() => _busy = true);
@@ -191,10 +209,20 @@ class _BreakPanelState extends State<BreakPanel> {
       });
       _notifyBreakChanged(true, breakData: data['break'] as Map<String, dynamic>?);
       await _fetchStatus();
-      _showSnack('Break started — back by ${DateFormat('HH:mm').format(expectedBack)}', Colors.amber.shade700);
+      _showBreakToast(
+        title: 'Break Started',
+        message: 'Back by ${DateFormat('HH:mm').format(expectedBack)}',
+        type: AppToastType.warning,
+        icon: Icons.local_cafe_rounded,
+      );
     } else {
       setState(() => _busy = false);
-      _showSnack(r['error']?.toString() ?? 'Could not start break', Colors.red);
+      _showBreakToast(
+        title: 'Break failed',
+        message: r['error']?.toString() ?? 'Could not start break',
+        type: AppToastType.error,
+        icon: Icons.local_cafe_rounded,
+      );
     }
   }
 
@@ -271,16 +299,37 @@ class _BreakPanelState extends State<BreakPanel> {
       });
       _notifyBreakChanged(false);
       await _fetchStatus();
-      _showSnack('Welcome back!', const Color(0xFF22C55E));
+      _showBreakToast(
+        title: 'Back to Work',
+        message: 'Welcome back!',
+        type: AppToastType.success,
+        icon: Icons.work_rounded,
+      );
     } else {
       setState(() => _busy = false);
-      _showSnack(r['error']?.toString() ?? 'Could not end break', Colors.red);
+      _showBreakToast(
+        title: 'Could not end break',
+        message: r['error']?.toString() ?? 'Please try again',
+        type: AppToastType.error,
+        icon: Icons.work_rounded,
+      );
     }
   }
 
-  void _showSnack(String msg, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: color, duration: const Duration(seconds: 2)),
+  void _showBreakToast({
+    required String title,
+    required String message,
+    required AppToastType type,
+    IconData? icon,
+  }) {
+    AppToast.show(
+      context,
+      title: title,
+      message: message,
+      type: type,
+      icon: icon,
+      placement: AppToastPlacement.top,
+      duration: const Duration(seconds: 3),
     );
   }
 
@@ -483,9 +532,9 @@ class _BreakPanelState extends State<BreakPanel> {
                     context: context,
                     apiService: widget.apiService,
                     screenshotService: widget.screenshotService,
-                    onStarted: () {
+                    onStarted: () async {
                       _notifyBreakChanged(true);
-                      _fetchStatus();
+                      await _fetchStatus();
                     },
                   ),
           style: FilledButton.styleFrom(
@@ -590,7 +639,7 @@ Future<void> showBreakStartSheet({
   required BuildContext context,
   required ApiService apiService,
   ScreenshotService? screenshotService,
-  VoidCallback? onStarted,
+  BreakActionCallback? onStarted,
 }) async {
   const presets = [5, 10, 15, 30, 60];
   await showModalBottomSheet<void>(
@@ -652,16 +701,24 @@ Future<void> showBreakStartSheet({
                             if (screenshotService?.isRunning == true) {
                               await screenshotService?.stopCapture();
                             }
-                            onStarted?.call();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Break started — back by ${DateFormat('HH:mm').format(expected)}'),
-                                backgroundColor: AppTheme.warning,
-                              ),
+                            await onStarted?.call();
+                            AppToast.show(
+                              context,
+                              title: 'Break Started',
+                              message:
+                                  'Back by ${DateFormat('HH:mm').format(expected)}',
+                              type: AppToastType.warning,
+                              icon: Icons.local_cafe_rounded,
+                              placement: AppToastPlacement.top,
                             );
                           } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text(r['error']?.toString() ?? 'Could not start break')),
+                            AppToast.show(
+                              context,
+                              title: 'Break failed',
+                              message: r['error']?.toString() ?? 'Could not start break',
+                              type: AppToastType.error,
+                              icon: Icons.local_cafe_rounded,
+                              placement: AppToastPlacement.top,
                             );
                           }
                         },
@@ -708,9 +765,14 @@ Future<void> showBreakStartSheet({
                           if (screenshotService?.isRunning == true) {
                             await screenshotService?.stopCapture();
                           }
-                          onStarted?.call();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Break started — back by ${DateFormat('HH:mm').format(picked)}')),
+                          await onStarted?.call();
+                          AppToast.show(
+                            context,
+                            title: 'Break Started',
+                            message: 'Back by ${DateFormat('HH:mm').format(picked)}',
+                            type: AppToastType.warning,
+                            icon: Icons.local_cafe_rounded,
+                            placement: AppToastPlacement.top,
                           );
                         }
                       },

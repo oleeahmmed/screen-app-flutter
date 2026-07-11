@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
@@ -161,6 +162,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenVault = _openVaultTool;
     AppNavigation.instance.onOpenProject = _openProjectTool;
     AppNavigation.instance.onOpenP2P = _openP2P;
+    AppNavigation.instance.onOpenSubmitReport = _openSubmitReport;
     _notificationService.onUnreadCountChanged = _onUnreadCountChanged;
     _initializeApp();
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
@@ -446,6 +448,30 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _openSubmitReport() async {
+    if (!mounted || !_isLoggedIn) return;
+    final reportsR = await _apiService.getClosingReports();
+    Map<String, dynamic>? todayReport;
+    if (reportsR['success'] == true) {
+      final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      for (final item in reportsR['data'] as List? ?? []) {
+        if (item is! Map) continue;
+        final m = Map<String, dynamic>.from(item);
+        final d = m['report_date']?.toString();
+        if (d != null && d.startsWith(todayStr)) {
+          todayReport = m;
+          break;
+        }
+      }
+    }
+    if (!mounted) return;
+    await showClosingReportDialog(
+      context: context,
+      apiService: _apiService,
+      existingReport: todayReport,
+    );
+  }
+
   Future<void> _openP2P() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -609,6 +635,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenVault = null;
     AppNavigation.instance.onOpenProject = null;
     AppNavigation.instance.onOpenP2P = null;
+    AppNavigation.instance.onOpenSubmitReport = null;
     AppNavigation.instance.onLogout = null;
     _stopNotifications();
     _notificationService.dispose();

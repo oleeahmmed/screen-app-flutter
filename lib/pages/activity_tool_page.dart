@@ -37,11 +37,10 @@ class _ActivityToolPageState extends State<ActivityToolPage> {
 
     var clockedIn = false;
     DateTime? checkIn;
-    final current = att['data']?['current_attendance'];
-    if (current is Map && (current['check_out'] == null ||
-        (current['check_out'] is String && (current['check_out'] as String).trim().isEmpty))) {
+    final data = att['data'] as Map<String, dynamic>? ?? {};
+    if (att['success'] == true && data['is_clocked_in'] == true) {
       clockedIn = true;
-      checkIn = DateTime.tryParse(current['check_in']?.toString() ?? '')?.toLocal();
+      checkIn = DateTime.tryParse(data['check_in_at']?.toString() ?? '')?.toLocal();
     }
 
     var onBreak = false;

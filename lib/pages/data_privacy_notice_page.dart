@@ -12,8 +12,7 @@ class DataPrivacyNoticePage extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Data & monitoring notice'),
         actions: const [
-          AppQuickMenuButton(iconColor: Colors.white70),
-          SizedBox(width: 4),
+          AppHeaderMenuActions(iconColor: Colors.white70),
         ],
       ),
       body: Container(

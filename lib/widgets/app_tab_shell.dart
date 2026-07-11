@@ -28,11 +28,9 @@ class AppTabShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: AppTheme.shellBackgroundDecoration,
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        extendBody: true,
+    final shell = Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBody: true,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -51,7 +49,18 @@ class AppTabShell extends StatelessWidget {
         onSelected: _onTab,
         unreadNotifs: unreadNotifs,
       ),
-      ),
+    );
+
+    if (selectedIndex == AppNavigation.tabHome) {
+      return AppTheme.loginDashboardBackground(
+        context: context,
+        child: shell,
+      );
+    }
+
+    return DecoratedBox(
+      decoration: AppTheme.shellBackgroundDecoration,
+      child: shell,
     );
   }
 }

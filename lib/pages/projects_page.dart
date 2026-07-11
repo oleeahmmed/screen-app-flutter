@@ -2318,7 +2318,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                   ],
                 ),
               ),
-              const AppQuickMenuButton(iconColor: AppTheme.textMuted, iconSize: 20),
+              const AppHeaderMenuActions(iconColor: AppTheme.textMuted, iconSize: 20),
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert, color: AppTheme.textMuted, size: 22),
                 color: AppTheme.surface2,

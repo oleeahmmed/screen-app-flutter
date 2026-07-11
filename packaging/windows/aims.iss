@@ -9,6 +9,7 @@
 #define MyAppPublisher "iBit Ltd"
 #define MyAppExeName "aims.exe"
 #define MyAppURL "https://igenhr.com"
+#define SourceReleaseDir "..\..\build\windows\x64\runner\Release"
 
 [Setup]
 AppId={{B8E4F2A1-6C3D-4E5F-9A0B-1D2E3F4A5B6C}
@@ -69,17 +70,24 @@ begin
     FileExists(ExpandConstant('{sys}\MFReadWrite.dll'));
 end;
 
+function BundledMediaDllsInRelease: Boolean;
+begin
+  Result :=
+    FileExists(ExpandConstant('{#SourceReleaseDir}\mf.dll')) and
+    FileExists(ExpandConstant('{#SourceReleaseDir}\mfplat.dll')) and
+    FileExists(ExpandConstant('{#SourceReleaseDir}\MFReadWrite.dll'));
+end;
+
 function InitializeSetup: Boolean;
 begin
   Result := True;
-  if not MediaFoundationPresent then
-  begin
-    if MsgBox(
-      'Windows Media components (MF.dll) are not installed on this PC.' + #13#10#13#10 +
-      'AIMS needs these for voice, audio, and video.' + #13#10 +
-      'Setup will try to install them automatically (internet required).' + #13#10#13#10 +
-      'Continue?',
-      mbConfirmation, MB_YESNO) = IDNO then
-      Result := False;
-  end;
+  if MediaFoundationPresent or BundledMediaDllsInRelease then
+    Exit;
+  if MsgBox(
+    'System Media Foundation DLLs are not installed.' + #13#10#13#10 +
+    'AIMS will install bundled mf.dll, mfplat.dll, and MFReadWrite.dll with the app.' + #13#10 +
+    'Setup may also try to install Windows Media components if needed.' + #13#10#13#10 +
+    'Continue?',
+    mbConfirmation, MB_YESNO) = IDNO then
+    Result := False;
 end;

@@ -32,7 +32,9 @@ class AppTopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: AppTheme.surface.withValues(alpha: 0.72),
+        color: selectedIndex == AppNavigation.tabHome
+            ? AppTheme.surface2.withValues(alpha: 0.35)
+            : AppTheme.surface.withValues(alpha: 0.72),
         border: Border(
           bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
         ),
@@ -66,7 +68,7 @@ class AppTopBar extends StatelessWidget {
                   tooltip: 'Peer-to-peer file transfer',
                   icon: const Icon(Icons.swap_horiz_rounded, color: AppTheme.accent, size: 24),
                 ),
-              AppQuickMenuButton(onLogout: onLogout),
+              AppHeaderMenuActions(onLogout: onLogout),
             ],
           ),
         ),

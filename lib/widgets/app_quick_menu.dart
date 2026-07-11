@@ -4,28 +4,23 @@ import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
 
-/// Jump to any main app section from any screen.
-class AppQuickMenuButton extends StatelessWidget {
+/// Log out with confirmation — shown as an icon beside the quick menu.
+class AppLogoutButton extends StatelessWidget {
+  final VoidCallback? onLogout;
   final Color? iconColor;
   final double iconSize;
-  final VoidCallback? onLogout;
 
-  const AppQuickMenuButton({
+  const AppLogoutButton({
     super.key,
+    this.onLogout,
     this.iconColor,
     this.iconSize = 22,
-    this.onLogout,
   });
 
-  static final _destinations = [
-    (AppNavigation.tabHome, Icons.home_rounded, 'Home', 'Dashboard & clock'),
-    (AppNavigation.tabMyTasks, Icons.assignment_rounded, 'My Task', 'Assigned tasks'),
-    (AppNavigation.tabChat, Icons.chat_bubble_rounded, 'Chat', 'Messages'),
-    (AppNavigation.tabAlerts, Icons.notifications_rounded, 'Alerts', 'Notifications'),
-    (AppNavigation.tabProfile, Icons.person_rounded, 'Profile', 'Settings & account'),
-  ];
-
-  Future<void> _confirmLogout(BuildContext context) async {
+  static Future<void> confirmAndLogout(
+    BuildContext context, {
+    VoidCallback? onLogout,
+  }) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -47,28 +42,158 @@ class AppQuickMenuButton extends StatelessWidget {
     );
     if (ok == true) {
       if (onLogout != null) {
-        onLogout!();
+        onLogout();
       } else {
         await AppNavigation.instance.logout();
       }
     }
   }
 
-  List<Widget> _logoutTiles(BuildContext context, {required VoidCallback closeSheet}) {
-    return [
-      const Divider(color: Colors.white12, height: 20),
-      ListTile(
-        leading: const Icon(Icons.logout_rounded, color: AppTheme.danger),
-        title: const Text('Log out', style: TextStyle(color: AppTheme.danger, fontWeight: FontWeight.w600)),
-        subtitle: Text('Quick sign out', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        onTap: () {
-          closeSheet();
-          _confirmLogout(context);
-        },
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Log out',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => confirmAndLogout(context, onLogout: onLogout),
+          customBorder: const CircleBorder(),
+          child: Ink(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFEF4444), Color(0xFF991B1B)],
+              ),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.28),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.danger.withValues(alpha: 0.38),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Icon(
+              Icons.power_rounded,
+              color: Colors.white,
+              size: iconSize * 0.82,
+            ),
+          ),
+        ),
       ),
-    ];
+    );
   }
+}
+
+/// Submit daily report — opens closing report modal (dashboard glass style).
+class AppSubmitReportButton extends StatelessWidget {
+  const AppSubmitReportButton({super.key});
+
+  Future<void> _open() async {
+    await AppNavigation.instance.openSubmitReport();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 380;
+
+    return Tooltip(
+      message: 'Submit report',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _open,
+          borderRadius: BorderRadius.circular(20),
+          child: Ink(
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 8 : 10,
+              vertical: 6,
+            ),
+            decoration: AppTheme.loginInsetDecoration(borderRadius: 20),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.assignment_turned_in_rounded,
+                  size: 16,
+                  color: AppTheme.accent,
+                ),
+                if (!compact) ...[
+                  const SizedBox(width: 6),
+                  const Text(
+                    'Submit Report',
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Quick menu + logout icon (logout sits on the right).
+class AppHeaderMenuActions extends StatelessWidget {
+  final VoidCallback? onLogout;
+  final Color? iconColor;
+  final double iconSize;
+
+  const AppHeaderMenuActions({
+    super.key,
+    this.onLogout,
+    this.iconColor,
+    this.iconSize = 22,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const AppSubmitReportButton(),
+        const SizedBox(width: 6),
+        AppQuickMenuButton(iconColor: iconColor, iconSize: iconSize),
+        AppLogoutButton(
+          onLogout: onLogout,
+          iconColor: iconColor ?? AppTheme.danger,
+          iconSize: iconSize,
+        ),
+      ],
+    );
+  }
+}
+
+/// Jump to any main app section from any screen.
+class AppQuickMenuButton extends StatelessWidget {
+  final Color? iconColor;
+  final double iconSize;
+
+  const AppQuickMenuButton({
+    super.key,
+    this.iconColor,
+    this.iconSize = 22,
+  });
+
+  static final _destinations = [
+    (AppNavigation.tabHome, Icons.home_rounded, 'Home', 'Dashboard & clock'),
+    (AppNavigation.tabMyTasks, Icons.assignment_rounded, 'My Task', 'Assigned tasks'),
+    (AppNavigation.tabChat, Icons.chat_bubble_rounded, 'Chat', 'Messages'),
+    (AppNavigation.tabAlerts, Icons.notifications_rounded, 'Alerts', 'Notifications'),
+    (AppNavigation.tabProfile, Icons.person_rounded, 'Profile', 'Settings & account'),
+  ];
 
   void _go(BuildContext context, int index) {
     Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
@@ -125,26 +250,6 @@ class AppQuickMenuButton extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         ListTile(
-                          leading: const Icon(Icons.assignment_outlined, color: AppTheme.warning),
-                          title: const Text('Daily report', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
-                          subtitle: Text('Submit closing report', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            AppNavigation.instance.openDailyReport();
-                          },
-                        ),
-                        ListTile(
-                          leading: const Icon(Icons.timeline_rounded, color: Color(0xFF38BDF8)),
-                          title: const Text('Today\'s activity', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
-                          subtitle: Text('Clock-in & break log', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            AppNavigation.instance.openActivity();
-                          },
-                        ),
-                        ListTile(
                           leading: const Icon(Icons.lock_outline_rounded, color: Color(0xFFA78BFA)),
                           title: const Text('Vault', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
                           subtitle: Text('Project credentials', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
@@ -191,7 +296,6 @@ class AppQuickMenuButton extends StatelessWidget {
                             },
                           ),
                         ),
-                        ..._logoutTiles(context, closeSheet: () => Navigator.pop(ctx)),
                       ],
                     ),
                   ),
@@ -226,24 +330,6 @@ class AppQuickMenuButton extends StatelessWidget {
           enabled: false,
           height: 28,
           child: Text('Shortcuts', style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w600)),
-        ),
-        PopupMenuItem<int>(
-          value: -1,
-          onTap: () => AppNavigation.instance.openDailyReport(),
-          child: const Row(children: [
-            Icon(Icons.assignment_outlined, color: AppTheme.warning, size: 18),
-            SizedBox(width: 10),
-            Text('Daily report', style: TextStyle(color: AppTheme.textPrimary)),
-          ]),
-        ),
-        PopupMenuItem<int>(
-          value: -3,
-          onTap: () => AppNavigation.instance.openActivity(),
-          child: const Row(children: [
-            Icon(Icons.timeline_rounded, color: Color(0xFF38BDF8), size: 18),
-            SizedBox(width: 10),
-            Text('Today\'s activity', style: TextStyle(color: AppTheme.textPrimary)),
-          ]),
         ),
         PopupMenuItem<int>(
           value: -4,
@@ -282,16 +368,6 @@ class AppQuickMenuButton extends StatelessWidget {
               ),
             ),
           ),
-        const PopupMenuDivider(),
-        PopupMenuItem<int>(
-          value: -99,
-          onTap: () => _confirmLogout(context),
-          child: const Row(children: [
-            Icon(Icons.logout_rounded, color: AppTheme.danger, size: 18),
-            SizedBox(width: 10),
-            Text('Log out', style: TextStyle(color: AppTheme.danger)),
-          ]),
-        ),
       ],
     ).then((index) {
       if (index != null && index >= 0 && context.mounted) _go(context, index);

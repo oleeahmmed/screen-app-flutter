@@ -7,13 +7,21 @@ class TaskCompleteButton extends StatelessWidget {
   final bool isCompleted;
   final VoidCallback? onPressed;
   final bool compact;
+  final bool dense;
 
   const TaskCompleteButton({
     super.key,
     required this.isCompleted,
     this.onPressed,
     this.compact = false,
+    this.dense = false,
   });
+
+  double get _verticalPad {
+    if (dense) return 8;
+    if (compact) return 12;
+    return 10;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,7 +35,7 @@ class TaskCompleteButton extends StatelessWidget {
           style: OutlinedButton.styleFrom(
             foregroundColor: AppTheme.warning,
             side: BorderSide(color: AppTheme.warning.withValues(alpha: 0.55)),
-            padding: EdgeInsets.symmetric(vertical: compact ? 8 : 10),
+            padding: EdgeInsets.symmetric(vertical: _verticalPad),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(compact ? 10 : 12)),
           ),
         ),
@@ -41,23 +49,25 @@ class TaskCompleteButton extends StatelessWidget {
           gradient: const LinearGradient(
             colors: [Color(0xFF10B981), Color(0xFF059669)],
           ),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF10B981).withValues(alpha: 0.35),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
+          boxShadow: dense
+              ? null
+              : [
+                  BoxShadow(
+                    color: const Color(0xFF10B981).withValues(alpha: 0.35),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
         ),
         child: FilledButton.icon(
           onPressed: onPressed,
-          icon: Icon(Icons.check_circle_outline_rounded, size: compact ? 16 : 18),
+          icon: Icon(Icons.check_circle_outline_rounded, size: dense ? 14 : (compact ? 16 : 18)),
           label: Text(compact ? 'Complete' : 'Mark complete'),
           style: FilledButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
             foregroundColor: Colors.white,
-            padding: EdgeInsets.symmetric(vertical: compact ? 8 : 10),
+            padding: EdgeInsets.symmetric(vertical: _verticalPad),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(compact ? 10 : 12)),
           ),
         ),
@@ -90,51 +100,60 @@ class TaskDetailFooterActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
+    final bottomInset = compact ? MediaQuery.paddingOf(context).bottom + 8 : 0.0;
     final hint = saveHint.isNotEmpty
         ? saveHint
         : (compact ? 'Auto-saves' : 'Auto-saves · Ctrl+S · Esc');
 
     if (compact) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (hint.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                hint,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: saveHint == 'Saved'
-                      ? const Color(0xFF10B981)
-                      : Colors.white.withValues(alpha: 0.35),
-                  fontSize: 11,
-                ),
-              ),
-            ),
-          TaskCompleteButton(isCompleted: isCompleted, onPressed: saving ? null : onToggleComplete),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: dirty ? onDiscard : null,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white70,
-                    side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
+      return Padding(
+        padding: EdgeInsets.only(bottom: bottomInset),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (hint.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  hint,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: saveHint == 'Saved'
+                        ? const Color(0xFF10B981)
+                        : Colors.white.withValues(alpha: 0.35),
+                    fontSize: 11,
                   ),
-                  child: const Text('Discard'),
                 ),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                flex: 2,
-                child: _saveButton(compact: true),
+            TaskCompleteButton(
+              isCompleted: isCompleted,
+              onPressed: saving ? null : onToggleComplete,
+            ),
+            if (dirty || saving) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: dirty ? onDiscard : null,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white70,
+                        side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      child: const Text('Discard'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: _saveButton(compact: true),
+                  ),
+                ],
               ),
             ],
-          ),
-        ],
+          ],
+        ),
       );
     }
 

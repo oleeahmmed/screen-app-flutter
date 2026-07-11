@@ -143,18 +143,20 @@ class AppTheme {
   }
 
   /// Login card shell — matches aims-webapps `.login-shell`.
-  static BoxDecoration loginShell() {
-    return BoxDecoration(
-      borderRadius: BorderRadius.circular(24),
-      border: Border.all(color: const Color(0x3393C5FD)),
-      gradient: LinearGradient(
+  static Gradient get loginShellGradient => LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
           surface2.withValues(alpha: 0.92),
           const Color(0xFF0F172A).withValues(alpha: 0.88),
         ],
-      ),
+      );
+
+  static BoxDecoration loginShell() {
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: const Color(0x3393C5FD)),
+      gradient: loginShellGradient,
       boxShadow: [
         BoxShadow(
           color: primary.withValues(alpha: 0.18),
@@ -162,6 +164,87 @@ class AppTheme {
           offset: const Offset(0, 12),
         ),
       ],
+    );
+  }
+
+  /// Inset surface inside login card — blue glass (not flat black).
+  static BoxDecoration loginInsetDecoration({
+    double borderRadius = 12,
+    bool emphasized = false,
+  }) {
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(borderRadius),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          surface2.withValues(alpha: emphasized ? 0.78 : 0.62),
+          const Color(0xFF0F172A).withValues(alpha: emphasized ? 0.84 : 0.76),
+        ],
+      ),
+      border: Border.all(
+        color: const Color(0xFF93C5FD).withValues(alpha: emphasized ? 0.34 : 0.22),
+      ),
+    );
+  }
+
+  /// Login page ambient orbs (reused on Home dashboard).
+  static Widget loginAmbientOrbs(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    Widget orb(Color color, double d) {
+      return ImageFiltered(
+        imageFilter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+        child: Container(
+          width: d,
+          height: d,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: color.withValues(alpha: 0.14),
+          ),
+        ),
+      );
+    }
+
+    return IgnorePointer(
+      child: Stack(
+        children: [
+          Positioned(
+            top: size.height * 0.22,
+            left: size.width * 0.18,
+            child: orb(const Color(0xFF6366F1), 280),
+          ),
+          Positioned(
+            bottom: size.height * 0.2,
+            right: size.width * 0.15,
+            child: orb(const Color(0xFF0EA5E9), 260),
+          ),
+          Positioned(
+            top: size.height * 0.45,
+            left: size.width * 0.35,
+            child: orb(const Color(0xFF38BDF8), 320),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Home dashboard — same background as login form card + login screen orbs.
+  static Widget loginDashboardBackground({
+    required BuildContext context,
+    required Widget child,
+  }) {
+    return DecoratedBox(
+      decoration: screenGradient(),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          loginAmbientOrbs(context),
+          DecoratedBox(
+            decoration: BoxDecoration(gradient: loginShellGradient),
+          ),
+          child,
+        ],
+      ),
     );
   }
 
@@ -508,6 +591,19 @@ class AppTheme {
           stops: [0.0, 0.35, 0.7, 1.0],
         ),
       );
+
+  /// Dashboard shell — login form card gradient (Home tab).
+  static BoxDecoration get dashboardShellDecoration => BoxDecoration(
+        gradient: loginShellGradient,
+      );
+
+  /// @deprecated Use [loginDashboardBackground] on the shell instead.
+  static Widget dashboardBackground({required Widget child}) {
+    return DecoratedBox(
+      decoration: dashboardShellDecoration,
+      child: child,
+    );
+  }
 
   /// Home / tool pages — same blue glass shell as Daily Report.
   static Widget homeGlassBackground({required Widget child}) {

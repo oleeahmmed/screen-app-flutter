@@ -31,11 +31,52 @@ $ver = Get-AppVersion
 $Version = $ver.Name
 $ReleaseDir = Join-Path $Root 'build\windows\x64\runner\Release'
 $DistDir = Join-Path $Root 'dist'
+$MediaDir = Join-Path $Root 'packaging\windows\redist\media'
 $RedistDir = Join-Path $Root 'packaging\windows\redist'
 $VcRedist = Join-Path $RedistDir 'vc_redist.x64.exe'
 $VcRedistUrl = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 $IssFile = Join-Path $Root 'packaging\windows\aims.iss'
 $ZipOut = Join-Path $DistDir "aims-windows-v$Version-b$($ver.Build).zip"
+
+function Copy-MediaFoundationDlls {
+    param([string]$DestDir)
+
+    $parentRoot = Split-Path $Root -Parent
+    $map = @(
+        @{
+            Dest = 'mf.dll'
+            Sources = @(
+                (Join-Path $MediaDir 'mf.dll'),
+                (Join-Path $Root 'mf.dll')
+            )
+        },
+        @{
+            Dest = 'mfplat.dll'
+            Sources = @(
+                (Join-Path $MediaDir 'mfplat.dll'),
+                (Join-Path $Root 'mfplat.dll')
+            )
+        },
+        @{
+            Dest = 'MFReadWrite.dll'
+            Sources = @(
+                (Join-Path $MediaDir 'MFReadWrite.dll'),
+                (Join-Path $MediaDir 'mfreadwrite.dll'),
+                (Join-Path $parentRoot 'mfreadwrite.dll'),
+                (Join-Path $Root 'mfreadwrite.dll')
+            )
+        }
+    )
+
+    foreach ($entry in $map) {
+        $src = $entry.Sources | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $src) {
+            throw "Missing $($entry.Dest). Place it under packaging\windows\redist\media\ or project root."
+        }
+        Copy-Item -Force $src (Join-Path $DestDir $entry.Dest)
+        Write-Host "    + $($entry.Dest)"
+    }
+}
 
 Write-Host "==> AIMS Windows build (v$Version+$($ver.Build))"
 
@@ -45,7 +86,10 @@ if (-not (Test-Path (Join-Path $ReleaseDir 'aims.exe'))) {
     throw "Build output not found: $ReleaseDir\aims.exe"
 }
 
-New-Item -ItemType Directory -Force -Path $RedistDir, $DistDir | Out-Null
+New-Item -ItemType Directory -Force -Path $RedistDir, $DistDir, $MediaDir | Out-Null
+
+Write-Host '==> Bundling Windows Media Foundation DLLs next to aims.exe...'
+Copy-MediaFoundationDlls -DestDir $ReleaseDir
 
 Write-Host '==> Creating portable ZIP...'
 if (Test-Path $ZipOut) { Remove-Item $ZipOut -Force }

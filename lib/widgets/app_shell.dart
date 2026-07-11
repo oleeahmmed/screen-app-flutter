@@ -115,7 +115,7 @@ class AppShell extends StatelessWidget {
         ),
         if (trailing != null) trailing!,
         if (showQuickMenu)
-          AppQuickMenuButton(onLogout: onLogout),
+          AppHeaderMenuActions(onLogout: onLogout),
       ],
     );
   }

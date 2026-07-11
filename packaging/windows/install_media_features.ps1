@@ -4,6 +4,20 @@
 $ErrorActionPreference = 'Continue'
 
 function Test-MediaFoundation {
+    param([string]$AppDir = $null)
+
+    if ($AppDir -and (Test-Path $AppDir)) {
+        $local = @(
+            (Join-Path $AppDir 'mf.dll'),
+            (Join-Path $AppDir 'mfplat.dll'),
+            (Join-Path $AppDir 'MFReadWrite.dll'),
+            (Join-Path $AppDir 'mfreadwrite.dll')
+        )
+        if (($local | Where-Object { Test-Path $_ }).Count -ge 3) {
+            return $true
+        }
+    }
+
     $sys = Join-Path $env:WINDIR 'System32'
     return (
         (Test-Path (Join-Path $sys 'mf.dll')) -and
@@ -18,6 +32,12 @@ function Write-Log([string]$Message) {
 
 if (Test-MediaFoundation) {
     Write-Log 'Windows Media components already present.'
+    exit 0
+}
+
+$appDir = Split-Path $PSScriptRoot -Parent
+if (Test-MediaFoundation -AppDir $appDir) {
+    Write-Log 'Bundled Media Foundation DLLs found next to aims.exe.'
     exit 0
 }
 

@@ -440,7 +440,14 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
     setState(() => _submitting = false);
     if (r['success'] == true) {
       Navigator.of(context, rootNavigator: true).pop(true);
-      AppToast.saved(context, message: 'Daily report submitted');
+      AppToast.show(
+        context,
+        title: 'Report Submitted',
+        message: 'Daily closing report saved successfully',
+        type: AppToastType.success,
+        icon: Icons.assignment_turned_in_rounded,
+        placement: AppToastPlacement.top,
+      );
     } else {
       setState(() => _error = r['error']?.toString() ?? 'Submit failed');
     }
@@ -460,55 +467,67 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
           maxHeight: maxH,
         ),
         child: DecoratedBox(
-          decoration: AppTheme.taskCardDecoration(borderRadius: 20),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: AppTheme.taskFieldDecoration(borderRadius: 12),
-                      child: const Icon(Icons.assignment_outlined, color: AppTheme.primaryBright, size: 20),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Daily closing report',
-                            style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 18),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            widget.existingReport != null
-                                ? 'Update today\'s report'
-                                : 'Summarize today and plan tomorrow',
-                            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12),
-                          ),
-                        ],
+          decoration: AppTheme.loginShell().copyWith(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(23),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 12, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
+                        child: const Icon(
+                          Icons.assignment_turned_in_rounded,
+                          color: AppTheme.accent,
+                          size: 22,
+                        ),
                       ),
-                    ),
-                    IconButton(
-                      onPressed: _submitting
-                          ? null
-                          : () => Navigator.of(context, rootNavigator: true).pop(false),
-                      tooltip: 'Close',
-                      icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: AppTheme.taskFieldDecoration(borderRadius: 14),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Submit Report',
+                              style: TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 18,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              widget.existingReport != null
+                                  ? 'Update today\'s closing report'
+                                  : 'Summarize today and plan tomorrow',
+                              style: TextStyle(
+                                color: AppTheme.textMuted.withValues(alpha: 0.9),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: _submitting
+                            ? null
+                            : () => Navigator.of(context, rootNavigator: true).pop(false),
+                        tooltip: 'Close',
+                        icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Expanded(
+                    child: SingleChildScrollView(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -518,101 +537,156 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
                           const SizedBox(height: 12),
                           _field('Blockers (optional)', _blockers, maxLines: 2, required: false),
                           const SizedBox(height: 12),
-                          Text(
-                            'Dependencies (optional)',
-                            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 6),
-                          if (_loadingEmployees)
-                            const Padding(
-                              padding: EdgeInsets.all(8),
-                              child: Center(
-                                child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-                              ),
-                            )
-                          else if (_employees.isEmpty)
-                            Text(
-                              'No colleagues available for dependencies',
-                              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7), fontSize: 11),
-                            )
-                          else
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              children: _employees.map((e) {
-                                final id = _employeeId(e);
-                                if (id == null) return const SizedBox.shrink();
-                                final selected = _dependencyIds.contains(id);
-                                return FilterChip(
-                                  label: Text(_employeeLabel(e), style: const TextStyle(fontSize: 11)),
-                                  selected: selected,
-                                  onSelected: _submitting
-                                      ? null
-                                      : (v) => setState(() {
-                                            if (v) {
-                                              _dependencyIds.add(id);
-                                            } else {
-                                              _dependencyIds.remove(id);
-                                            }
-                                          }),
-                                  selectedColor: AppTheme.featureVault.withValues(alpha: 0.35),
-                                  checkmarkColor: Colors.white,
-                                  labelStyle: TextStyle(color: selected ? Colors.white : AppTheme.textMuted),
-                                  backgroundColor: Colors.white.withValues(alpha: 0.06),
-                                  side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-                                );
-                              }).toList(),
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Text(
+                                  'Dependencies (optional)',
+                                  style: TextStyle(
+                                    color: AppTheme.textMuted.withValues(alpha: 0.9),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                if (_loadingEmployees)
+                                  const Padding(
+                                    padding: EdgeInsets.all(8),
+                                    child: Center(
+                                      child: SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      ),
+                                    ),
+                                  )
+                                else if (_employees.isEmpty)
+                                  Text(
+                                    'No colleagues available for dependencies',
+                                    style: TextStyle(
+                                      color: AppTheme.textMuted.withValues(alpha: 0.7),
+                                      fontSize: 11,
+                                    ),
+                                  )
+                                else
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 6,
+                                    children: _employees.map((e) {
+                                      final id = _employeeId(e);
+                                      if (id == null) return const SizedBox.shrink();
+                                      final selected = _dependencyIds.contains(id);
+                                      return FilterChip(
+                                        label: Text(
+                                          _employeeLabel(e),
+                                          style: const TextStyle(fontSize: 11),
+                                        ),
+                                        selected: selected,
+                                        onSelected: _submitting
+                                            ? null
+                                            : (v) => setState(() {
+                                                  if (v) {
+                                                    _dependencyIds.add(id);
+                                                  } else {
+                                                    _dependencyIds.remove(id);
+                                                  }
+                                                }),
+                                        selectedColor: AppTheme.primary.withValues(alpha: 0.35),
+                                        checkmarkColor: Colors.white,
+                                        labelStyle: TextStyle(
+                                          color: selected ? Colors.white : AppTheme.textMuted,
+                                        ),
+                                        backgroundColor: AppTheme.surface2.withValues(alpha: 0.35),
+                                        side: BorderSide(
+                                          color: const Color(0xFF93C5FD).withValues(alpha: 0.2),
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                              ],
                             ),
+                          ),
                           if (_error != null) ...[
                             const SizedBox(height: 12),
-                            Text(_error!, style: const TextStyle(color: AppTheme.danger, fontSize: 12)),
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: AppTheme.danger.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: AppTheme.danger.withValues(alpha: 0.35),
+                                ),
+                              ),
+                              child: Text(
+                                _error!,
+                                style: const TextStyle(color: AppTheme.danger, fontSize: 12),
+                              ),
+                            ),
                           ],
                         ],
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    if (!widget.required)
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: _submitting ? null : () => Navigator.of(context, rootNavigator: true).pop(false),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: AppTheme.textMuted,
-                            side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                          child: const Text('Later'),
-                        ),
-                      ),
-                    if (!widget.required) const SizedBox(width: 10),
-                    Expanded(
-                      flex: widget.required ? 1 : 2,
-                      child: FilledButton(
-                        onPressed: _submitting ? null : _submit,
-                        style: AppTheme.taskPrimaryButtonStyle().copyWith(
-                          padding: WidgetStateProperty.all(
-                            const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                        ),
-                        child: _submitting
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                              )
-                            : Text(
-                                widget.existingReport != null ? 'Update report' : 'Submit report',
-                                style: const TextStyle(fontWeight: FontWeight.bold),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      if (!widget.required)
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _submitting
+                                ? null
+                                : () => Navigator.of(context, rootNavigator: true).pop(false),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppTheme.textMuted,
+                              side: BorderSide(
+                                color: const Color(0xFF93C5FD).withValues(alpha: 0.22),
                               ),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text('Later'),
+                          ),
+                        ),
+                      if (!widget.required) const SizedBox(width: 10),
+                      Expanded(
+                        flex: widget.required ? 1 : 2,
+                        child: FilledButton(
+                          onPressed: _submitting ? null : _submit,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppTheme.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 0,
+                          ),
+                          child: _submitting
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Text(
+                                  widget.existingReport != null
+                                      ? 'Update report'
+                                      : 'Submit report',
+                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -633,12 +707,19 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
           ),
         ),
         const SizedBox(height: 6),
-        TextField(
-          controller: c,
-          maxLines: maxLines,
-          enabled: !_submitting,
-          style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
-          decoration: AppTheme.taskInputDecoration(null),
+        Container(
+          decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: TextField(
+            controller: c,
+            maxLines: maxLines,
+            enabled: !_submitting,
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+            decoration: const InputDecoration(
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            ),
+          ),
         ),
       ],
     );

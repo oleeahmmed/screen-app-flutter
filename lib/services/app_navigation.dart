@@ -22,6 +22,7 @@ class AppNavigation {
   Future<void> Function()? onOpenVault;
   Future<void> Function()? onOpenProject;
   Future<void> Function()? onOpenP2P;
+  Future<void> Function()? onOpenSubmitReport;
   Future<void> Function()? onLogout;
 
   void selectTab(int index) => onSelectTab?.call(index);
@@ -58,6 +59,8 @@ class AppNavigation {
   Future<void> openProject() async => await onOpenProject?.call();
 
   Future<void> openP2P() async => await onOpenP2P?.call();
+
+  Future<void> openSubmitReport() async => await onOpenSubmitReport?.call();
 
   Future<void> logout() async => onLogout?.call();
 }

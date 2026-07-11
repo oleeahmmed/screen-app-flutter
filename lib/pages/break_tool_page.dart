@@ -46,10 +46,9 @@ class _BreakToolPageState extends State<BreakToolPage> {
   Future<void> _loadClockState({bool silent = false}) async {
     final r = await widget.apiService.getCurrentAttendance();
     if (!mounted) return;
-    final att = r['data']?['current_attendance'];
-    final open = r['success'] == true && ApiService.attendanceIsOpen(att is Map ? Map<String, dynamic>.from(att) : null);
+    final data = r['data'] as Map<String, dynamic>? ?? {};
     setState(() {
-      _isClockedIn = open;
+      _isClockedIn = r['success'] == true && data['is_clocked_in'] == true;
       _refresh++;
     });
   }
