@@ -1888,6 +1888,32 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getProjectAssignableEmployees(int projectId) async {
+    try {
+      final response = await _authorizedGet(
+        Uri.parse(AppConfig.projectAssignableEmployeesUrl(projectId)),
+        timeout: const Duration(seconds: 15),
+      );
+      if (response.statusCode == 200) {
+        final decoded = _decodeJsonBody(
+          response.body,
+          context: 'GET /api/projects/$projectId/assignable-employees/',
+        );
+        final list = _extractJsonList(
+          decoded,
+          keys: const ['results', 'employees', 'data'],
+        );
+        return {'success': true, 'data': list};
+      }
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> getProjectDetail(int projectId) async {
     try {
       final response = await _authorizedGet(

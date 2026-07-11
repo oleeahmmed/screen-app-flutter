@@ -42,12 +42,50 @@ class TaskAssigneeButton extends StatefulWidget {
 
 class _TaskAssigneeButtonState extends State<TaskAssigneeButton> {
   bool _busy = false;
+  List<dynamic> _employees = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _employees = List<dynamic>.from(widget.employees);
+  }
+
+  @override
+  void didUpdateWidget(TaskAssigneeButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.employees != oldWidget.employees) {
+      _employees = List<dynamic>.from(widget.employees);
+    }
+  }
+
+  Future<List<dynamic>> _ensureEmployees() async {
+    if (_employees.isNotEmpty) return _employees;
+    final pid = taskProjectIdFrom(widget.task);
+    if (pid == null || pid <= 0) return _employees;
+
+    final r = await widget.apiService.getProjectAssignableEmployees(pid);
+    if (r['success'] == true) {
+      final list = normalizeProjectEmployeesList(r['data'] as List? ?? []);
+      if (list.isNotEmpty && mounted) {
+        setState(() => _employees = list);
+      }
+      return list;
+    }
+    return _employees;
+  }
 
   Future<void> _openPicker() async {
     if (_busy) return;
+    final employees = await _ensureEmployees();
+    if (!mounted) return;
+    if (employees.isEmpty) {
+      AppToast.warning(context, 'No assignable people on this project');
+      return;
+    }
+
     final ids = await showKanbanAssigneePicker(
       context: context,
-      employees: widget.employees,
+      employees: employees,
       selectedIds: taskAssigneeIdsFrom(widget.task),
     );
     if (ids == null || !mounted) return;
@@ -69,6 +107,7 @@ class _TaskAssigneeButtonState extends State<TaskAssigneeButton> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (r['success'] == true) {
+      AppToast.success(context, ids.length == 1 ? 'Assignee updated' : '${ids.length} people assigned');
       widget.onUpdated();
     } else {
       AppToast.updateFailed(context, r['error']?.toString());
@@ -79,7 +118,7 @@ class _TaskAssigneeButtonState extends State<TaskAssigneeButton> {
   Widget build(BuildContext context) {
     final people = taskAssigneeListFrom(widget.task);
     final radius = widget.compact ? 10.0 : 12.0;
-    final canAssign = widget.employees.isNotEmpty;
+    final canAssign = _employees.isNotEmpty || taskProjectIdFrom(widget.task) != null;
 
     return Opacity(
       opacity: _busy ? 0.65 : 1,

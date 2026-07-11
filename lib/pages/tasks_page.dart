@@ -94,25 +94,64 @@ class _TasksPageState extends State<TasksPage> {
     return int.tryParse('$raw');
   }
 
+  Future<List<dynamic>> _loadEmployeesForProject(int projectId) async {
+    final assignable = await widget.apiService.getProjectAssignableEmployees(projectId);
+    if (assignable['success'] == true) {
+      final list = assignable['data'] as List? ?? [];
+      if (list.isNotEmpty) {
+        return normalizeProjectEmployeesList(list);
+      }
+    }
+
+    final detail = await widget.apiService.getProjectDetail(projectId);
+    if (detail['success'] == true) {
+      final data = detail['data'] as Map<String, dynamic>? ?? {};
+      final employees = data['employees'] as List? ?? [];
+      if (employees.isNotEmpty) {
+        return normalizeProjectEmployeesList(employees);
+      }
+      final members = data['project_members'] as List? ?? [];
+      if (members.isNotEmpty) {
+        return normalizeProjectEmployeesList(
+          members
+              .map((m) => {
+                    'user_id': m['user_id'],
+                    'full_name': m['username'],
+                    'username': m['username'],
+                  })
+              .toList(),
+        );
+      }
+    }
+    return const [];
+  }
+
   Future<void> _loadProjectMetaForTasks(List<dynamic> tasks) async {
     final ids = tasks.map(taskProjectIdFrom).whereType<int>().where((id) => id > 0).toSet();
-    final missing = ids.where((id) => !_projectMeta.containsKey(id)).toList();
+    final missing = ids.where((id) {
+      final cached = _projectMeta[id];
+      return cached == null || cached.employees.isEmpty;
+    }).toList();
     if (missing.isEmpty) return;
 
     final results = await Future.wait(
-      missing.map((pid) => widget.apiService.getProjectDetail(pid)),
+      missing.map((pid) async {
+        final detail = await widget.apiService.getProjectDetail(pid);
+        final employees = await _loadEmployeesForProject(pid);
+        return {'pid': pid, 'detail': detail, 'employees': employees};
+      }),
     );
 
     if (!mounted) return;
     var changed = false;
-    for (var i = 0; i < missing.length; i++) {
-      final pid = missing[i];
-      final r = results[i];
-      if (r['success'] == true) {
-        final data = r['data'] as Map<String, dynamic>? ?? {};
+    for (final bundle in results) {
+      final pid = bundle['pid'] as int;
+      final detail = bundle['detail'] as Map<String, dynamic>;
+      if (detail['success'] == true) {
+        final data = detail['data'] as Map<String, dynamic>? ?? {};
         _projectMeta[pid] = _ProjectMeta(
           stages: data['stages'] as List? ?? [],
-          employees: data['employees'] as List? ?? [],
+          employees: bundle['employees'] as List<dynamic>,
         );
         changed = true;
       }

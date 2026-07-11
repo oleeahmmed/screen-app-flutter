@@ -41,6 +41,36 @@ List<int> taskAssigneeIdsFrom(dynamic task) {
   return uid != null ? [uid] : [];
 }
 
+int? employeeUserIdFrom(dynamic employee) {
+  if (employee is! Map) return null;
+  final uid = employee['user_id'];
+  if (uid != null) return int.tryParse('$uid');
+  return int.tryParse('${employee['id']}');
+}
+
+/// Normalize project member / employee rows for assignee picker (always user ids).
+List<Map<String, dynamic>> normalizeProjectEmployeesList(List<dynamic> raw) {
+  final seen = <int>{};
+  final out = <Map<String, dynamic>>[];
+  for (final item in raw) {
+    if (item is! Map) continue;
+    final m = Map<String, dynamic>.from(item);
+    final uid = employeeUserIdFrom(m);
+    if (uid == null || seen.contains(uid)) continue;
+    seen.add(uid);
+    final name = (m['full_name'] ?? m['username'] ?? m['name'] ?? 'User').toString();
+    out.add({
+      'user_id': uid,
+      'id': uid,
+      'full_name': name,
+      'username': m['username']?.toString() ?? name,
+      'designation': m['designation'] ?? m['role'] ?? '',
+      'role': m['role'] ?? m['designation'] ?? '',
+    });
+  }
+  return out;
+}
+
 List<Map<String, dynamic>> taskAssigneeListFrom(dynamic task) {
   if (task is! Map) return [];
   final assignees = task['assignees'];
