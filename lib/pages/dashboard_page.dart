@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../app_session.dart';
 import '../services/api_service.dart';
 import '../services/attendance_service.dart';
+import '../services/attendance_work_time.dart';
 import '../services/screenshot_service.dart';
 import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
@@ -775,7 +776,15 @@ class _DashboardPageState extends State<DashboardPage> {
     final outT = sched['expected_check_out']?.toString() ?? '';
     if (inT.isEmpty || outT.isEmpty) return 'Welcome back, $displayName';
     final overnight = sched['is_overnight'] == true;
-    final hours = overnight ? 'Expected $inT → $outT' : 'Expected $inT – $outT';
+    final hours = overnight ? 'Shift $inT → $outT' : 'Shift $inT – $outT';
+    final win = _attendance.shiftWindow ?? sched;
+    final winStart = AttendanceWorkTime.parseDt(win['start'] ?? win['shift_window_start']);
+    final winEnd = AttendanceWorkTime.parseDt(win['end'] ?? win['shift_window_end']);
+    if (winStart != null && winEnd != null && overnight) {
+      final fmt = (DateTime d) =>
+          '${d.day}/${d.month} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+      return '$hours (${fmt(winStart)} → ${fmt(winEnd)}) · $displayName';
+    }
     return '$hours · $displayName';
   }
 

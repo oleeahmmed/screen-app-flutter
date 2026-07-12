@@ -130,9 +130,17 @@ class ApiService {
       'schedule',
       'effective_schedule',
       'active_break',
+      'shift_window',
     ]) {
       final v = data[key];
       if (v is Map) data[key] = Map<String, dynamic>.from(v);
+    }
+    final sessions = data['sessions_today'];
+    if (sessions is List) {
+      data['sessions_today'] = sessions
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
     }
     return data;
   }
@@ -178,7 +186,7 @@ class ApiService {
 
   Future<http.Response> _authorizedGet(
     Uri uri, {
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 30),
     bool retryOn401 = true,
   }) async {
     Future<http.Response> send() =>
@@ -193,7 +201,7 @@ class ApiService {
   Future<http.Response> _authorizedPost(
     Uri uri, {
     Object? body,
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 30),
     bool retryOn401 = true,
   }) async {
     Future<http.Response> send() => http
@@ -209,7 +217,7 @@ class ApiService {
   Future<http.Response> _authorizedPatch(
     Uri uri, {
     Object? body,
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 30),
     bool retryOn401 = true,
   }) async {
     Future<http.Response> send() => http
@@ -224,7 +232,7 @@ class ApiService {
 
   Future<http.Response> _authorizedDelete(
     Uri uri, {
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 30),
     bool retryOn401 = true,
   }) async {
     Future<http.Response> send() =>
@@ -234,6 +242,30 @@ class ApiService {
       response = await send();
     }
     return response;
+  }
+
+  /// User-facing network errors (avoid raw TimeoutException text).
+  String _networkErrorMessage(Object e) {
+    final s = e.toString();
+    if (e is TimeoutException || s.contains('TimeoutException')) {
+      return 'Server took too long to respond. Check your internet and try again.';
+    }
+    if (s.contains('SocketException') ||
+        s.contains('Failed host lookup') ||
+        s.contains('Network is unreachable') ||
+        s.contains('Connection refused') ||
+        s.contains('Connection reset')) {
+      return 'Cannot reach server. Check Wi-Fi/mobile data or VPN.';
+    }
+    if (s.contains('HandshakeException') ||
+        s.contains('CERTIFICATE_VERIFY_FAILED') ||
+        s.contains('TlsException')) {
+      return 'Secure connection failed. Try another network.';
+    }
+    if (s.contains('ClientException')) {
+      return 'Network error. Check your connection and try again.';
+    }
+    return 'Connection error. Please try again.';
   }
 
   /// DRF JSON: `{ "error": "..." }` or field errors `{"summary":["..."]}`.
@@ -404,43 +436,76 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> login(String email, String password) async {
-    try {
-      print('🔐 Logging in with: $email');
-      final body = jsonEncode({'username': email, 'password': password});
-      final headers = {'Content-Type': 'application/json'};
-      var response = await http
-          .post(Uri.parse(AppConfig.authLoginUrl), headers: headers, body: body)
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 404) {
-        response = await http
-            .post(Uri.parse(AppConfig.authTokenUrl), headers: headers, body: body)
-            .timeout(const Duration(seconds: 10));
-      }
+    const timeout = Duration(seconds: 30);
+    final body = jsonEncode({'username': email, 'password': password});
+    final headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    Object? lastError;
 
-      print('📊 Login response: ${response.statusCode}');
-      print('📝 Response body: ${response.body}');
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _token = data['access'];
-        
-        // Check access_granted
-        if (data['access_granted'] == false) {
-          return {
-            'success': false,
-            'error': data['message'] ?? 'Access denied'
-          };
+    for (var attempt = 1; attempt <= 2; attempt++) {
+      try {
+        print('🔐 Logging in with: $email (attempt $attempt)');
+        var response = await http
+            .post(Uri.parse(AppConfig.authLoginUrl), headers: headers, body: body)
+            .timeout(timeout);
+        if (response.statusCode == 404) {
+          response = await http
+              .post(Uri.parse(AppConfig.authTokenUrl), headers: headers, body: body)
+              .timeout(timeout);
         }
-        
-        return {'success': true, 'data': data};
-      } else if (response.statusCode == 401) {
-        return {'success': false, 'error': 'Invalid email or password'};
+
+        print('📊 Login response: ${response.statusCode}');
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          _token = data['access'];
+
+          if (data['access_granted'] == false) {
+            return {
+              'success': false,
+              'error': data['message'] ?? 'Access denied',
+            };
+          }
+
+          return {'success': true, 'data': data};
+        }
+        if (response.statusCode == 401) {
+          return {'success': false, 'error': 'Invalid email or password'};
+        }
+        return {
+          'success': false,
+          'error': 'Login failed (${response.statusCode}). Please try again.',
+        };
+      } on TimeoutException catch (e) {
+        lastError = e;
+        print('❌ Login timeout (attempt $attempt): $e');
+        if (attempt < 2) {
+          await Future<void>.delayed(const Duration(milliseconds: 600));
+          continue;
+        }
+      } catch (e) {
+        lastError = e;
+        print('❌ Login error (attempt $attempt): $e');
+        final msg = _networkErrorMessage(e);
+        // Retry once only for transient network failures.
+        if (attempt < 2 &&
+            (e is TimeoutException ||
+                e.toString().contains('TimeoutException') ||
+                e.toString().contains('SocketException') ||
+                e.toString().contains('ClientException'))) {
+          await Future<void>.delayed(const Duration(milliseconds: 600));
+          continue;
+        }
+        return {'success': false, 'error': msg};
       }
-      return {'success': false, 'error': 'Login failed: ${response.statusCode}'};
-    } catch (e) {
-      print('❌ Login error: $e');
-      return {'success': false, 'error': 'Connection error: $e'};
     }
+
+    return {
+      'success': false,
+      'error': _networkErrorMessage(lastError ?? 'timeout'),
+    };
   }
 
   Future<Map<String, dynamic>> forgotPassword(String email) async {
@@ -451,7 +516,7 @@ class ApiService {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'email': email}),
           )
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 30));
       if (response.statusCode == 200 || response.statusCode == 201) {
         return {'success': true};
       }
@@ -464,7 +529,7 @@ class ApiService {
       } catch (_) {}
       return {'success': false, 'error': 'Could not send reset link (${response.statusCode})'};
     } catch (e) {
-      return {'success': false, 'error': 'Connection error: $e'};
+      return {'success': false, 'error': _networkErrorMessage(e)};
     }
   }
 

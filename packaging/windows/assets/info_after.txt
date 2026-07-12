@@ -1,0 +1,21 @@
+AIMS was installed successfully
+================================
+
+What to do next:
+
+  1. Launch AIMS from the Start Menu (or Desktop shortcut)
+  2. Sign in with your company credentials
+  3. Allow notifications / screen permissions if prompted
+  4. Open My Task, Chat, or Home to start working
+
+Tips:
+
+  • Keep AIMS running while clocked in for accurate activity
+  • Use the system tray icon for quick access
+  • Check Alerts regularly for company updates
+
+Need help?
+  Website : https://igenhr.com
+  Support : contact your AIMS administrator or iBit Ltd
+
+Thank you for choosing AIMS.

@@ -1,0 +1,21 @@
+Welcome to AIMS Setup
+=====================
+
+AIMS (by iBit Ltd) helps your team manage attendance, tasks,
+screen activity, chat, and reports in one modern workspace.
+
+Before you continue, please note:
+
+  • Windows 10 or later (64-bit) is required
+  • Administrator rights are needed for this installer
+  • An internet connection is recommended for first sign-in
+  • Visual C++ Runtime and Windows Media components may be
+    configured automatically if missing
+
+You will be asked to accept the License Agreement on the next
+screens. After installation you can launch AIMS from the
+Start Menu or Desktop shortcut (if selected).
+
+Publisher : iBit Ltd
+Website   : https://igenhr.com
+Product   : AIMS Desktop for Windows

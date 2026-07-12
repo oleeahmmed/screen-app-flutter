@@ -176,7 +176,7 @@ class AppHeaderMenuActions extends StatelessWidget {
   }
 }
 
-/// Jump to any main app section from any screen.
+/// Jump to app shortcuts (Vault, Project) from any screen.
 class AppQuickMenuButton extends StatelessWidget {
   final Color? iconColor;
   final double iconSize;
@@ -187,19 +187,6 @@ class AppQuickMenuButton extends StatelessWidget {
     this.iconSize = 22,
   });
 
-  static final _destinations = [
-    (AppNavigation.tabHome, Icons.home_rounded, 'Home', 'Dashboard & clock'),
-    (AppNavigation.tabMyTasks, Icons.assignment_rounded, 'My Task', 'Assigned tasks'),
-    (AppNavigation.tabChat, Icons.chat_bubble_rounded, 'Chat', 'Messages'),
-    (AppNavigation.tabAlerts, Icons.notifications_rounded, 'Alerts', 'Notifications'),
-    (AppNavigation.tabProfile, Icons.person_rounded, 'Profile', 'Settings & account'),
-  ];
-
-  void _go(BuildContext context, int index) {
-    Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
-    AppNavigation.instance.selectTab(index);
-  }
-
   Future<void> _open(BuildContext context) async {
     if (Responsive.isMobile(context)) {
       await showModalBottomSheet<void>(
@@ -208,7 +195,7 @@ class AppQuickMenuButton extends StatelessWidget {
         backgroundColor: Colors.transparent,
         barrierColor: AppTheme.modalBarrierColor,
         builder: (ctx) {
-          final maxH = MediaQuery.sizeOf(ctx).height * 0.65;
+          final maxH = MediaQuery.sizeOf(ctx).height * 0.5;
           return AppTheme.glassBlur(
             child: SafeArea(
               child: ConstrainedBox(
@@ -240,15 +227,10 @@ class AppQuickMenuButton extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Jump to any section',
+                          'Shortcuts',
                           style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
                         ),
                         const SizedBox(height: 12),
-                        Text(
-                          'Shortcuts',
-                          style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 4),
                         ListTile(
                           leading: const Icon(Icons.lock_outline_rounded, color: Color(0xFFA78BFA)),
                           title: const Text('Vault', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
@@ -268,33 +250,6 @@ class AppQuickMenuButton extends StatelessWidget {
                             Navigator.pop(ctx);
                             AppNavigation.instance.openProject();
                           },
-                        ),
-                        const Divider(color: Colors.white12, height: 20),
-                        Text(
-                          'Navigate',
-                          style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 4),
-                        ..._destinations.map(
-                          (d) => ListTile(
-                            leading: Icon(d.$2, color: AppTheme.primaryBright),
-                            title: Text(
-                              d.$3,
-                              style: const TextStyle(
-                                color: AppTheme.textPrimary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            subtitle: Text(
-                              d.$4,
-                              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11),
-                            ),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            onTap: () {
-                              Navigator.pop(ctx);
-                              _go(context, d.$1);
-                            },
-                          ),
                         ),
                       ],
                     ),
@@ -349,29 +304,8 @@ class AppQuickMenuButton extends StatelessWidget {
             Text('Project', style: TextStyle(color: AppTheme.textPrimary)),
           ]),
         ),
-        const PopupMenuDivider(),
-        PopupMenuItem<int>(
-          enabled: false,
-          height: 28,
-          child: Text('Navigate', style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w600)),
-        ),
-        ..._destinations
-          .map(
-            (d) => PopupMenuItem<int>(
-              value: d.$1,
-              child: Row(
-                children: [
-                  Icon(d.$2, color: AppTheme.primaryBright, size: 18),
-                  const SizedBox(width: 10),
-                  Text(d.$3, style: const TextStyle(color: AppTheme.textPrimary)),
-                ],
-              ),
-            ),
-          ),
       ],
-    ).then((index) {
-      if (index != null && index >= 0 && context.mounted) _go(context, index);
-    });
+    );
   }
 
   @override

@@ -428,27 +428,37 @@ class _TasksPageState extends State<TasksPage> {
                 )
               : displayTasks.isEmpty
                   ? _buildEmptyState()
-                  : LayoutBuilder(
-                      builder: (context, constraints) {
-                        final cols = Responsive.taskGridColumns(context);
-                        const gap = 10.0;
-                        final itemWidth = cols == 1
-                            ? constraints.maxWidth
-                            : (constraints.maxWidth - gap * (cols - 1)) / cols;
-                        final compact = Responsive.useTaskGrid(context);
+                  : Padding(
+                      padding: EdgeInsets.fromLTRB(pad, 0, pad, 88),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final cols = Responsive.taskGridColumns(context);
+                          const gap = 10.0;
+                          // Width after page padding — otherwise Wrap can't fit 2 cols
+                          // and leaves a large empty gap on the right.
+                          final available = constraints.maxWidth;
+                          final itemWidth = cols == 1
+                              ? available
+                              : ((available - gap * (cols - 1)) / cols)
+                                  .floorToDouble();
+                          final compact = Responsive.useTaskGrid(context);
 
-                        return SingleChildScrollView(
-                          padding: EdgeInsets.fromLTRB(pad, 0, pad, 88),
-                          child: Wrap(
-                            spacing: gap,
-                            runSpacing: gap,
-                            children: [
-                              for (final task in displayTasks)
-                                _buildTaskCard(task, width: itemWidth, compact: compact),
-                            ],
-                          ),
-                        );
-                      },
+                          return SingleChildScrollView(
+                            child: Wrap(
+                              spacing: gap,
+                              runSpacing: gap,
+                              children: [
+                                for (final task in displayTasks)
+                                  _buildTaskCard(
+                                    task,
+                                    width: itemWidth,
+                                    compact: compact,
+                                  ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
                     ),
         ),
       ],

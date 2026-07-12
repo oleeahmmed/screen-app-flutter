@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
@@ -40,9 +41,24 @@ int _intFromDynamic(dynamic v, int fallback) {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (!kIsWeb) {
+    // Fail slow/broken routes faster (common on Android IPv6) so login can retry.
+    HttpOverrides.global = _AimsHttpOverrides();
+  }
   AppSession.screenshotIntervalSeconds = AppConfig.screenshotInterval;
   await LocalNotificationService.initialize();
   runApp(const MyApp());
+}
+
+/// Shared HTTP tuning for mobile / desktop (not web).
+class _AimsHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    final client = super.createHttpClient(context);
+    client.connectionTimeout = const Duration(seconds: 20);
+    client.idleTimeout = const Duration(seconds: 45);
+    return client;
+  }
 }
 
 class MyApp extends StatelessWidget {

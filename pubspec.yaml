@@ -111,5 +111,11 @@ flutter_launcher_icons:
   image_path: assets/branding/logo.png
   android: true
   ios: true
+  web:
+    generate: true
+    image_path: assets/branding/logo.png
+    favicon_path: assets/branding/logo.png
   windows:
     generate: true
+    image_path: assets/branding/logo.png
+    icon_size: 256

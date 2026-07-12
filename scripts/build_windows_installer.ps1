@@ -116,6 +116,12 @@ Then re-run: powershell -ExecutionPolicy Bypass -File scripts\build_windows_inst
 "@
 }
 
+$GenAssets = Join-Path $Root 'packaging\windows\generate_wizard_assets.ps1'
+if (Test-Path $GenAssets) {
+    Write-Host '==> Refreshing installer wizard branding assets...'
+    & powershell -ExecutionPolicy Bypass -File $GenAssets
+}
+
 Write-Host "==> Compiling installer with Inno Setup..."
 & $Iscc "/DMyAppVersion=$Version" $IssFile
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed (exit $LASTEXITCODE)" }

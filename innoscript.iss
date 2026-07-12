@@ -1,39 +1,53 @@
-; Aims Windows installer — run ISCC from this folder after `flutter build windows`.
-#define MyAppName "Aims"
+; Deprecated — use packaging\windows\aims.iss
+; Build: powershell -ExecutionPolicy Bypass -File scripts\build_windows_installer.ps1
+;
+; This stub remains so old docs still point somewhere useful.
+
+#define MyAppName "AIMS"
 #define MyAppVersion "1.0.0"
-#define MyAppPublisher "iGenHR"
+#define MyAppPublisher "iBit Ltd"
 #define MyAppExeName "aims.exe"
 #define ReleaseDir "build\windows\x64\runner\Release"
 
 [Setup]
-AppId={{A3F8C2E1-9B4D-4F6A-8E2C-1D5A7B9C0E3F}
+AppId={{B8E4F2A1-6C3D-4E5F-9A0B-1D2E3F4A5B6C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL=https://igenhr.com
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
-OutputDir=installer
-OutputBaseFilename=aims-{#MyAppVersion}-setup
-Compression=lzma2
+DisableProgramGroupPage=yes
+LicenseFile=packaging\windows\assets\license.rtf
+InfoBeforeFile=packaging\windows\assets\info_before.txt
+InfoAfterFile=packaging\windows\assets\info_after.txt
+WizardImageFile=packaging\windows\assets\wizard-image.bmp,packaging\windows\assets\wizard-image-hd.bmp
+WizardSmallImageFile=packaging\windows\assets\wizard-small.bmp
+SetupIconFile=packaging\windows\assets\app-icon.ico
+WizardStyle=modern
+WizardSizePercent=120
+OutputDir=dist
+OutputBaseFilename=AIMS-Setup-{#MyAppVersion}
+Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-PrivilegesRequired=lowest
-WizardStyle=modern
+PrivilegesRequired=admin
 UninstallDisplayIcon={app}\{#MyAppExeName}
+MinVersion=10.0
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
 
 [Files]
 Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent unchecked
