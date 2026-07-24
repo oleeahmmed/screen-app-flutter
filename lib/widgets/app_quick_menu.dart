@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
+import '../utils/platform_capabilities.dart';
 import '../utils/responsive.dart';
 
 /// Log out with confirmation — shown as an icon beside the quick menu.
@@ -26,9 +27,11 @@ class AppLogoutButton extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface2,
         title: const Text('Log out?', style: TextStyle(color: AppTheme.textPrimary)),
-        content: const Text(
-          'You will stop screenshot capture and return to the login screen.',
-          style: TextStyle(color: AppTheme.textMuted, height: 1.4),
+        content: Text(
+          PlatformCapabilities.screenshotMonitoring
+              ? 'You will stop screenshot capture and return to the login screen.'
+              : 'You will return to the login screen.',
+          style: const TextStyle(color: AppTheme.textMuted, height: 1.4),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),

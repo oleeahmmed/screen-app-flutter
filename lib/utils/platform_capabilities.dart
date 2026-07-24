@@ -14,7 +14,10 @@ abstract final class PlatformCapabilities {
   /// Drag-and-drop file targets — skip on Linux (GTK drag + desktop_drop edge cases).
   static bool get fileDragDrop => Platform.isMacOS || Platform.isWindows;
 
-  /// Desktop-only — Android/iOS do not capture screenshots from this app.
+  /// Desktop-only screen monitoring.
+  ///
+  /// The `android` git branch also strips MediaProjection native code and
+  /// FOREGROUND_SERVICE_MEDIA_PROJECTION so installs never request screen capture.
   static bool get screenshotMonitoring =>
       Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 }
