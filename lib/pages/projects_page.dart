@@ -9,6 +9,7 @@ import '../utils/app_toast.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_quick_menu.dart';
 import '../widgets/empty_state.dart';
+import '../utils/platform_capabilities.dart';
 import '../utils/task_helpers.dart';
 import '../widgets/task_action_buttons.dart';
 import '../widgets/task_status_dropdown.dart';
@@ -2685,60 +2686,70 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     final stageId = stage['id'] as int;
     final tasks = _filteredTasks((stage['tasks'] as List?) ?? []);
     final color = _parseHex(stage['color'] ?? '#3B82F6');
+    final allowDnD = PlatformCapabilities.kanbanTaskDragDrop;
+
+    Widget column({bool highlighted = false}) {
+      return Container(
+        margin: const EdgeInsets.only(right: 12),
+        decoration: AppTheme.taskCardDecoration(borderRadius: 14).copyWith(
+          border: Border.all(
+            color: highlighted ? AppTheme.success : Colors.white.withValues(alpha: 0.08),
+            width: highlighted ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              height: 4,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+              ),
+            ),
+            _kanbanStageHeader(stage, color, stageId, tasks.length),
+            Expanded(
+              child: tasks.isEmpty
+                  ? Center(
+                      child: Text(
+                        allowDnD
+                            ? (highlighted ? 'Release to drop' : 'Drag tasks here')
+                            : 'No tasks',
+                        style: TextStyle(
+                          color: highlighted ? AppTheme.success : Colors.white24,
+                          fontSize: 11,
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      itemCount: tasks.length,
+                      itemBuilder: (ctx, i) => _draggableTaskWrap(tasks[i], color, stageId),
+                    ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+              child: TextButton.icon(
+                onPressed: () => _showCreateTaskInStageDialog(stageId),
+                icon: const Icon(Icons.add, size: 16, color: AppTheme.success),
+                label: const Text('Create', style: TextStyle(color: AppTheme.success, fontWeight: FontWeight.w600)),
+                style: TextButton.styleFrom(
+                  backgroundColor: Colors.white.withValues(alpha: 0.04),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!allowDnD) return column();
+
     return DragTarget<TaskDragPayload>(
       onWillAcceptWithDetails: (details) => !_sameStage(details.data, stageId),
       onAcceptWithDetails: (details) => _onTaskDropOnStage(details.data, stageId),
-      builder: (context, candidate, rejected) {
-        final hi = candidate.isNotEmpty;
-        return Container(
-          margin: const EdgeInsets.only(right: 12),
-          decoration: AppTheme.taskCardDecoration(borderRadius: 14).copyWith(
-            border: Border.all(
-              color: hi ? AppTheme.success : Colors.white.withValues(alpha: 0.08),
-              width: hi ? 2 : 1,
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                height: 4,
-                decoration: BoxDecoration(
-                  color: color,
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
-                ),
-              ),
-              _kanbanStageHeader(stage, color, stageId, tasks.length),
-              Expanded(
-                child: tasks.isEmpty
-                    ? Center(
-                        child: Text(
-                          hi ? 'Release to drop' : 'Drag tasks here',
-                          style: TextStyle(color: hi ? AppTheme.success : Colors.white24, fontSize: 11),
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        itemCount: tasks.length,
-                        itemBuilder: (ctx, i) => _draggableTaskWrap(tasks[i], color, stageId),
-                      ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-                child: TextButton.icon(
-                  onPressed: () => _showCreateTaskInStageDialog(stageId),
-                  icon: const Icon(Icons.add, size: 16, color: AppTheme.success),
-                  label: const Text('Create', style: TextStyle(color: AppTheme.success, fontWeight: FontWeight.w600)),
-                  style: TextButton.styleFrom(
-                    backgroundColor: Colors.white.withValues(alpha: 0.04),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (context, candidate, rejected) => column(highlighted: candidate.isNotEmpty),
     );
   }
 
@@ -2836,15 +2847,22 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   }
 
   Widget _draggableTaskWrap(dynamic t, Color stageColor, int? sourceStageId) {
-    final payload = TaskDragPayload(taskId: t['id'] as int, sourceStageId: sourceStageId);
     final taskMap = Map<String, dynamic>.from(t as Map);
-    final feedbackCard = Material(
-      color: Colors.transparent,
-      elevation: 10,
-      shadowColor: Colors.black54,
-      borderRadius: BorderRadius.circular(12),
-      child: SizedBox(width: 268, child: _taskCard(taskMap, stageColor, withSideMargin: false)),
-    );
+    Widget card() => _taskCard(taskMap, stageColor, withSideMargin: false);
+    final child = PlatformCapabilities.kanbanTaskDragDrop
+        ? Draggable<TaskDragPayload>(
+            data: TaskDragPayload(taskId: t['id'] as int, sourceStageId: sourceStageId),
+            feedback: Material(
+              color: Colors.transparent,
+              elevation: 10,
+              shadowColor: Colors.black54,
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(width: 268, child: card()),
+            ),
+            childWhenDragging: Opacity(opacity: 0.35, child: card()),
+            child: card(),
+          )
+        : card();
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 220),
       switchInCurve: Curves.easeOutCubic,
@@ -2852,12 +2870,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
       child: Padding(
         key: ValueKey('task_${t['id']}_$sourceStageId'),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        child: Draggable<TaskDragPayload>(
-          data: payload,
-          feedback: feedbackCard,
-          childWhenDragging: Opacity(opacity: 0.35, child: _taskCard(taskMap, stageColor, withSideMargin: false)),
-          child: _taskCard(taskMap, stageColor, withSideMargin: false),
-        ),
+        child: child,
       ),
     );
   }

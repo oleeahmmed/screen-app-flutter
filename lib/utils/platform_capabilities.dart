@@ -14,6 +14,11 @@ abstract final class PlatformCapabilities {
   /// Drag-and-drop file targets — skip on Linux (GTK drag + desktop_drop edge cases).
   static bool get fileDragDrop => Platform.isMacOS || Platform.isWindows;
 
+  /// Kanban task drag between stages — desktop only.
+  /// On Android/iOS, long-press drag fights scrolling and causes misfires.
+  static bool get kanbanTaskDragDrop =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
   /// Desktop-only screen monitoring.
   ///
   /// The `android` git branch also strips MediaProjection native code and
