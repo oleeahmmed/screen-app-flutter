@@ -290,14 +290,6 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   Future<void> _patchPartial(Map<String, dynamic> body) async {
     if (_task == null || body.isEmpty || _syncingFromServer) return;
-    if (body.containsKey('assignee_ids')) {
-      final ids = body['assignee_ids'];
-      if (ids is List && ids.isEmpty) {
-        if (!mounted) return;
-        AppToast.warning(context, 'At least one assignee is required');
-        return;
-      }
-    }
     setState(() {
       _saving = true;
       _saveHint = 'Saving…';
@@ -515,10 +507,6 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     if (_task == null) return;
     _autoSaveTimer?.cancel();
     await _flushTextAutoSave();
-    if (_assigneeIds.isEmpty) {
-      AppToast.warning(context, 'At least one assignee is required');
-      return;
-    }
     final s = _snapshot;
     if (s == null) return;
     final body = <String, dynamic>{};
@@ -565,15 +553,11 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       employees: _employees,
       selectedIds: _assigneeIds,
     );
-    if (ids == null || ids.isEmpty) return;
+    if (ids == null) return;
     _setField(() => _assigneeIds = ids, {'assignee_ids': ids});
   }
 
   void _removeAssignee(int userId) {
-    if (_assigneeIds.length <= 1) {
-      AppToast.warning(context, 'At least one assignee is required');
-      return;
-    }
     final next = List<int>.from(_assigneeIds)..remove(userId);
     _setField(() => _assigneeIds = next, {'assignee_ids': next});
   }

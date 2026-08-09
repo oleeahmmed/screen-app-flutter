@@ -1571,7 +1571,11 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                 };
                 final d = dueC.text.trim();
                 if (d.isNotEmpty) body['due_date'] = d;
-                if (assignee != null) body['assignee_id'] = assignee;
+                if (assignee != null) {
+                  body['assignee_id'] = assignee;
+                } else {
+                  body['assignee_ids'] = <int>[];
+                }
                 final nav = Navigator.of(dialogCtx);
                 final res = await widget.apiService.updateTask(
                   taskId,

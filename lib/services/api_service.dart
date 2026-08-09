@@ -1434,13 +1434,16 @@ class ApiService {
       body['desc'] = body.remove('description');
     }
     if (body.containsKey('user')) {
-      body['assignee_ids'] = [body.remove('user')];
+      final v = body.remove('user');
+      body['assignee_ids'] = v == null ? <dynamic>[] : [v];
     }
     if (body.containsKey('user_id')) {
-      body['assignee_ids'] = [body.remove('user_id')];
+      final v = body.remove('user_id');
+      body['assignee_ids'] = v == null ? <dynamic>[] : [v];
     }
     if (body.containsKey('assignee_id')) {
-      body['assignee_ids'] = [body.remove('assignee_id')];
+      final v = body.remove('assignee_id');
+      body['assignee_ids'] = v == null ? <dynamic>[] : [v];
     }
     return body;
   }
