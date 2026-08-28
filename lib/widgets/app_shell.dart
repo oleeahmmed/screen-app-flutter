@@ -16,6 +16,8 @@ class AppShell extends StatelessWidget {
   final bool scrollable;
   final EdgeInsetsGeometry? padding;
   final bool wide;
+  final bool useBackground;
+  final bool showHeader;
   final Widget child;
 
   const AppShell({
@@ -30,56 +32,61 @@ class AppShell extends StatelessWidget {
     this.scrollable = true,
     this.padding,
     this.wide = false,
+    this.useBackground = true,
+    this.showHeader = true,
     required this.child,
   });
 
   @override
   Widget build(BuildContext context) {
     final pad = padding ?? EdgeInsets.all(Responsive.pagePadding(context));
-    final hasHeader = header != null || title != null;
+    final hasHeader = showHeader &&
+        (header != null || (title != null && title!.trim().isNotEmpty));
 
-    return AppTheme.homeGlassBackground(
-      child: SafeArea(
-        bottom: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (hasHeader)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 4, 8, 0),
-                child: header ?? _defaultHeader(context),
-              ),
-            Expanded(
-              child: wide
-                  ? Responsive.constrainWide(
-                      context,
-                      scrollable
-                          ? SingleChildScrollView(
-                              padding: pad,
-                              child: child,
-                            )
-                          : Padding(
-                              padding: pad,
-                              child: child,
-                            ),
-                    )
-                  : Responsive.constrainContent(
-                      context,
-                      scrollable
-                          ? SingleChildScrollView(
-                              padding: pad,
-                              child: child,
-                            )
-                          : Padding(
-                              padding: pad,
-                              child: child,
-                            ),
-                    ),
+    final body = SafeArea(
+      bottom: false,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (hasHeader)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 4, 8, 0),
+              child: header ?? _defaultHeader(context),
             ),
-          ],
-        ),
+          Expanded(
+            child: wide
+                ? Responsive.constrainWide(
+                    context,
+                    scrollable
+                        ? SingleChildScrollView(
+                            padding: pad,
+                            child: child,
+                          )
+                        : Padding(
+                            padding: pad,
+                            child: child,
+                          ),
+                  )
+                : Responsive.constrainContent(
+                    context,
+                    scrollable
+                        ? SingleChildScrollView(
+                            padding: pad,
+                            child: child,
+                          )
+                        : Padding(
+                            padding: pad,
+                            child: child,
+                          ),
+                  ),
+          ),
+        ],
       ),
     );
+
+    return useBackground
+        ? AppTheme.homeGlassBackground(child: body)
+        : body;
   }
 
   Widget _defaultHeader(BuildContext context) {

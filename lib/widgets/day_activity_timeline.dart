@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
@@ -37,6 +38,8 @@ class DayActivityTimeline extends StatefulWidget {
   final bool onBreak;
   final bool collapsible;
   final bool initiallyExpanded;
+  final bool embedded;
+  final bool compact;
 
   const DayActivityTimeline({
     super.key,
@@ -47,6 +50,8 @@ class DayActivityTimeline extends StatefulWidget {
     this.onBreak = false,
     this.collapsible = false,
     this.initiallyExpanded = false,
+    this.embedded = false,
+    this.compact = false,
   });
 
   @override
@@ -297,7 +302,7 @@ class _DayActivityTimelineState extends State<DayActivityTimeline> {
 
     if (!mounted || generation != _loadGeneration) return;
 
-    events.sort((a, b) => b.at.compareTo(a.at));
+    events.sort((a, b) => widget.compact ? a.at.compareTo(b.at) : b.at.compareTo(a.at));
 
     setState(() {
       _events = events;
@@ -326,13 +331,13 @@ class _DayActivityTimelineState extends State<DayActivityTimeline> {
   IconData _iconFor(_EventKind kind) {
     switch (kind) {
       case _EventKind.clockIn:
-        return Icons.login_rounded;
+        return LucideIcons.logIn;
       case _EventKind.clockOut:
-        return Icons.logout_rounded;
+        return LucideIcons.logOut;
       case _EventKind.breakStart:
-        return Icons.free_breakfast_rounded;
+        return LucideIcons.coffee;
       case _EventKind.breakEnd:
-        return Icons.check_circle_outline_rounded;
+        return LucideIcons.briefcase;
     }
   }
 
@@ -350,10 +355,18 @@ class _DayActivityTimelineState extends State<DayActivityTimeline> {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: AppTheme.primary.withValues(alpha: 0.15),
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      AppTheme.primaryBright.withValues(alpha: 0.35),
+                      AppTheme.primary.withValues(alpha: 0.2),
+                    ],
+                  ),
                   borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.primaryBright.withValues(alpha: 0.35)),
                 ),
-                child: const Icon(Icons.history_rounded, color: AppTheme.primaryBright, size: 20),
+                child: const Icon(LucideIcons.activity, color: AppTheme.primaryBright, size: 20),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -403,30 +416,29 @@ class _DayActivityTimelineState extends State<DayActivityTimeline> {
   Widget build(BuildContext context) {
     final showBody = !widget.collapsible || _expanded;
 
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: AppTheme.glassPanel(borderRadius: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildHeader(),
-          if (showBody) ...[
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildHeader(),
+        if (showBody) ...[
+          if (!widget.compact) ...[
             const SizedBox(height: 14),
             Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _summaryChip(Icons.play_circle_outline, 'Sessions', '$_sessionCount', AppTheme.success),
-              _summaryChip(Icons.free_breakfast_outlined, 'Breaks', '$_breakCount', AppTheme.warning),
-              _summaryChip(
-                Icons.hourglass_bottom_rounded,
-                'Break time',
-                '${_breakSummary?['total_break_minutes'] ?? 0}m',
-                AppTheme.primaryBright,
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _summaryChip(Icons.play_circle_outline, 'Sessions', '$_sessionCount', AppTheme.success),
+                _summaryChip(Icons.free_breakfast_outlined, 'Breaks', '$_breakCount', AppTheme.warning),
+                _summaryChip(
+                  Icons.hourglass_bottom_rounded,
+                  'Break time',
+                  '${_breakSummary?['total_break_minutes'] ?? 0}m',
+                  AppTheme.primaryBright,
+                ),
+              ],
+            ),
+          ],
+          SizedBox(height: widget.compact ? 12 : 16),
           if (_loading)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
@@ -444,11 +456,20 @@ class _DayActivityTimelineState extends State<DayActivityTimeline> {
             ...List.generate(_events.length, (i) {
               final e = _events[i];
               final isLast = i == _events.length - 1;
-              return _timelineRow(e, showLine: !isLast);
+              return widget.compact
+                  ? _compactTimelineRow(e, showLine: !isLast)
+                  : _timelineRow(e, showLine: !isLast);
             }),
-          ],
         ],
-      ),
+      ],
+    );
+
+    if (widget.embedded) return content;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: AppTheme.glassPanel(borderRadius: 20),
+      child: content,
     );
   }
 
@@ -498,6 +519,88 @@ class _DayActivityTimelineState extends State<DayActivityTimeline> {
             'Clock in to start — breaks and sessions will appear here.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 11, color: AppTheme.textMuted.withValues(alpha: 0.8), height: 1.35),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _compactTitle(_TimelineEvent e) {
+    switch (e.kind) {
+      case _EventKind.clockIn:
+        return 'Clocked In';
+      case _EventKind.clockOut:
+        return 'Clocked Out';
+      case _EventKind.breakStart:
+        return e.isLive ? 'Break Started' : 'Break';
+      case _EventKind.breakEnd:
+        return 'Back to Work';
+    }
+  }
+
+  Widget _compactTimelineRow(_TimelineEvent e, {required bool showLine}) {
+    final color = _colorFor(e.kind, live: e.isLive);
+    final durationNote = e.isLive
+        ? _durationLabelFor(e)
+        : (e.durationLabel != null && e.durationLabel!.isNotEmpty ? e.durationLabel! : null);
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: showLine ? 10 : 0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 46,
+            child: Text(
+              _fmtTime(e.at),
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textPrimary,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          Container(
+            width: 24,
+            height: 24,
+            margin: const EdgeInsets.only(top: 1),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.18),
+              shape: BoxShape.circle,
+              border: Border.all(color: color.withValues(alpha: e.isLive ? 0.75 : 0.4)),
+              boxShadow: e.isLive
+                  ? [BoxShadow(color: color.withValues(alpha: 0.35), blurRadius: 6)]
+                  : null,
+            ),
+            child: Icon(_iconFor(e.kind), size: 12, color: color),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _compactTitle(e),
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (durationNote != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    durationNote,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: color.withValues(alpha: 0.95),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ],
       ),

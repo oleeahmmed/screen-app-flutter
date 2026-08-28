@@ -122,7 +122,13 @@ class ApiService {
   }
 
   Map<String, dynamic> _normalizeClockPayload(Map raw) {
-    final data = Map<String, dynamic>.from(raw);
+    var data = Map<String, dynamic>.from(raw);
+    final inner = data['data'];
+    if (inner is Map &&
+        data['is_clocked_in'] == null &&
+        inner['is_clocked_in'] != null) {
+      data = Map<String, dynamic>.from(inner);
+    }
     for (final key in [
       'today_work_duration',
       'today_break_duration',
@@ -373,10 +379,30 @@ class ApiService {
   }
 
   Map<String, dynamic> _normalizeTaskMap(Map<String, dynamic> m) {
+    if (m['task'] is Map && m['id'] == null && m['name'] == null && m['title'] == null) {
+      m = Map<String, dynamic>.from(m['task'] as Map);
+    }
     m['name'] ??= m['title'];
     m['description'] ??= m['desc'];
     m['title'] ??= m['name'];
     m['desc'] ??= m['description'];
+    if (m['project_id'] == null && m['project'] != null) {
+      final p = m['project'];
+      if (p is Map) {
+        m['project_id'] = int.tryParse('${p['id'] ?? ''}');
+      } else {
+        m['project_id'] = int.tryParse('$p');
+      }
+    }
+    if (m['user_id'] == null && m['user'] != null) {
+      final u = m['user'];
+      if (u is Map) {
+        m['user_id'] = int.tryParse('${u['id'] ?? ''}');
+      } else if (u is num || u is String) {
+        m['user_id'] = int.tryParse('$u');
+      }
+    }
+    m['assignee_ids'] = m['assignee_ids'] is List ? m['assignee_ids'] : <dynamic>[];
     return m;
   }
 
@@ -798,6 +824,7 @@ class ApiService {
   int? _projectIdFromTask(Map<String, dynamic>? task) {
     if (task == null) return null;
     final raw = task['project_id'] ?? task['projectId'] ?? task['project'];
+    if (raw is Map) return int.tryParse('${raw['id'] ?? ''}');
     return int.tryParse('$raw');
   }
 
@@ -1475,6 +1502,9 @@ class ApiService {
         ? AppConfig.projectTaskUrl(pid, taskId)
         : '${AppConfig.tasksUrl}$taskId/';
     final body = scoped ? Map<String, dynamic>.from(data) : _taskPatchBody(data);
+    if (body.containsKey('stage_id') && !body.containsKey('stage')) {
+      body['stage'] = body['stage_id'];
+    }
 
     try {
       final response = await _authorizedPatch(
@@ -1482,11 +1512,11 @@ class ApiService {
         body: jsonEncode(body),
       );
       if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        if (decoded is Map<String, dynamic>) {
-          return {'success': true, 'data': _normalizeTaskMap(decoded)};
+        final task = _parseTaskDetailResponse(response.body, 'PATCH $url');
+        if (task != null) {
+          return {'success': true, 'data': task};
         }
-        return {'success': true, 'data': decoded};
+        return {'success': true, 'data': <String, dynamic>{}};
       }
       return {
         'success': false,
@@ -1656,25 +1686,51 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> toggleSubTask(int taskId, int subtaskId) async {
+  /// Toggle subtask completion. Pass [markDone] for PATCH fallback if toggle URL fails.
+  Future<Map<String, dynamic>> toggleSubTask(
+    int taskId,
+    int subtaskId, {
+    int projectId = 0,
+    bool? markDone,
+  }) async {
     try {
-      final response = await http
-          .post(
-            Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/toggle/'),
-            headers: _getHeaders(),
-          )
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+      await ensureAuth();
+      final response = await _authorizedPost(
+        Uri.parse('${AppConfig.tasksUrl}$taskId/subtasks/$subtaskId/toggle/'),
+        body: '{}',
+        timeout: const Duration(seconds: 15),
+      );
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final decoded = _safeJsonDecode(response.body);
+        return {
+          'success': true,
+          'data': decoded is Map ? Map<String, dynamic>.from(decoded) : decoded,
+        };
       }
-      var err = 'Failed to toggle subtask';
-      try {
-        final d = jsonDecode(response.body);
-        if (d is Map && d['error'] != null) err = d['error'].toString();
-      } catch (_) {}
-      return {'success': false, 'error': err};
+
+      final err = _parseApiErrorBody(response.body, response.statusCode);
+      if (markDone != null &&
+          (response.statusCode == 404 ||
+              response.statusCode == 405 ||
+              response.statusCode >= 500)) {
+        final patch = await updateSubTask(
+          taskId,
+          subtaskId,
+          {'status': markDone ? 'done' : 'to_do'},
+          projectId: projectId,
+        );
+        if (patch['success'] == true) return patch;
+        return {
+          'success': false,
+          'error': patch['error']?.toString() ?? err,
+        };
+      }
+      return {
+        'success': false,
+        'error': err.isNotEmpty ? err : 'Failed to toggle subtask',
+      };
     } catch (e) {
-      return {'success': false, 'error': '$e'};
+      return {'success': false, 'error': _networkErrorMessage(e)};
     }
   }
 
@@ -2397,6 +2453,7 @@ class ApiService {
     bool isIdle = false,
     int idleDuration = 0,
     String? lastActivityAt,
+    int screenIndex = 1,
   }) async {
     try {
       await ensureAuth();
@@ -2408,8 +2465,9 @@ class ApiService {
 
       final now = DateTime.now();
       final date = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-      final time = '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}';
-      final relativePath = '$date/screen1/$time.png';
+      final time = '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}-${now.millisecond.toString().padLeft(3, '0')}';
+      final screen = 'screen${screenIndex.clamp(1, 16)}';
+      final relativePath = '$date/$screen/$time.png';
 
       Future<http.StreamedResponse> sendUpload() async {
         final request = http.MultipartRequest(
@@ -2680,6 +2738,12 @@ class ApiService {
     }
   }
 
+  Future<void> p2pCancelSession(String sessionId) async {
+    try {
+      await _authorizedDelete(Uri.parse('${AppConfig.p2pSessionDetailUrl}$sessionId/'));
+    } catch (_) {}
+  }
+
   Future<Map<String, dynamic>> getBreakStatus() async {
     try {
       await ensureAuth();
@@ -2793,6 +2857,44 @@ class ApiService {
 
   // ─── Project vault APIs ───
 
+  Future<Map<String, dynamic>> getVaultMyHub() async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.vaultMyHubUrl));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+        }
+      }
+      return {'success': false, 'error': 'Failed to load vaults (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultSharedWithMe() async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.vaultSharedWithMeUrl));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {
+            'success': true,
+            'data': Map<String, dynamic>.from(decoded),
+            'count': decoded['count'] ?? 0,
+            'results': decoded['results'] is List ? decoded['results'] : [],
+          };
+        }
+        if (decoded is List) {
+          return {'success': true, 'data': {'count': decoded.length, 'results': decoded}, 'results': decoded};
+        }
+      }
+      return {'success': false, 'error': 'Failed to load shared entries (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> getVaultCategories(int projectId) async {
     try {
       final response = await _authorizedGet(Uri.parse(AppConfig.vaultCategoriesUrl(projectId)));
@@ -2868,6 +2970,97 @@ class ApiService {
         return {'success': false, 'error': raw['name'] ?? raw['detail'] ?? raw['error'] ?? 'Create failed'};
       }
       return {'success': false, 'error': 'Create category failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultCategoryAccess(int projectId, int categoryId) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.vaultCategoryAccessUrl(projectId, categoryId)));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          final results = decoded['results'];
+          return {
+            'success': true,
+            'data': results is List ? results : [],
+            'meta': Map<String, dynamic>.from(decoded),
+          };
+        }
+        if (decoded is List) return {'success': true, 'data': decoded};
+        return {'success': false, 'error': 'Invalid response'};
+      }
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> grantVaultCategoryAccess(
+    int projectId,
+    int categoryId, {
+    required List<int> userIds,
+    String permission = 'view',
+  }) async {
+    try {
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.vaultCategoryAccessUrl(projectId, categoryId)),
+        body: jsonEncode({'user_ids': userIds, 'permission': permission}),
+      );
+      final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+      if ((response.statusCode == 201 || response.statusCode == 200) && raw != null) {
+        return {'success': true, 'data': raw};
+      }
+      if (raw is Map) {
+        return {
+          'success': false,
+          'error': raw['user_ids'] ?? raw['permission'] ?? raw['detail'] ?? raw['error'] ?? 'Grant failed',
+        };
+      }
+      return {'success': false, 'error': 'Grant failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateVaultCategoryAccess(
+    int projectId,
+    int categoryId,
+    int userId, {
+    required String permission,
+  }) async {
+    try {
+      final response = await _authorizedPatch(
+        Uri.parse(AppConfig.vaultCategoryAccessUserUrl(projectId, categoryId, userId)),
+        body: jsonEncode({'permission': permission}),
+      );
+      final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+      if (response.statusCode == 200 && raw is Map) {
+        return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+      }
+      if (raw is Map) {
+        return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? 'Update failed'};
+      }
+      return {'success': false, 'error': 'Update failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> revokeVaultCategoryAccess(
+    int projectId,
+    int categoryId,
+    int userId,
+  ) async {
+    try {
+      final response = await _authorizedDelete(
+        Uri.parse(AppConfig.vaultCategoryAccessUserUrl(projectId, categoryId, userId)),
+      );
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }

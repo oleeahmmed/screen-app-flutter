@@ -58,6 +58,7 @@ class ScreenshotService {
   }
 
   void recordActivity() {
+    if (AppSession.onBreak) return;
     _lastActivityTime = DateTime.now();
     if (!_isUserActive) {
       _isUserActive = true;
@@ -67,6 +68,10 @@ class ScreenshotService {
 
   Future<void> startCapture() async {
     if (_isRunning) return;
+    if (AppSession.onBreak) {
+      _debugLog('Screenshot capture skipped — user is on break');
+      return;
+    }
     if (!isPlatformSupported) {
       _debugLog('Screenshot capture not supported on ${Platform.operatingSystem}');
       return;
@@ -109,28 +114,112 @@ class ScreenshotService {
 
     try {
       _captureCount++;
-      Uint8List? captured;
+      final frames = <Uint8List>[];
 
       if (Platform.isWindows) {
-        captured = await _captureWindowsPowerShell();
+        frames.addAll(await _captureWindowsPerMonitor());
       } else if (Platform.isLinux) {
-        captured = await _captureLinuxNative();
+        final one = await _captureLinuxNative();
+        if (one != null && one.isNotEmpty) frames.add(one);
       } else if (Platform.isMacOS) {
-        captured = await _captureMacOS();
+        final one = await _captureMacOS();
+        if (one != null && one.isNotEmpty) frames.add(one);
       }
 
-      if (captured != null && captured.isNotEmpty) {
-        _debugLog('Capture #$_captureCount: ${captured.length} bytes');
-        await _uploadImage(captured);
-      } else {
+      if (frames.isEmpty) {
         _debugLog('Capture #$_captureCount failed');
+        return;
+      }
+
+      _debugLog('Capture #$_captureCount: ${frames.length} screen(s)');
+      for (var i = 0; i < frames.length; i++) {
+        await _uploadImage(frames[i], screenIndex: i + 1);
       }
     } catch (e) {
       _debugLog('Capture error: $e');
     }
   }
 
-  Future<Uint8List?> _captureWindowsPowerShell() async {
+  /// Capture each Windows monitor as its own image (not one stitched VirtualScreen).
+  Future<List<Uint8List>> _captureWindowsPerMonitor() async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final sep = Platform.pathSeparator;
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final prefix = '${tempDir.path}${sep}aims_cap_$stamp';
+
+      final psScript = '''
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+try {
+  \$screens = [System.Windows.Forms.Screen]::AllScreens
+  if (-not \$screens -or \$screens.Count -lt 1) {
+    Write-Output "ERROR:No screens"
+    exit 1
+  }
+  \$i = 0
+  foreach (\$screen in \$screens) {
+    \$i++
+    \$b = \$screen.Bounds
+    \$bitmap = New-Object System.Drawing.Bitmap(\$b.Width, \$b.Height)
+    \$graphics = [System.Drawing.Graphics]::FromImage(\$bitmap)
+    \$graphics.CopyFromScreen(\$b.Location, [System.Drawing.Point]::Empty, \$b.Size)
+    \$out = '${prefix}_' + \$i + '.png'
+    \$bitmap.Save(\$out, [System.Drawing.Imaging.ImageFormat]::Png)
+    \$graphics.Dispose()
+    \$bitmap.Dispose()
+  }
+  Write-Output "SUCCESS:\$i"
+} catch {
+  Write-Output "ERROR:\$(\$_.Exception.Message)"
+}
+''';
+
+      final result = await Process.run(
+        'powershell',
+        [
+          '-ExecutionPolicy',
+          'Bypass',
+          '-NoProfile',
+          '-WindowStyle',
+          'Hidden',
+          '-Command',
+          psScript,
+        ],
+        runInShell: false,
+      );
+
+      final out = result.stdout.toString().trim();
+      if (result.exitCode != 0 || !out.startsWith('SUCCESS:')) {
+        _debugLog('Windows multi-monitor capture failed: $out');
+        // Fallback: legacy virtual-desktop capture
+        final legacy = await _captureWindowsVirtualScreen();
+        return legacy == null ? <Uint8List>[] : <Uint8List>[legacy];
+      }
+
+      final count = int.tryParse(out.split(':').last.trim()) ?? 0;
+      final frames = <Uint8List>[];
+      for (var i = 1; i <= count; i++) {
+        final file = File('${prefix}_$i.png');
+        if (await file.exists()) {
+          final bytes = await file.readAsBytes();
+          await file.delete().catchError((_) => file);
+          if (bytes.isNotEmpty) frames.add(bytes);
+        }
+      }
+      if (frames.isEmpty) {
+        final legacy = await _captureWindowsVirtualScreen();
+        return legacy == null ? <Uint8List>[] : <Uint8List>[legacy];
+      }
+      return frames;
+    } catch (e) {
+      _debugLog('Windows per-monitor capture error: $e');
+      final legacy = await _captureWindowsVirtualScreen();
+      return legacy == null ? <Uint8List>[] : <Uint8List>[legacy];
+    }
+  }
+
+  Future<Uint8List?> _captureWindowsVirtualScreen() async {
     try {
       final tempDir = await getTemporaryDirectory();
       final sep = Platform.pathSeparator;
@@ -178,7 +267,7 @@ try {
         final file = File(tempFile);
         if (await file.exists()) {
           final bytes = await file.readAsBytes();
-          await file.delete().catchError((_) {});
+          await file.delete().catchError((_) => file);
           return bytes;
         }
       }
@@ -204,7 +293,7 @@ try {
       final file = File(tempFile);
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
-        await file.delete().catchError((_) {});
+        await file.delete().catchError((_) => file);
         if (bytes.isNotEmpty) return bytes;
       }
       return null;
@@ -252,7 +341,7 @@ try {
               final pngPath = tempFile;
               final conv = await Process.run(convert, [readPath, pngPath]);
               if (conv.exitCode == 0) {
-                await File(readPath).delete().catchError((_) {});
+                await File(readPath).delete().catchError((_) => File(readPath));
                 readPath = pngPath;
               }
             }
@@ -261,7 +350,7 @@ try {
           final file = File(readPath);
           if (await file.exists()) {
             final bytes = await file.readAsBytes();
-            await file.delete().catchError((_) {});
+            await file.delete().catchError((_) => file);
             if (bytes.isNotEmpty) return bytes;
           }
         } catch (_) {}
@@ -321,9 +410,9 @@ try {
     return null;
   }
 
-  Future<void> _uploadImage(Uint8List imageBytes) async {
+  Future<void> _uploadImage(Uint8List imageBytes, {int screenIndex = 1}) async {
     try {
-      final uploadBytes = compressToJpeg(imageBytes, maxWidth: 720, quality: 70);
+      final uploadBytes = compressToJpeg(imageBytes, maxWidth: 1280, quality: 72);
 
       final activityStatus = activityDetection.analyzeScreenshot(imageBytes);
       if (activityStatus['is_idle'] == true) {
@@ -337,12 +426,15 @@ try {
         isIdle: activityStatus['is_idle'] == true,
         idleDuration: activityStatus['idle_duration'] as int? ?? 0,
         lastActivityAt: activityStatus['last_activity_at']?.toString(),
+        screenIndex: screenIndex,
       );
 
       if (result['success'] == true) {
-        _debugLog('Uploaded ${(uploadBytes.length / 1024).toStringAsFixed(0)}KB');
+        _debugLog(
+          'Uploaded screen $screenIndex ${(uploadBytes.length / 1024).toStringAsFixed(0)}KB',
+        );
       } else {
-        _debugLog('Upload failed: ${result['error']}');
+        _debugLog('Upload failed (screen $screenIndex): ${result['error']}');
       }
     } catch (e) {
       _debugLog('Upload error: $e');
@@ -357,6 +449,7 @@ try {
   }
 
   void _checkActivityStatus() {
+    if (AppSession.onBreak) return;
     final secondsSince = DateTime.now().difference(_lastActivityTime).inSeconds;
     if (secondsSince > idleThresholdSeconds && _isUserActive) {
       _isUserActive = false;
@@ -375,5 +468,5 @@ try {
 
   bool get isRunning => _isRunning;
   bool get isUserActive => _isUserActive;
-  int get displayCount => 1;
+  int get displayCount => Platform.isWindows ? -1 : 1;
 }

@@ -12,6 +12,7 @@ class DataPrivacyNoticePage extends StatelessWidget {
     final captureScreenshots = PlatformCapabilities.screenshotMonitoring;
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         title: const Text('Data & monitoring notice'),
         actions: const [
           AppHeaderMenuActions(iconColor: Colors.white70),

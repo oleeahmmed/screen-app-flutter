@@ -4,10 +4,12 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
+import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_quick_menu.dart';
+import '../widgets/app_tab_shell.dart';
 import '../widgets/empty_state.dart';
 import '../utils/platform_capabilities.dart';
 import '../utils/task_helpers.dart';
@@ -880,10 +882,16 @@ class _ProjectsPageState extends State<ProjectsPage> {
       Navigator.push(
         context,
         MaterialPageRoute<void>(
-          builder: (_) => ProjectDetailView(
-            apiService: widget.apiService,
-            projectId: pid,
-            projectName: p['name']?.toString() ?? '',
+          builder: (_) => AppTabShell(
+            selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
+            unreadNotifs: AppNavigation.instance.unreadNotifs,
+            showTopBar: false,
+            showBottomNav: false,
+            child: ProjectDetailView(
+              apiService: widget.apiService,
+              projectId: pid,
+              projectName: p['name']?.toString() ?? '',
+            ),
           ),
         ),
       ).then((_) => _loadProjects());
@@ -2280,8 +2288,10 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (!widget.embedded) const AppBackButton(color: AppTheme.textMuted),
-              if (!widget.embedded) const SizedBox(width: 6),
+              if (!widget.embedded && (ModalRoute.of(context)?.canPop ?? false)) ...[
+                const AppBackButton(color: AppTheme.textMuted),
+                const SizedBox(width: 8),
+              ],
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2323,7 +2333,8 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                   ],
                 ),
               ),
-              const AppHeaderMenuActions(iconColor: AppTheme.textMuted, iconSize: 20),
+              if (!widget.embedded)
+                const AppHeaderMenuActions(iconColor: AppTheme.textMuted, iconSize: 20),
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert, color: AppTheme.textMuted, size: 22),
                 color: AppTheme.surface2,

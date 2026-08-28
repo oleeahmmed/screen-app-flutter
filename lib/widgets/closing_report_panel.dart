@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
+import '../utils/responsive.dart';
 import 'app_bottom_sheet.dart';
 import 'empty_state.dart';
 import 'glass_card.dart';
@@ -294,6 +295,7 @@ class _ClosingReportPanelState extends State<ClosingReportPanel> {
   }
 }
 
+/// Closing report sheet — slides up from the bottom like Take Break.
 /// Returns `true` when the report was submitted successfully.
 Future<bool?> showClosingReportDialog({
   required BuildContext context,
@@ -301,12 +303,15 @@ Future<bool?> showClosingReportDialog({
   bool required = false,
   Map<String, dynamic>? existingReport,
 }) {
-  return showDialog<bool>(
+  return showModalBottomSheet<bool>(
     context: context,
-    barrierDismissible: !required,
-    barrierColor: AppTheme.modalBarrierColor,
+    isScrollControlled: true,
+    isDismissible: !required,
+    enableDrag: !required,
     useRootNavigator: true,
-    builder: (ctx) => _ClosingReportDialogContent(
+    backgroundColor: Colors.transparent,
+    barrierColor: AppTheme.modalBarrierColor,
+    builder: (ctx) => _ClosingReportSheet(
       apiService: apiService,
       required: required,
       existingReport: existingReport,
@@ -314,22 +319,22 @@ Future<bool?> showClosingReportDialog({
   );
 }
 
-class _ClosingReportDialogContent extends StatefulWidget {
+class _ClosingReportSheet extends StatefulWidget {
   final ApiService apiService;
   final bool required;
   final Map<String, dynamic>? existingReport;
 
-  const _ClosingReportDialogContent({
+  const _ClosingReportSheet({
     required this.apiService,
     required this.required,
     this.existingReport,
   });
 
   @override
-  State<_ClosingReportDialogContent> createState() => _ClosingReportDialogContentState();
+  State<_ClosingReportSheet> createState() => _ClosingReportSheetState();
 }
 
-class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent> {
+class _ClosingReportSheetState extends State<_ClosingReportSheet> {
   final _whatIDid = TextEditingController();
   final _whatIWillDo = TextEditingController();
   final _blockers = TextEditingController();
@@ -439,7 +444,7 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
     if (!mounted) return;
     setState(() => _submitting = false);
     if (r['success'] == true) {
-      Navigator.of(context, rootNavigator: true).pop(true);
+      Navigator.of(context).pop(true);
       AppToast.show(
         context,
         title: 'Report Submitted',
@@ -453,237 +458,258 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
     }
   }
 
+  void _close() {
+    if (_submitting) return;
+    Navigator.of(context).pop(false);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final maxH = MediaQuery.sizeOf(context).height * 0.88;
+    final media = MediaQuery.of(context);
+    final desktop = Responsive.isDesktop(context);
+    final tablet = Responsive.isTablet(context);
+    final sheetH = media.size.height * (desktop ? 0.86 : (tablet ? 0.9 : 0.92));
+    final maxW = desktop ? 680.0 : (tablet ? 560.0 : media.size.width);
+    final todayLabel = DateFormat('EEE, d MMM yyyy').format(DateTime.now());
+    final isUpdate = widget.existingReport != null;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      insetPadding: AppTheme.dialogInsets(context),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: AppTheme.dialogMaxWidth(context, max: 520),
-          maxHeight: maxH,
-        ),
-        child: DecoratedBox(
-          decoration: AppTheme.loginShell().copyWith(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(23),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 12, 18),
+    return Padding(
+      padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxW, maxHeight: sheetH),
+          child: AppTheme.glassBlur(
+            topRadius: 28,
+            child: SafeArea(
+              top: false,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
-                        child: const Icon(
-                          Icons.assignment_turned_in_rounded,
-                          color: AppTheme.accent,
-                          size: 22,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Submit Report',
-                              style: TextStyle(
-                                color: AppTheme.textPrimary,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 18,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              widget.existingReport != null
-                                  ? 'Update today\'s closing report'
-                                  : 'Summarize today and plan tomorrow',
-                              style: TextStyle(
-                                color: AppTheme.textMuted.withValues(alpha: 0.9),
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: _submitting
-                            ? null
-                            : () => Navigator.of(context, rootNavigator: true).pop(false),
-                        tooltip: 'Close',
-                        icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _field('What did you do today?', _whatIDid, maxLines: 4),
-                          const SizedBox(height: 12),
-                          _field('What will you do next?', _whatIWillDo, maxLines: 3),
-                          const SizedBox(height: 12),
-                          _field('Blockers (optional)', _blockers, maxLines: 2, required: false),
-                          const SizedBox(height: 12),
-                          Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Text(
-                                  'Dependencies (optional)',
-                                  style: TextStyle(
-                                    color: AppTheme.textMuted.withValues(alpha: 0.9),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                if (_loadingEmployees)
-                                  const Padding(
-                                    padding: EdgeInsets.all(8),
-                                    child: Center(
-                                      child: SizedBox(
-                                        width: 18,
-                                        height: 18,
-                                        child: CircularProgressIndicator(strokeWidth: 2),
-                                      ),
-                                    ),
-                                  )
-                                else if (_employees.isEmpty)
-                                  Text(
-                                    'No colleagues available for dependencies',
-                                    style: TextStyle(
-                                      color: AppTheme.textMuted.withValues(alpha: 0.7),
-                                      fontSize: 11,
-                                    ),
-                                  )
-                                else
-                                  Wrap(
-                                    spacing: 6,
-                                    runSpacing: 6,
-                                    children: _employees.map((e) {
-                                      final id = _employeeId(e);
-                                      if (id == null) return const SizedBox.shrink();
-                                      final selected = _dependencyIds.contains(id);
-                                      return FilterChip(
-                                        label: Text(
-                                          _employeeLabel(e),
-                                          style: const TextStyle(fontSize: 11),
-                                        ),
-                                        selected: selected,
-                                        onSelected: _submitting
-                                            ? null
-                                            : (v) => setState(() {
-                                                  if (v) {
-                                                    _dependencyIds.add(id);
-                                                  } else {
-                                                    _dependencyIds.remove(id);
-                                                  }
-                                                }),
-                                        selectedColor: AppTheme.primary.withValues(alpha: 0.35),
-                                        checkmarkColor: Colors.white,
-                                        labelStyle: TextStyle(
-                                          color: selected ? Colors.white : AppTheme.textMuted,
-                                        ),
-                                        backgroundColor: AppTheme.surface2.withValues(alpha: 0.35),
-                                        side: BorderSide(
-                                          color: const Color(0xFF93C5FD).withValues(alpha: 0.2),
-                                        ),
-                                      );
-                                    }).toList(),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          if (_error != null) ...[
-                            const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: AppTheme.danger.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: AppTheme.danger.withValues(alpha: 0.35),
-                                ),
-                              ),
-                              child: Text(
-                                _error!,
-                                style: const TextStyle(color: AppTheme.danger, fontSize: 12),
-                              ),
-                            ),
-                          ],
-                        ],
+                  const SizedBox(height: 10),
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.28),
+                        borderRadius: BorderRadius.circular(99),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      if (!widget.required)
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(desktop ? 28 : 20, 16, desktop ? 16 : 12, 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(14),
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                AppTheme.accent.withValues(alpha: 0.35),
+                                AppTheme.primary.withValues(alpha: 0.2),
+                              ],
+                            ),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppTheme.accent.withValues(alpha: 0.22),
+                                blurRadius: 16,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.assignment_turned_in_rounded,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
                         Expanded(
-                          child: OutlinedButton(
-                            onPressed: _submitting
-                                ? null
-                                : () => Navigator.of(context, rootNavigator: true).pop(false),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppTheme.textMuted,
-                              side: BorderSide(
-                                color: const Color(0xFF93C5FD).withValues(alpha: 0.22),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                            child: const Text('Later'),
-                          ),
-                        ),
-                      if (!widget.required) const SizedBox(width: 10),
-                      Expanded(
-                        flex: widget.required ? 1 : 2,
-                        child: FilledButton(
-                          onPressed: _submitting ? null : _submit,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppTheme.primary,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            elevation: 0,
-                          ),
-                          child: _submitting
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : Text(
-                                  widget.existingReport != null
-                                      ? 'Update report'
-                                      : 'Submit report',
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isUpdate ? 'Update Report' : 'Submit Report',
+                                style: TextStyle(
+                                  color: AppTheme.textPrimary,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: desktop ? 22 : 18,
+                                  letterSpacing: -0.3,
                                 ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                isUpdate
+                                    ? 'Refine today\'s closing summary'
+                                    : 'Wrap up today and set tomorrow\'s focus',
+                                style: TextStyle(
+                                  color: AppTheme.textMuted.withValues(alpha: 0.92),
+                                  fontSize: desktop ? 13.5 : 12.5,
+                                  height: 1.35,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.primary.withValues(alpha: 0.14),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: AppTheme.primaryBright.withValues(alpha: 0.28),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.calendar_today_rounded,
+                                      size: 12,
+                                      color: AppTheme.primaryBright.withValues(alpha: 0.95),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      todayLabel,
+                                      style: const TextStyle(
+                                        color: AppTheme.primaryBright,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
+                        if (!widget.required)
+                          IconButton(
+                            onPressed: _close,
+                            tooltip: 'Close',
+                            style: IconButton.styleFrom(
+                              backgroundColor: Colors.white.withValues(alpha: 0.06),
+                            ),
+                            icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: desktop ? 28 : 20),
+                    child: Divider(height: 1, color: Colors.white.withValues(alpha: 0.08)),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.fromLTRB(
+                        desktop ? 28 : 20,
+                        16,
+                        desktop ? 28 : 20,
+                        12,
                       ),
-                    ],
+                      child: desktop
+                          ? _desktopFormBody()
+                          : _mobileFormBody(),
+                    ),
+                  ),
+                  Container(
+                    padding: EdgeInsets.fromLTRB(
+                      desktop ? 28 : 20,
+                      12,
+                      desktop ? 28 : 20,
+                      desktop ? 20 : 14,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                      ),
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.white.withValues(alpha: 0.02),
+                          Colors.black.withValues(alpha: 0.18),
+                        ],
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        if (!widget.required)
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: _submitting ? null : _close,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppTheme.textMuted,
+                                side: BorderSide(
+                                  color: const Color(0xFF93C5FD).withValues(alpha: 0.22),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 15),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              child: const Text('Later', style: TextStyle(fontWeight: FontWeight.w600)),
+                            ),
+                          ),
+                        if (!widget.required) const SizedBox(width: 12),
+                        Expanded(
+                          flex: widget.required ? 1 : 2,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(14),
+                              gradient: LinearGradient(
+                                colors: [
+                                  AppTheme.primaryBright,
+                                  AppTheme.primary,
+                                  AppTheme.primary.withValues(alpha: 0.88),
+                                ],
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppTheme.primary.withValues(alpha: 0.35),
+                                  blurRadius: 18,
+                                  offset: const Offset(0, 8),
+                                ),
+                              ],
+                            ),
+                            child: FilledButton(
+                              onPressed: _submitting ? null : _submit,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: Colors.transparent,
+                                shadowColor: Colors.transparent,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 15),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              child: _submitting
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : Text(
+                                      isUpdate ? 'Update report' : 'Submit report',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 14,
+                                        letterSpacing: 0.2,
+                                      ),
+                                    ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -694,30 +720,329 @@ class _ClosingReportDialogContentState extends State<_ClosingReportDialogContent
     );
   }
 
-  Widget _field(String label, TextEditingController c, {int maxLines = 1, bool required = true}) {
+  Widget _mobileFormBody() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sectionCard(
+          icon: Icons.check_circle_outline_rounded,
+          title: 'Today',
+          subtitle: 'What you accomplished',
+          child: _field(
+            'What did you do today?',
+            _whatIDid,
+            maxLines: 4,
+            hint: 'Shipped features, fixed bugs, meetings…',
+          ),
+        ),
+        const SizedBox(height: 12),
+        _sectionCard(
+          icon: Icons.flag_outlined,
+          title: 'Tomorrow',
+          subtitle: 'Next focus',
+          child: _field(
+            'What will you do next?',
+            _whatIWillDo,
+            maxLines: 3,
+            hint: 'Priorities for the next work day…',
+          ),
+        ),
+        const SizedBox(height: 12),
+        _sectionCard(
+          icon: Icons.warning_amber_rounded,
+          title: 'Blockers',
+          subtitle: 'Optional',
+          child: _field(
+            'Anything blocking progress?',
+            _blockers,
+            maxLines: 2,
+            required: false,
+            hint: 'Waiting on review, access, decisions…',
+          ),
+        ),
+        const SizedBox(height: 12),
+        _dependenciesCard(),
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          _errorBanner(_error!),
+        ],
+      ],
+    );
+  }
+
+  Widget _desktopFormBody() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: _sectionCard(
+                icon: Icons.check_circle_outline_rounded,
+                title: 'Today',
+                subtitle: 'What you accomplished',
+                child: _field(
+                  'What did you do today?',
+                  _whatIDid,
+                  maxLines: 5,
+                  hint: 'Shipped features, fixed bugs, meetings…',
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: _sectionCard(
+                icon: Icons.flag_outlined,
+                title: 'Tomorrow',
+                subtitle: 'Next focus',
+                child: _field(
+                  'What will you do next?',
+                  _whatIWillDo,
+                  maxLines: 5,
+                  hint: 'Priorities for the next work day…',
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: _sectionCard(
+                icon: Icons.warning_amber_rounded,
+                title: 'Blockers',
+                subtitle: 'Optional',
+                child: _field(
+                  'Anything blocking progress?',
+                  _blockers,
+                  maxLines: 3,
+                  required: false,
+                  hint: 'Waiting on review, access, decisions…',
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(child: _dependenciesCard()),
+          ],
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 14),
+          _errorBanner(_error!),
+        ],
+      ],
+    );
+  }
+
+  Widget _sectionCard({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        color: Colors.white.withValues(alpha: 0.035),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  color: AppTheme.primary.withValues(alpha: 0.16),
+                ),
+                child: Icon(icon, size: 17, color: AppTheme.primaryBright),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13.5,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: AppTheme.textMuted.withValues(alpha: 0.85),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _dependenciesCard() {
+    return _sectionCard(
+      icon: Icons.groups_2_outlined,
+      title: 'Dependencies',
+      subtitle: 'Optional teammates',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_loadingEmployees)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            )
+          else if (_employees.isEmpty)
+            Text(
+              'No colleagues available for dependencies',
+              style: TextStyle(
+                color: AppTheme.textMuted.withValues(alpha: 0.7),
+                fontSize: 12,
+              ),
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _employees.map((e) {
+                final id = _employeeId(e);
+                if (id == null) return const SizedBox.shrink();
+                final selected = _dependencyIds.contains(id);
+                return FilterChip(
+                  label: Text(_employeeLabel(e), style: const TextStyle(fontSize: 11.5)),
+                  selected: selected,
+                  onSelected: _submitting
+                      ? null
+                      : (v) => setState(() {
+                            if (v) {
+                              _dependencyIds.add(id);
+                            } else {
+                              _dependencyIds.remove(id);
+                            }
+                          }),
+                  selectedColor: AppTheme.primary.withValues(alpha: 0.38),
+                  checkmarkColor: Colors.white,
+                  labelStyle: TextStyle(
+                    color: selected ? Colors.white : AppTheme.textMuted,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  ),
+                  backgroundColor: Colors.white.withValues(alpha: 0.04),
+                  side: BorderSide(
+                    color: selected
+                        ? AppTheme.primaryBright.withValues(alpha: 0.45)
+                        : const Color(0xFF93C5FD).withValues(alpha: 0.18),
+                  ),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                );
+              }).toList(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _errorBanner(String message) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.danger.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.danger.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline_rounded, color: AppTheme.danger, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(color: AppTheme.danger, fontSize: 12.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _field(
+    String label,
+    TextEditingController c, {
+    int maxLines = 1,
+    bool required = true,
+    String? hint,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: AppTheme.textMuted.withValues(alpha: 0.9),
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
+        Row(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: AppTheme.textMuted.withValues(alpha: 0.95),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (required) ...[
+              const SizedBox(width: 4),
+              Text(
+                '*',
+                style: TextStyle(color: AppTheme.danger.withValues(alpha: 0.85), fontSize: 12),
+              ),
+            ],
+          ],
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
         Container(
-          decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: const Color(0xFF0A1628).withValues(alpha: 0.55),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           child: TextField(
             controller: c,
             maxLines: maxLines,
             enabled: !_submitting,
-            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
-            decoration: const InputDecoration(
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13.5, height: 1.4),
+            decoration: InputDecoration(
+              hintText: hint,
+              hintStyle: TextStyle(
+                color: AppTheme.textMuted.withValues(alpha: 0.45),
+                fontSize: 13,
+              ),
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
             ),
           ),
         ),

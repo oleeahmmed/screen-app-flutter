@@ -113,10 +113,43 @@ class UserDataService {
     return prefs.getString('subscription_status') ?? '';
   }
   
-  // Check if user is admin
+  // Check if user is admin (legacy flag and/or company owner/admin role)
   static Future<bool> isAdmin() async {
+    return isCompanyAdmin();
+  }
+
+  static Future<String> getRole() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('is_admin') ?? false;
+    return (prefs.getString('role') ?? '').trim().toLowerCase();
+  }
+
+  /// Company owner or admin — full company vault access.
+  static Future<bool> isCompanyAdmin() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('is_admin') == true) return true;
+    final role = await getRole();
+    return role == 'owner' || role == 'admin';
+  }
+
+  /// Matches backend Employee.is_manager_or_above (vault privileged).
+  static Future<bool> isManagerOrAbove() async {
+    if (await isCompanyAdmin()) return true;
+    final role = await getRole();
+    return role == 'manager';
+  }
+
+  /// Persist role + is_admin from login/access-check employee payload.
+  static Future<void> saveEmployeeRoleFlags(Map? employee) async {
+    if (employee == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final role = (employee['role'] ?? '').toString().trim().toLowerCase();
+    if (role.isNotEmpty) {
+      await prefs.setString('role', role);
+    }
+    final isAdminFlag = employee['is_admin'] == true ||
+        role == 'owner' ||
+        role == 'admin';
+    await prefs.setBool('is_admin', isAdminFlag);
   }
   
   // Check if access is granted

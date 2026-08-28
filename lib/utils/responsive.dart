@@ -48,12 +48,14 @@ class Responsive {
   }
 
   /// Space reserved above [AppBottomNavBar] when [Scaffold.extendBody] is true.
+  ///
+  /// Only the icon bar + chrome — system gesture inset is already consumed by
+  /// [AppBottomNavBar]'s own SafeArea. Including it here doubles the gap.
   static double bottomNavInset(BuildContext context) {
-    final mq = MediaQuery.of(context);
-    final compact = mq.size.width < 420;
+    final compact = MediaQuery.sizeOf(context).width < 420;
     final navHeight = compact ? 56.0 : 62.0;
-    const navChrome = 14.0; // AppBottomNavBar vertical padding
-    return mq.padding.bottom + navHeight + navChrome;
+    const navChrome = 8.0;
+    return navHeight + navChrome;
   }
 
   static int projectGridColumns(BuildContext context) {
@@ -74,13 +76,33 @@ class Responsive {
     );
   }
 
-  /// My Task page — responsive grid (2+ columns on phones for less scrolling).
-  static int taskGridColumns(BuildContext context) {
+  /// Minimum card width so 2-column My Tasks fits typical desktop windows.
+  static const double taskCardMinWidth = 248;
+
+  /// Chat list | thread split (also used when window is moderately narrow).
+  static const double chatSplitMinWidth = 560;
+
+  static bool useChatSplit(BuildContext context) =>
+      widthOf(context) >= chatSplitMinWidth;
+
+  static double chatListPaneWidth(BuildContext context) {
     final w = widthOf(context);
-    if (w >= 1600) return 4;
-    if (w >= 1100) return 3;
-    if (w >= 300) return 2;
-    return 1;
+    return (w * 0.28).clamp(220.0, 340.0);
+  }
+
+  /// My Task grid columns from available content width (resize-safe).
+  /// Default desktop widths → 2 cols; narrow phone → 1; very wide → 3.
+  static int taskGridColumnsForWidth(double availableWidth) {
+    const gap = 10.0;
+    if (availableWidth < taskCardMinWidth * 2 + gap) return 1;
+    final cols = ((availableWidth + gap) / (taskCardMinWidth + gap)).floor();
+    return cols.clamp(1, 3);
+  }
+
+  static int taskGridColumns(BuildContext context) {
+    final pad = pagePadding(context);
+    final available = widthOf(context) - (pad * 2);
+    return taskGridColumnsForWidth(available);
   }
 
   static bool useTaskGrid(BuildContext context) => taskGridColumns(context) > 1;

@@ -10,7 +10,7 @@ import 'task_assignee_button.dart';
 import 'task_stage_dropdown.dart';
 import 'task_status_dropdown.dart';
 
-/// Minimal task card for My Task — quick actions without opening detail.
+/// My Task card — same actions as before, cleaner spacing and meta.
 class MyTaskCard extends StatelessWidget {
   final Map<String, dynamic> task;
   final ApiService apiService;
@@ -65,9 +65,10 @@ class MyTaskCard extends StatelessWidget {
     final projectName = taskProjectNameFrom(task);
     final dueLabel = _formatDueDate(task['due_date']);
     final hasStages = stages.isNotEmpty;
+    final pad = compactGrid ? 8.0 : 14.0;
 
     return Container(
-      decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
+      decoration: AppTheme.loginInsetDecoration(borderRadius: compactGrid ? 12 : 14),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -76,80 +77,48 @@ class MyTaskCard extends StatelessWidget {
             color: Colors.transparent,
             child: InkWell(
               onTap: () => _openDetail(context),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(13)),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(compactGrid ? 11 : 13)),
               child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  compactGrid ? 10 : 14,
-                  compactGrid ? 10 : 14,
-                  compactGrid ? 10 : 14,
-                  compactGrid ? 4 : 10,
-                ),
+                padding: EdgeInsets.fromLTRB(pad, pad, pad, compactGrid ? 4 : 10),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       title,
                       style: TextStyle(
-                        fontSize: compactGrid ? 13 : 15,
+                        fontSize: compactGrid ? 12.5 : 15,
                         fontWeight: FontWeight.w600,
                         height: 1.25,
-                        color: AppTheme.textPrimary,
-                        decoration: isCompleted ? TextDecoration.lineThrough : null,
+                        color: isCompleted
+                            ? AppTheme.textMuted
+                            : AppTheme.textPrimary,
+                        decoration:
+                            isCompleted ? TextDecoration.lineThrough : null,
                         decorationColor: AppTheme.textMuted,
                       ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (compactGrid && (projectName.isNotEmpty || dueLabel.isNotEmpty)) ...[
-                      const SizedBox(height: 6),
-                      if (projectName.isNotEmpty)
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.folder_open_rounded,
-                              size: 11,
-                              color: AppTheme.textMuted.withValues(alpha: 0.8),
+                    if (projectName.isNotEmpty || dueLabel.isNotEmpty) ...[
+                      SizedBox(height: compactGrid ? 6 : 8),
+                      Wrap(
+                        spacing: compactGrid ? 8 : 10,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          if (projectName.isNotEmpty)
+                            _MetaLine(
+                              icon: Icons.folder_open_rounded,
+                              label: projectName,
                             ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                projectName,
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppTheme.textMuted.withValues(alpha: 0.9),
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                          if (dueLabel.isNotEmpty)
+                            _MetaLine(
+                              icon: Icons.event_rounded,
+                              label: dueLabel,
+                              accent: true,
                             ),
-                          ],
-                        ),
-                      if (dueLabel.isNotEmpty) ...[
-                        if (projectName.isNotEmpty) const SizedBox(height: 3),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.event_rounded,
-                              size: 11,
-                              color: AppTheme.accent.withValues(alpha: 0.85),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: Text(
-                                dueLabel,
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppTheme.accent.withValues(alpha: 0.9),
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                        ],
+                      ),
                     ],
                   ],
                 ),
@@ -158,10 +127,10 @@ class MyTaskCard extends StatelessWidget {
           ),
           Padding(
             padding: EdgeInsets.fromLTRB(
-              compactGrid ? 8 : 12,
+              compactGrid ? 6 : 12,
               0,
-              compactGrid ? 8 : 12,
-              compactGrid ? 8 : 12,
+              compactGrid ? 6 : 12,
+              compactGrid ? 6 : 12,
             ),
             child: compactGrid
                 ? Column(
@@ -183,7 +152,9 @@ class MyTaskCard extends StatelessWidget {
                         if (hasStages) ...[
                           const SizedBox(height: 6),
                           TaskStageDropdown(
-                            key: ValueKey<String>('stg_${task['id']}_${task['stage_id']}'),
+                            key: ValueKey<String>(
+                              'stg_${task['id']}_${task['stage_id']}',
+                            ),
                             taskId: taskId,
                             task: task,
                             stages: stages,
@@ -235,7 +206,9 @@ class MyTaskCard extends StatelessWidget {
                               const SizedBox(width: 8),
                               Expanded(
                                 child: TaskStageDropdown(
-                                  key: ValueKey<String>('stg_${task['id']}_${task['stage_id']}'),
+                                  key: ValueKey<String>(
+                                    'stg_${task['id']}_${task['stage_id']}',
+                                  ),
                                   taskId: taskId,
                                   task: task,
                                   stages: stages,
@@ -275,6 +248,45 @@ class MyTaskCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _MetaLine extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool accent;
+
+  const _MetaLine({
+    required this.icon,
+    required this.label,
+    this.accent = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = accent
+        ? AppTheme.accent.withValues(alpha: 0.9)
+        : AppTheme.textMuted.withValues(alpha: 0.88);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 4),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 180),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              color: color,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }

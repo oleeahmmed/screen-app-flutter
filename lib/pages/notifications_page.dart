@@ -8,6 +8,7 @@ import '../utils/app_toast.dart';
 import '../utils/notification_ui.dart';
 import '../utils/platform_capabilities.dart';
 import '../utils/responsive.dart';
+import 'task_detail_page.dart';
 
 class NotificationsPage extends StatefulWidget {
   final ApiService apiService;
@@ -299,11 +300,70 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }
 
   Future<void> _markOneRead(dynamic n) async {
-    if (n['is_read'] == true) return;
+    if (n is! Map || n['is_read'] == true) return;
     final id = n['id'];
     if (id == null) return;
     await widget.apiService.markNotificationRead(id is int ? id : int.parse('$id'));
     await _afterListMutation();
+  }
+
+  int? _taskIdFromNotification(dynamic n) {
+    if (n is! Map) return null;
+    for (final key in ['task_id', 'task']) {
+      final parsed = _positiveInt(n[key]);
+      if (parsed != null) return parsed;
+    }
+    final objectType = n['object_type']?.toString().toLowerCase() ?? '';
+    if (objectType == 'task') {
+      final parsed = _positiveInt(n['object_id']);
+      if (parsed != null) return parsed;
+    }
+    final link = n['link']?.toString() ?? '';
+    final match = RegExp(r'tasks?/(\d+)', caseSensitive: false).firstMatch(link);
+    if (match != null) return int.tryParse(match.group(1)!);
+    return null;
+  }
+
+  int? _positiveInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v > 0 ? v : null;
+    if (v is num) {
+      final n = v.round();
+      return n > 0 ? n : null;
+    }
+    final n = int.tryParse('$v');
+    return n != null && n > 0 ? n : null;
+  }
+
+  bool _isChatNotification(String type) {
+    switch (type) {
+      case 'new_message':
+      case 'new_group_message':
+      case 'mention':
+      case 'group_added':
+      case 'group_removed':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  Future<void> _onNotificationTap(dynamic n) async {
+    unawaited(_markOneRead(n));
+    final taskId = _taskIdFromNotification(n);
+    if (taskId != null) {
+      if (!mounted) return;
+      openTaskDetailPage(
+        context,
+        apiService: widget.apiService,
+        taskId: taskId,
+      );
+      return;
+    }
+    final type = n is Map ? n['notification_type']?.toString() ?? '' : '';
+    if (_isChatNotification(type)) {
+      AppNavigation.instance.goChat();
+    }
   }
 
   Widget _card(dynamic n) {
@@ -312,7 +372,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
     final color = NotificationUi.colorFor(type);
 
     return GestureDetector(
-      onTap: () => _markOneRead(n),
+      onTap: () => _onNotificationTap(n),
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(14),

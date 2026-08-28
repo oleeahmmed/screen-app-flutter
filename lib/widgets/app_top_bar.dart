@@ -49,9 +49,13 @@ class AppTopBar extends StatelessWidget {
       child: SafeArea(
         bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 6, 4, 8),
+          padding: const EdgeInsets.fromLTRB(8, 6, 4, 8),
           child: Row(
             children: [
+              if (ModalRoute.of(context)?.canPop ?? false) ...[
+                const AppBackButton(color: AppTheme.textMuted),
+                const SizedBox(width: 2),
+              ],
               _brandMark(),
               const SizedBox(width: 12),
               Expanded(

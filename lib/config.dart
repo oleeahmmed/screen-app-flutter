@@ -29,18 +29,30 @@ class AppConfig {
   static String get authTokenRefreshUrl => '$apiBaseUrl/token/refresh/';
   static String get authAccessCheckUrl => '$apiBaseUrl/auth/access-check/';
 
-  /// Build ws/wss URL string (no implicit :0 port — fixes Windows WebSocket).
-  static String _wsUrl(String path, Map<String, String> query) {
+  /// Build ws/wss [Uri] without implicit `:0` port (fixes Windows WebSocket).
+  static Uri _wsUri(String path, Map<String, String> query) {
     final u = Uri.parse(_apiOrigin);
     final secure = u.scheme == 'https' || u.scheme == 'wss';
     final scheme = secure ? 'wss' : 'ws';
     final defaultPort = secure ? 443 : 80;
     final port = u.hasPort && u.port > 0 ? u.port : defaultPort;
-    final portSuffix = port != defaultPort ? ':$port' : '';
-    final q = query.entries
-        .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
-        .join('&');
-    return '$scheme://${u.host}$portSuffix$path?$q';
+
+    if (port == defaultPort) {
+      return Uri(
+        scheme: scheme,
+        host: u.host,
+        path: path,
+        queryParameters: query,
+      );
+    }
+
+    return Uri(
+      scheme: scheme,
+      host: u.host,
+      port: port,
+      path: path,
+      queryParameters: query,
+    );
   }
 
   static String get wsBaseUri {
@@ -49,21 +61,23 @@ class AppConfig {
     final scheme = secure ? 'wss' : 'ws';
     final defaultPort = secure ? 443 : 80;
     final port = u.hasPort && u.port > 0 ? u.port : defaultPort;
-    final portSuffix = port != defaultPort ? ':$port' : '';
-    return '$scheme://${u.host}$portSuffix';
+    if (port == defaultPort) {
+      return '$scheme://${u.host}';
+    }
+    return '$scheme://${u.host}:$port';
   }
 
   /// WebSocket for chat + personal notifications (JWT via query string).
   static String chatWsUrl(String token) =>
-      _wsUrl('/ws/chat/', {'token': token});
+      _wsUri('/ws/chat/', {'token': token}).toString();
 
-  static Uri chatWsUri(String token) => Uri.parse(chatWsUrl(token));
+  static Uri chatWsUri(String token) => _wsUri('/ws/chat/', {'token': token});
 
   static String p2pWsUrl(String sessionId, String token) =>
-      _wsUrl('/ws/p2p/$sessionId/', {'token': token});
+      _wsUri('/ws/p2p/$sessionId/', {'token': token}).toString();
 
   static Uri p2pWsUri(String sessionId, String token) =>
-      Uri.parse(p2pWsUrl(sessionId, token));
+      _wsUri('/ws/p2p/$sessionId/', {'token': token});
 
   static String get screenshotUploadUrl => '$apiBaseUrl/screenshots/upload/';
   static String get checkInUrl => '$apiBaseUrl/attendance/checkin/';
@@ -149,10 +163,16 @@ class AppConfig {
   static String get closingReportsPendingUrl => '$apiBaseUrl/closing-reports/pending/';
 
   // Project vault (credentials per project)
+  static String get vaultMyHubUrl => '$apiBaseUrl/projects/vault/my/';
+  static String get vaultSharedWithMeUrl => '$apiBaseUrl/projects/vault/shared-with-me/';
   static String vaultCategoriesUrl(int projectId) =>
       '$apiBaseUrl/projects/$projectId/vault/categories/';
   static String vaultCategoryUrl(int projectId, int categoryId) =>
       '$apiBaseUrl/projects/$projectId/vault/categories/$categoryId/';
+  static String vaultCategoryAccessUrl(int projectId, int categoryId) =>
+      '$apiBaseUrl/projects/$projectId/vault/categories/$categoryId/access/';
+  static String vaultCategoryAccessUserUrl(int projectId, int categoryId, int userId) =>
+      '$apiBaseUrl/projects/$projectId/vault/categories/$categoryId/access/$userId/';
   static String vaultEntriesUrl(int projectId) =>
       '$apiBaseUrl/projects/$projectId/vault/entries/';
   static String vaultEntryUrl(int projectId, int entryId) =>

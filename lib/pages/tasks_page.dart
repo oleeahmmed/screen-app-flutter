@@ -42,6 +42,10 @@ class _TasksPageState extends State<TasksPage> {
   bool _loading = true;
   String _filter = 'pending';
   int? _selectedProjectId;
+  /// null = all stages; only used when a project is selected.
+  /// Use `_unstagedSelected` for tasks with no stage.
+  int? _selectedStageId;
+  bool _unstagedSelected = false;
   Timer? _refreshTimer;
 
   @override
@@ -55,6 +59,11 @@ class _TasksPageState extends State<TasksPage> {
   void dispose() {
     _refreshTimer?.cancel();
     super.dispose();
+  }
+
+  void _clearStageFilter() {
+    _selectedStageId = null;
+    _unstagedSelected = false;
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -77,6 +86,9 @@ class _TasksPageState extends State<TasksPage> {
         if (_selectedProjectId != null &&
             !projects.any((p) => _projectId(p) == _selectedProjectId)) {
           _selectedProjectId = null;
+          _clearStageFilter();
+        } else if (_selectedProjectId != null) {
+          _pruneStageSelection();
         }
       });
       await _loadProjectMetaForTasks(tasks);
@@ -86,6 +98,21 @@ class _TasksPageState extends State<TasksPage> {
         AppToast.error(context, result['error']?.toString() ?? 'Could not load tasks');
       }
     }
+  }
+
+  void _pruneStageSelection() {
+    if (_selectedProjectId == null) {
+      _clearStageFilter();
+      return;
+    }
+    if (!_unstagedSelected && _selectedStageId == null) return;
+    final stages = _stagesForSelectedProject();
+    final stillValid = stages.any((s) {
+      final id = s['id'];
+      if (_unstagedSelected) return id == null;
+      return id is int && id == _selectedStageId;
+    });
+    if (!stillValid) _clearStageFilter();
   }
 
   int? _projectId(Map<String, dynamic> p) {
@@ -170,8 +197,20 @@ class _TasksPageState extends State<TasksPage> {
     return _tasks.where((t) => taskProjectIdFrom(t) == _selectedProjectId).toList();
   }
 
-  List<dynamic> get _filteredTasks {
+  List<dynamic> get _stageScopedTasks {
     final base = _scopedTasks;
+    if (_selectedProjectId == null) return base;
+    if (_unstagedSelected) {
+      return base.where((t) => taskStageIdFrom(t) == null).toList();
+    }
+    if (_selectedStageId != null) {
+      return base.where((t) => taskStageIdFrom(t) == _selectedStageId).toList();
+    }
+    return base;
+  }
+
+  List<dynamic> get _filteredTasks {
+    final base = _stageScopedTasks;
     if (_filter == 'pending') {
       return base.where((t) => !taskIsCompleted(t)).toList();
     }
@@ -181,8 +220,55 @@ class _TasksPageState extends State<TasksPage> {
     return base;
   }
 
-  int get _pendingCount => _scopedTasks.where((t) => !taskIsCompleted(t)).length;
-  int get _completedCount => _scopedTasks.where((t) => taskIsCompleted(t)).length;
+  int get _pendingCount => _stageScopedTasks.where((t) => !taskIsCompleted(t)).length;
+  int get _completedCount => _stageScopedTasks.where((t) => taskIsCompleted(t)).length;
+
+  /// Stages where this user has assigned tasks in the selected project.
+  List<Map<String, dynamic>> _stagesForSelectedProject() {
+    if (_selectedProjectId == null) return const [];
+
+    Map<String, dynamic>? project;
+    for (final p in _projects) {
+      if (_projectId(p) == _selectedProjectId) {
+        project = p;
+        break;
+      }
+    }
+
+    final apiStages = project?['stages'];
+    if (apiStages is List && apiStages.isNotEmpty) {
+      return apiStages
+          .whereType<Map>()
+          .map((s) => Map<String, dynamic>.from(s))
+          .toList();
+    }
+
+    // Fallback: derive from assigned tasks if API has no stages yet.
+    final byId = <String, Map<String, dynamic>>{};
+    for (final t in _scopedTasks) {
+      final sid = taskStageIdFrom(t);
+      final key = sid?.toString() ?? 'none';
+      if (!byId.containsKey(key)) {
+        byId[key] = {
+          'id': sid,
+          'name': sid == null
+              ? 'No stage'
+              : (taskStageNameFrom(t).isNotEmpty ? taskStageNameFrom(t) : 'Stage'),
+          'task_count': 0,
+        };
+      }
+      byId[key]!['task_count'] = (byId[key]!['task_count'] as int) + 1;
+    }
+    final list = byId.values.toList();
+    list.sort((a, b) {
+      final ai = a['id'];
+      final bi = b['id'];
+      if (ai == null && bi != null) return 1;
+      if (ai != null && bi == null) return -1;
+      return (a['name']?.toString() ?? '').compareTo(b['name']?.toString() ?? '');
+    });
+    return list;
+  }
 
   int _countInProject(int? projectId) {
     Iterable<dynamic> list = _tasks;
@@ -211,14 +297,13 @@ class _TasksPageState extends State<TasksPage> {
     return ((done / _tasks.length) * 100).round();
   }
 
-  String get _selectedProjectLabel {
-    if (_selectedProjectId == null) return 'All Projects';
-    for (final p in _projects) {
-      if (_projectId(p) == _selectedProjectId) {
-        return p['name']?.toString() ?? 'Project';
-      }
-    }
-    return 'Project';
+  int _stageTaskCount(Map<String, dynamic> stage) {
+    final id = stage['id'];
+    return _scopedTasks.where((t) {
+      final sid = taskStageIdFrom(t);
+      if (id == null) return sid == null;
+      return sid == (id is int ? id : int.tryParse('$id'));
+    }).length;
   }
 
   Future<void> _toggleTask(dynamic task) async {
@@ -238,77 +323,6 @@ class _TasksPageState extends State<TasksPage> {
     } else {
       AppToast.updateFailed(context, result['error']?.toString());
     }
-  }
-
-  Future<void> _openProjectFilter() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      barrierColor: AppTheme.modalBarrierColor,
-      builder: (ctx) {
-        return AppTheme.glassBlur(
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    'Filter by project',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  _projectFilterTile(
-                    ctx,
-                    label: 'All Projects',
-                    count: _countInProject(null),
-                    pct: _overallPct,
-                    selected: _selectedProjectId == null,
-                    onTap: () {
-                      setState(() => _selectedProjectId = null);
-                      Navigator.pop(ctx);
-                    },
-                  ),
-                  const SizedBox(height: 6),
-                  ..._projects.map(
-                    (p) => Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: _projectFilterTile(
-                        ctx,
-                        label: p['name']?.toString() ?? 'Project',
-                        count: _countInProject(_projectId(p)),
-                        pct: _projectPct(p),
-                        selected: _selectedProjectId == _projectId(p),
-                        onTap: () {
-                          setState(() => _selectedProjectId = _projectId(p));
-                          Navigator.pop(ctx);
-                        },
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
   }
 
   Widget _projectFilterTile(
@@ -394,31 +408,86 @@ class _TasksPageState extends State<TasksPage> {
   Widget build(BuildContext context) {
     final pad = Responsive.pagePadding(context);
     final displayTasks = _filteredTasks;
+    final selectedProjectName = () {
+      if (_selectedProjectId == null) return null;
+      for (final p in _projects) {
+        if (_projectId(p) == _selectedProjectId) {
+          return p['name']?.toString() ?? 'Project';
+        }
+      }
+      return null;
+    }();
+    final stages = _stagesForSelectedProject();
+    final stageFilterActive = _unstagedSelected || _selectedStageId != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: EdgeInsets.fromLTRB(pad, 10, pad, 8),
-          child: Container(
-            decoration: AppTheme.loginShell().copyWith(borderRadius: BorderRadius.circular(18)),
-            padding: const EdgeInsets.all(14),
-            child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      SizedBox(width: 148, child: _buildProjectFilterButton()),
-                      const SizedBox(width: 8),
-                      _filterChip('To do', 'pending', '$_pendingCount'),
-                      const SizedBox(width: 6),
-                      _filterChip('Done', 'completed', '$_completedCount'),
-                      const SizedBox(width: 6),
-                      _filterChip('All', 'all', '${_scopedTasks.length}'),
-                      const SizedBox(width: 6),
-                      _reloadButton(),
-                    ],
+          padding: EdgeInsets.fromLTRB(pad, 8, pad, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'My Tasks',
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: Responsive.isDesktop(context) ? 22 : 18,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ),
+                  _reloadButton(),
+                  const SizedBox(width: 6),
+                  _projectFilterButton(selectedProjectName),
+                ],
+              ),
+              const SizedBox(height: 10),
+              _statusSegment(),
+              if (selectedProjectName != null) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: InputChip(
+                    label: Text(selectedProjectName),
+                    avatar: const Icon(Icons.folder_outlined, size: 16),
+                    onDeleted: () => setState(() {
+                      _selectedProjectId = null;
+                      _clearStageFilter();
+                    }),
+                    deleteIconColor: AppTheme.textMuted,
+                    backgroundColor: AppTheme.primary.withValues(alpha: 0.14),
+                    side: BorderSide(color: AppTheme.primaryBright.withValues(alpha: 0.3)),
+                    labelStyle: const TextStyle(
+                      color: AppTheme.primaryBright,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
+                if (stages.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _stageChips(stages),
+                ],
+              ],
+              const SizedBox(height: 8),
+              Text(
+                _filter == 'pending'
+                    ? '$_pendingCount to do'
+                    : (_filter == 'completed'
+                        ? '$_completedCount done'
+                        : '${_stageScopedTasks.length} tasks'),
+                style: TextStyle(
+                  color: AppTheme.textMuted.withValues(alpha: 0.9),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
           ),
         ),
         Expanded(
@@ -426,113 +495,222 @@ class _TasksPageState extends State<TasksPage> {
               ? const Center(
                   child: CircularProgressIndicator(color: AppTheme.primaryBright),
                 )
-              : displayTasks.isEmpty
-                  ? _buildEmptyState()
-                  : Padding(
-                      padding: EdgeInsets.fromLTRB(pad, 0, pad, 88),
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final cols = Responsive.taskGridColumns(context);
-                          const gap = 10.0;
-                          // Width after page padding — otherwise Wrap can't fit 2 cols
-                          // and leaves a large empty gap on the right.
-                          final available = constraints.maxWidth;
-                          final itemWidth = cols == 1
-                              ? available
-                              : ((available - gap * (cols - 1)) / cols)
-                                  .floorToDouble();
-                          final compact = Responsive.useTaskGrid(context);
+              : RefreshIndicator(
+                  color: AppTheme.primaryBright,
+                  backgroundColor: AppTheme.surface,
+                  onRefresh: () => _load(),
+                  child: displayTasks.isEmpty
+                      ? ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: [
+                            SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+                            _buildEmptyState(stageFilterActive: stageFilterActive),
+                          ],
+                        )
+                      : LayoutBuilder(
+                          builder: (context, constraints) {
+                            const gap = 10.0;
+                            final available = (constraints.maxWidth - (pad * 2)).clamp(0.0, double.infinity);
+                            final cols = Responsive.taskGridColumnsForWidth(available);
+                            final itemWidth = cols == 1
+                                ? available
+                                : (((available - gap * (cols - 1)) / cols) - 0.5)
+                                    .clamp(120.0, available);
+                            final compact = cols > 1;
 
-                          return SingleChildScrollView(
-                            child: Wrap(
-                              spacing: gap,
-                              runSpacing: gap,
-                              children: [
-                                for (final task in displayTasks)
-                                  _buildTaskCard(
-                                    task,
-                                    width: itemWidth,
-                                    compact: compact,
-                                  ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
+                            return SingleChildScrollView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: EdgeInsets.fromLTRB(pad, 8, pad, 96),
+                              child: Wrap(
+                                spacing: gap,
+                                runSpacing: gap,
+                                children: [
+                                  for (final task in displayTasks)
+                                    _buildTaskCard(
+                                      task,
+                                      width: itemWidth,
+                                      compact: compact,
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
         ),
       ],
     );
   }
 
-  Widget _buildProjectFilterButton() {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: _openProjectFilter,
-        borderRadius: BorderRadius.circular(10),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-          decoration: AppTheme.loginInsetDecoration(borderRadius: 10),
-          child: Row(
-            children: [
-              const Icon(Icons.folder_open_rounded, size: 16, color: AppTheme.accent),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  _selectedProjectLabel,
-                  style: const TextStyle(
-                    color: AppTheme.textPrimary,
+  Widget _stageChips(List<Map<String, dynamic>> stages) {
+    Widget chip({
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+      int? count,
+    }) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              color: selected
+                  ? AppTheme.accent.withValues(alpha: 0.18)
+                  : Colors.white.withValues(alpha: 0.05),
+              border: Border.all(
+                color: selected
+                    ? AppTheme.accent.withValues(alpha: 0.45)
+                    : Colors.white.withValues(alpha: 0.1),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: selected ? AppTheme.accent : AppTheme.textMuted,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-              Icon(
-                Icons.expand_more_rounded,
-                size: 18,
-                color: AppTheme.textMuted.withValues(alpha: 0.8),
-              ),
-            ],
+                if (count != null) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    '$count',
+                    style: TextStyle(
+                      color: selected
+                          ? AppTheme.accent
+                          : AppTheme.textMuted.withValues(alpha: 0.8),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
+      );
+    }
+
+    final allSelected = !_unstagedSelected && _selectedStageId == null;
+
+    return SizedBox(
+      height: 36,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          chip(
+            label: 'All stages',
+            selected: allSelected,
+            count: _scopedTasks.length,
+            onTap: () => setState(_clearStageFilter),
+          ),
+          const SizedBox(width: 6),
+          for (final stage in stages) ...[
+            () {
+              final rawId = stage['id'];
+              final stageId = rawId == null
+                  ? null
+                  : (rawId is int ? rawId : int.tryParse('$rawId'));
+              final selected = rawId == null
+                  ? _unstagedSelected
+                  : (!_unstagedSelected && _selectedStageId == stageId);
+              return Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: chip(
+                  label: stage['name']?.toString() ?? 'Stage',
+                  selected: selected,
+                  count: _stageTaskCount(stage),
+                  onTap: () => setState(() {
+                    if (rawId == null) {
+                      _unstagedSelected = true;
+                      _selectedStageId = null;
+                    } else {
+                      _unstagedSelected = false;
+                      _selectedStageId = stageId;
+                    }
+                  }),
+                ),
+              );
+            }(),
+          ],
+        ],
       ),
     );
   }
 
-  Widget _filterChip(String label, String value, String count) {
-    final active = _filter == value;
-    return GestureDetector(
-      onTap: () => setState(() => _filter = value),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        decoration: AppTheme.loginInsetDecoration(
-          borderRadius: 10,
-          emphasized: active,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: active ? AppTheme.textPrimary : AppTheme.textMuted,
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
+  Widget _statusSegment() {
+    Widget seg(String label, String value, String count) {
+      final active = _filter == value;
+      return Expanded(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => setState(() => _filter = value),
+            borderRadius: BorderRadius.circular(12),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: active
+                    ? AppTheme.primary.withValues(alpha: 0.22)
+                    : Colors.transparent,
+                border: Border.all(
+                  color: active
+                      ? AppTheme.primaryBright.withValues(alpha: 0.35)
+                      : Colors.transparent,
+                ),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: active ? AppTheme.textPrimary : AppTheme.textMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    count,
+                    style: TextStyle(
+                      color: active
+                          ? AppTheme.accent
+                          : AppTheme.textMuted.withValues(alpha: 0.75),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
             ),
-            Text(
-              count,
-              style: TextStyle(
-                color: active ? AppTheme.accent : AppTheme.textMuted.withValues(alpha: 0.75),
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
+          ),
         ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: Colors.white.withValues(alpha: 0.04),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        children: [
+          seg('To do', 'pending', '$_pendingCount'),
+          seg('Done', 'completed', '$_completedCount'),
+          seg('All', 'all', '${_stageScopedTasks.length}'),
+        ],
       ),
     );
   }
@@ -559,7 +737,153 @@ class _TasksPageState extends State<TasksPage> {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _projectFilterButton(String? selectedName) {
+    final active = _selectedProjectId != null;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _openFiltersSheet,
+        borderRadius: BorderRadius.circular(12),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: AppTheme.loginInsetDecoration(
+            borderRadius: 12,
+            emphasized: active,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.filter_list_rounded,
+                size: 18,
+                color: active ? AppTheme.accent : AppTheme.textPrimary,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Project',
+                style: TextStyle(
+                  color: active ? AppTheme.accent : AppTheme.textMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openFiltersSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: AppTheme.modalBarrierColor,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModal) {
+            void apply(VoidCallback fn) {
+              setState(fn);
+              setModal(() {});
+            }
+
+            return AppTheme.glassBlur(
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 36,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Filter by project',
+                        style: TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Then pick a stage from that project',
+                        style: TextStyle(
+                          color: AppTheme.textMuted.withValues(alpha: 0.9),
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxHeight: MediaQuery.sizeOf(ctx).height * 0.48,
+                        ),
+                        child: ListView(
+                          shrinkWrap: true,
+                          children: [
+                            _projectFilterTile(
+                              ctx,
+                              label: 'All Projects',
+                              count: _countInProject(null),
+                              pct: _overallPct,
+                              selected: _selectedProjectId == null,
+                              onTap: () {
+                                apply(() {
+                                  _selectedProjectId = null;
+                                  _clearStageFilter();
+                                });
+                                Navigator.pop(ctx);
+                              },
+                            ),
+                            const SizedBox(height: 6),
+                            ..._projects.map(
+                              (p) => Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: _projectFilterTile(
+                                  ctx,
+                                  label: p['name']?.toString() ?? 'Project',
+                                  count: _countInProject(_projectId(p)),
+                                  pct: _projectPct(p),
+                                  selected: _selectedProjectId == _projectId(p),
+                                  onTap: () {
+                                    apply(() {
+                                      final next = _projectId(p);
+                                      if (_selectedProjectId != next) {
+                                        _clearStageFilter();
+                                      }
+                                      _selectedProjectId = next;
+                                    });
+                                    Navigator.pop(ctx);
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyState({required bool stageFilterActive}) {
+    final filteredAway = _tasks.isNotEmpty && _filteredTasks.isEmpty;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -574,11 +898,17 @@ class _TasksPageState extends State<TasksPage> {
                 color: AppTheme.accent.withValues(alpha: 0.12),
                 border: Border.all(color: AppTheme.accent.withValues(alpha: 0.25)),
               ),
-              child: const Icon(Icons.assignment_outlined, color: AppTheme.accent, size: 30),
+              child: Icon(
+                filteredAway ? Icons.filter_alt_off_rounded : Icons.assignment_outlined,
+                color: AppTheme.accent,
+                size: 30,
+              ),
             ),
             const SizedBox(height: 14),
             Text(
-              _filter == 'pending' ? 'No tasks to do' : 'No tasks here',
+              filteredAway
+                  ? 'Nothing in this filter'
+                  : (_filter == 'pending' ? 'No tasks to do' : 'No tasks here'),
               style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 16,
@@ -587,12 +917,27 @@ class _TasksPageState extends State<TasksPage> {
             ),
             const SizedBox(height: 6),
             Text(
-              _filter == 'pending'
-                  ? 'Assigned tasks will show up here.'
-                  : 'Try another filter or project.',
+              filteredAway
+                  ? (stageFilterActive
+                      ? 'Try All stages, or clear the project filter.'
+                      : 'Try All, or clear the project filter.')
+                  : (_filter == 'pending'
+                      ? 'Assigned tasks will show up here.'
+                      : 'Switch to To do to see open work.'),
               textAlign: TextAlign.center,
               style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12),
             ),
+            if (filteredAway) ...[
+              const SizedBox(height: 14),
+              TextButton(
+                onPressed: () => setState(() {
+                  _filter = 'pending';
+                  _selectedProjectId = null;
+                  _clearStageFilter();
+                }),
+                child: const Text('Clear filters'),
+              ),
+            ],
           ],
         ),
       ),

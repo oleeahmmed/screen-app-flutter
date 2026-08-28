@@ -4,3 +4,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 WebSocketChannel connectWs(String url) {
   throw UnsupportedError('WebSocket is not supported on this platform');
 }
+
+WebSocketChannel connectWsUri(Uri uri) {
+  throw UnsupportedError('WebSocket is not supported on this platform');
+}

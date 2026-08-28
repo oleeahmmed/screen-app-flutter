@@ -12,6 +12,8 @@ class AppTabShell extends StatelessWidget {
   final int unreadNotifs;
   final VoidCallback? onLogout;
   final bool showTopBar;
+  final bool showBottomNav;
+  final bool homeStyleBackground;
 
   const AppTabShell({
     super.key,
@@ -20,6 +22,8 @@ class AppTabShell extends StatelessWidget {
     this.unreadNotifs = 0,
     this.onLogout,
     this.showTopBar = true,
+    this.showBottomNav = true,
+    this.homeStyleBackground = false,
   });
 
   void _onTab(int index) {
@@ -44,14 +48,16 @@ class AppTabShell extends StatelessWidget {
           Expanded(child: child),
         ],
       ),
-      bottomNavigationBar: AppBottomNavBar(
-        selectedIndex: selectedIndex,
-        onSelected: _onTab,
-        unreadNotifs: unreadNotifs,
-      ),
+      bottomNavigationBar: showBottomNav
+          ? AppBottomNavBar(
+              selectedIndex: selectedIndex,
+              onSelected: _onTab,
+              unreadNotifs: unreadNotifs,
+            )
+          : null,
     );
 
-    if (selectedIndex == AppNavigation.tabHome) {
+    if (selectedIndex == AppNavigation.tabHome || homeStyleBackground) {
       return AppTheme.loginDashboardBackground(
         context: context,
         child: shell,

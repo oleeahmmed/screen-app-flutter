@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -17,6 +18,7 @@ import '../utils/ws_connect.dart';
 import '../utils/platform_capabilities.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/p2p_ui.dart';
 
 class Peer2PeerPage extends StatefulWidget {
   final ApiService apiService;
@@ -32,13 +34,13 @@ class Peer2PeerPage extends StatefulWidget {
   State<Peer2PeerPage> createState() => _Peer2PeerPageState();
 }
 
-class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProviderStateMixin {
+class _Peer2PeerPageState extends State<Peer2PeerPage> {
   String _mode = 'home';
   String? _sessionId;
   String? _peerName;
   String? _selectedFileName;
   int _selectedFileSize = 0;
-  Uint8List? _selectedFileBytes;
+  String? _selectedFilePath;
   double _progress = 0.0;
   String _statusText = '';
   bool _isConnected = false;
@@ -61,29 +63,33 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     {'urls': 'stun:stun.l.google.com:19302'},
   ];
 
-  final List<Uint8List> _rxChunks = [];
+  RandomAccessFile? _rxFile;
+  String? _rxSavePath;
+  int _rxWritten = 0;
+  String _rxFileName = '';
   int _expectedSize = 0;
   int _rxSize = 0;
-  String _rxFileName = '';
   bool _awaitingAccept = false;
   bool _joinedSession = false;
 
-  late AnimationController _pulseCtrl;
   final _joinCtrl = TextEditingController();
 
   static const _chunkSize = 16384;
   static const _highWater = 8 * 1024 * 1024;
 
-  @override
-  void initState() {
-    super.initState();
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
-  }
+  static const _pcConstraints = <String, dynamic>{
+    'sdpSemantics': 'unified-plan',
+    'iceCandidatePoolSize': 8,
+  };
+
+  static const _sessionConstraints = <String, dynamic>{
+    'offerToReceiveAudio': false,
+    'offerToReceiveVideo': false,
+  };
 
   @override
   void dispose() {
     _cleanup();
-    _pulseCtrl.dispose();
     _joinCtrl.dispose();
     super.dispose();
   }
@@ -100,10 +106,16 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     try {
       _ws?.sink.close();
     } catch (_) {}
+    try {
+      _rxFile?.close();
+    } catch (_) {}
     _dataChannel = null;
     _pc = null;
     _ws = null;
     _wsAlive = false;
+    _rxFile = null;
+    _rxSavePath = null;
+    _rxWritten = 0;
     _myRole = null;
     _remoteReady = false;
     _pendingIce.clear();
@@ -147,25 +159,61 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
         );
       }
     }
+    debugPrint('[P2P] ICE servers: ${_iceServers.length}');
+  }
+
+  RTCIceCandidate _makeIceCandidate(Map<String, dynamic> candidate) {
+    final idx = candidate['sdpMLineIndex'];
+    int lineIndex = 0;
+    if (idx is int) {
+      lineIndex = idx;
+    } else if (idx != null) {
+      lineIndex = int.tryParse('$idx') ?? 0;
+    }
+    final mid = candidate['sdpMid']?.toString();
+    return RTCIceCandidate(
+      candidate['candidate']?.toString(),
+      (mid != null && mid.isNotEmpty) ? mid : '0',
+      lineIndex,
+    );
+  }
+
+  Future<void> _waitForIceGathering(RTCPeerConnection pc) async {
+    if (pc.iceGatheringState == RTCIceGatheringState.RTCIceGatheringStateComplete) {
+      return;
+    }
+    final deadline = DateTime.now().add(const Duration(seconds: 12));
+    while (DateTime.now().isBefore(deadline)) {
+      if (pc.iceGatheringState == RTCIceGatheringState.RTCIceGatheringStateComplete) {
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 80));
+    }
+  }
+
+  Future<Map<String, dynamic>> _localSdpPayload(RTCPeerConnection pc) async {
+    final desc = await pc.getLocalDescription();
+    return {'sdp': desc?.sdp ?? '', 'type': desc?.type ?? 'offer'};
   }
 
   Future<void> _startSendFlow() async {
-    final result = await FilePicker.platform.pickFiles(allowMultiple: false, withData: true);
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false, withData: false);
     if (result == null || result.files.isEmpty) return;
     final pf = result.files.first;
 
-    Uint8List? bytes = pf.bytes;
-    if (bytes == null && pf.path != null) {
-      bytes = await File(pf.path!).readAsBytes();
-    }
-    if (bytes == null || bytes.isEmpty) {
-      _showError('Could not read the selected file');
+    String? path = pf.path;
+    var size = pf.size;
+    if (path == null || path.isEmpty) {
+      _showError('Could not access the selected file path');
       return;
     }
+    if (size <= 0) {
+      size = await File(path).length();
+    }
 
-    _selectedFileBytes = bytes;
+    _selectedFilePath = path;
     _selectedFileName = pf.name;
-    _selectedFileSize = bytes.length;
+    _selectedFileSize = size;
 
     setState(() {
       _mode = 'sending';
@@ -221,10 +269,10 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
       _showError('Not signed in — please log in again');
       return;
     }
-    final wsUrl = AppConfig.p2pWsUrl(_sessionId!, token);
+    final wsUri = AppConfig.p2pWsUri(_sessionId!, token);
 
     try {
-      _ws = connectWs(wsUrl);
+      _ws = connectWsUri(wsUri);
       _wsAlive = true;
 
       _connectTimeout = Timer(const Duration(seconds: 90), () {
@@ -359,9 +407,10 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     if (role == 'initiator') {
       _dataChannel = await _pc!.createDataChannel('file', RTCDataChannelInit()..ordered = true);
       _setupDc(isSender: true);
-      final offer = await _pc!.createOffer();
+      final offer = await _pc!.createOffer(_sessionConstraints);
       await _pc!.setLocalDescription(offer);
-      _wsSend({'type': 'offer', 'sdp': {'sdp': offer.sdp, 'type': offer.type}});
+      await _waitForIceGathering(_pc!);
+      _wsSend({'type': 'offer', 'sdp': await _localSdpPayload(_pc!)});
     } else {
       _ensureDataChannelHandler(isSender: false);
     }
@@ -384,9 +433,10 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     await _pc!.setRemoteDescription(RTCSessionDescription(sdp['sdp']?.toString(), sdp['type']?.toString()));
     _remoteReady = true;
     await _flushCandidates();
-    final answer = await _pc!.createAnswer();
+    final answer = await _pc!.createAnswer(_sessionConstraints);
     await _pc!.setLocalDescription(answer);
-    _wsSend({'type': 'answer', 'sdp': {'sdp': answer.sdp, 'type': answer.type}});
+    await _waitForIceGathering(_pc!);
+    _wsSend({'type': 'answer', 'sdp': await _localSdpPayload(_pc!)});
   }
 
   Future<void> _onAnswer(Map<String, dynamic>? sdp) async {
@@ -400,12 +450,10 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     if (candidate == null || _pc == null) return;
     if (_remoteReady) {
       try {
-        await _pc!.addCandidate(RTCIceCandidate(
-          candidate['candidate']?.toString(),
-          candidate['sdpMid']?.toString(),
-          candidate['sdpMLineIndex'] is int ? candidate['sdpMLineIndex'] as int : int.tryParse('${candidate['sdpMLineIndex']}'),
-        ));
-      } catch (_) {}
+        await _pc!.addCandidate(_makeIceCandidate(candidate));
+      } catch (e) {
+        debugPrint('[P2P] addCandidate error: $e');
+      }
     } else {
       _pendingIce.add(candidate);
     }
@@ -415,19 +463,20 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     if (_pc == null) return;
     for (final c in List<Map<String, dynamic>>.from(_pendingIce)) {
       try {
-        await _pc!.addCandidate(RTCIceCandidate(
-          c['candidate']?.toString(),
-          c['sdpMid']?.toString(),
-          c['sdpMLineIndex'] is int ? c['sdpMLineIndex'] as int : int.tryParse('${c['sdpMLineIndex']}'),
-        ));
-      } catch (_) {}
+        await _pc!.addCandidate(_makeIceCandidate(c));
+      } catch (e) {
+        debugPrint('[P2P] flush ICE error: $e');
+      }
     }
     _pendingIce.clear();
   }
 
   Future<void> _initPc() async {
     if (_pc != null) return;
-    _pc = await createPeerConnection({'iceServers': _iceServers});
+    _pc = await createPeerConnection({
+      'iceServers': _iceServers,
+      ..._pcConstraints,
+    });
 
     _pc!.onIceCandidate = (c) => _wsSend({
       'type': 'ice_candidate',
@@ -450,7 +499,18 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
         }
       } else if (s == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         if (mounted) {
-          _showError('Direct connection failed — try Wi‑Fi or configure TURN on server');
+          final hasTurn = _iceServers.any((srv) {
+            final urls = srv['urls'];
+            if (urls is List) {
+              return urls.any((u) => u.toString().startsWith('turn'));
+            }
+            return urls?.toString().startsWith('turn') == true;
+          });
+          _showError(
+            hasTurn
+                ? 'Connection failed — check firewall allows UDP/TCP 3478 or try another network'
+                : 'Direct connection failed — server needs TURN (coturn). Ask admin to set TURN_HOST in .env',
+          );
           setState(() => _statusText = 'Connection failed (ICE)');
         }
       } else if (s == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
@@ -472,10 +532,13 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
       }
     };
 
-    _dataChannel!.onMessage = (RTCDataChannelMessage msg) {
+    _dataChannel!.onMessage = (RTCDataChannelMessage msg) async {
       if (msg.isBinary) {
-        _rxChunks.add(msg.binary);
-        _rxSize += msg.binary.length;
+        if (_rxFile != null) {
+          await _rxFile!.writeFrom(msg.binary);
+        }
+        _rxWritten += msg.binary.length;
+        _rxSize = _rxWritten;
         if (_expectedSize > 0 && mounted) {
           setState(() {
             _mode = 'transferring';
@@ -525,8 +588,27 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     if (mounted) setState(() => _statusText = 'Waiting for receiver to accept...');
   }
 
+  Future<void> _openReceiveFile() async {
+    final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+    final safeName = _rxFileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    _rxSavePath = '${dir.path}${Platform.pathSeparator}$safeName';
+    final file = File(_rxSavePath!);
+    if (await file.exists()) {
+      await file.delete();
+    }
+    _rxFile = await file.open(mode: FileMode.write);
+    _rxWritten = 0;
+    _rxSize = 0;
+  }
+
   Future<void> _acceptIncoming() async {
     if (_dataChannel == null) return;
+    try {
+      await _openReceiveFile();
+    } catch (e) {
+      _showError('Could not prepare save location: $e');
+      return;
+    }
     setState(() {
       _awaitingAccept = false;
       _mode = 'transferring';
@@ -536,7 +618,8 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
   }
 
   Future<void> _sendChunks() async {
-    if (_selectedFileBytes == null || _dataChannel == null) return;
+    final path = _selectedFilePath;
+    if (path == null || _dataChannel == null) return;
     if (mounted) {
       setState(() {
         _mode = 'transferring';
@@ -544,23 +627,32 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
       });
     }
 
-    final total = _selectedFileBytes!.length;
-    var off = 0;
-    while (off < total) {
-      while ((_dataChannel!.bufferedAmount ?? 0) > _highWater) {
-        await Future.delayed(const Duration(milliseconds: 50));
+    final file = File(path);
+    final total = _selectedFileSize > 0 ? _selectedFileSize : await file.length();
+    final raf = await file.open(mode: FileMode.read);
+    try {
+      var off = 0;
+      final buf = Uint8List(_chunkSize);
+      while (off < total) {
+        while ((_dataChannel!.bufferedAmount ?? 0) > _highWater) {
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+        final toRead = min(_chunkSize, total - off);
+        final read = await raf.readInto(buf, 0, toRead);
+        if (read <= 0) break;
+        _dataChannel!.send(RTCDataChannelMessage.fromBinary(Uint8List.sublistView(buf, 0, read)));
+        off += read;
+        if (mounted) {
+          setState(() {
+            _progress = off / total;
+            _bytesTransferred = off;
+            _statusText = 'Sending: ${(_progress * 100).toStringAsFixed(1)}% · ${_fmtSize(off)} / ${_fmtSize(total)}';
+          });
+        }
+        await Future.delayed(const Duration(milliseconds: 1));
       }
-      final end = min(off + _chunkSize, total);
-      _dataChannel!.send(RTCDataChannelMessage.fromBinary(_selectedFileBytes!.sublist(off, end)));
-      off = end;
-      if (mounted) {
-        setState(() {
-          _progress = off / total;
-          _bytesTransferred = off;
-          _statusText = 'Sending: ${(_progress * 100).toStringAsFixed(1)}% · ${_fmtSize(off)} / ${_fmtSize(total)}';
-        });
-      }
-      await Future.delayed(const Duration(milliseconds: 2));
+    } finally {
+      await raf.close();
     }
 
     _dataChannel!.send(RTCDataChannelMessage(jsonEncode({'kind': 'done'})));
@@ -576,15 +668,15 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
 
   Future<void> _saveFile() async {
     try {
-      final dir = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
-      final path = '${dir.path}${Platform.pathSeparator}$_rxFileName';
-      final bb = BytesBuilder();
-      for (final c in _rxChunks) {
-        bb.add(c);
+      if (_rxFile != null) {
+        await _rxFile!.close();
+        _rxFile = null;
       }
-      await File(path).writeAsBytes(bb.toBytes());
-      _rxChunks.clear();
-      _rxSize = 0;
+      final path = _rxSavePath;
+      if (path == null || !await File(path).exists()) {
+        _showError('Receive failed — no file saved');
+        return;
+      }
       if (mounted) {
         setState(() {
           _mode = 'complete';
@@ -597,13 +689,17 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     }
   }
 
-  void _cancel() {
+  Future<void> _cancel() async {
+    final sid = _sessionId;
+    final wasSender = _mode == 'sending' || _myRole == 'initiator';
     _cleanup();
-    _rxChunks.clear();
-    _rxSize = 0;
-    _selectedFileBytes = null;
+    _rxWritten = 0;
+    _selectedFilePath = null;
     _awaitingAccept = false;
     _joinedSession = false;
+    if (sid != null && wasSender) {
+      unawaited(widget.apiService.p2pCancelSession(sid));
+    }
     setState(() {
       _mode = 'home';
       _progress = 0;
@@ -633,46 +729,33 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     return '${(b / 1073741824).toStringAsFixed(2)} GB';
   }
 
-  Widget _statusStepsPanel() {
-    final steps = <({String label, bool done, bool active})>[
-      (label: 'Signaling', done: _signalingOk, active: !_signalingOk),
-      (label: 'Peer found', done: _peerFound, active: _signalingOk && !_peerFound),
-      (label: 'WebRTC', done: _webrtcReady, active: _peerFound && !_webrtcReady),
-      (label: _mode == 'transferring' ? 'Transfer' : 'Connected', done: _mode == 'complete', active: _webrtcReady && _mode != 'complete'),
-    ];
+  List<({String label, bool done, bool active})> get _connectionSteps => [
+        (label: 'Signaling', done: _signalingOk, active: !_signalingOk),
+        (label: 'Peer found', done: _peerFound, active: _signalingOk && !_peerFound),
+        (label: 'WebRTC', done: _webrtcReady, active: _peerFound && !_webrtcReady),
+        (
+          label: _mode == 'transferring' ? 'Transfer' : 'Connected',
+          done: _mode == 'complete',
+          active: _webrtcReady && _mode != 'complete',
+        ),
+      ];
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: AppTheme.glassPanel(borderRadius: 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Connection status', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
-          const SizedBox(height: 10),
-          ...steps.map((s) {
-            final color = s.done ? AppTheme.success : (s.active ? AppTheme.accent : AppTheme.textMuted);
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  Icon(
-                    s.done ? Icons.check_circle_rounded : (s.active ? Icons.radio_button_checked : Icons.radio_button_off),
-                    size: 18,
-                    color: color,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text(s.label, style: TextStyle(fontSize: 13, color: color))),
-                  if (s.label == 'WebRTC' && _iceState.isNotEmpty)
-                    Text(_iceState, style: TextStyle(fontSize: 11, color: AppTheme.textMuted.withValues(alpha: 0.9))),
-                ],
-              ),
-            );
-          }),
-          if (_statusText.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(_statusText, style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-          ],
-        ],
+  Widget _statusStepsPanel() {
+    return P2pStatusSteps(
+      steps: _connectionSteps,
+      statusText: _statusText,
+      iceState: _iceState.isEmpty ? null : _iceState,
+    );
+  }
+
+  void _copySessionCode() {
+    if (_sessionId == null) return;
+    Clipboard.setData(ClipboardData(text: _sessionId!));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Code copied!'),
+        backgroundColor: AppTheme.success,
+        duration: Duration(seconds: 1),
       ),
     );
   }
@@ -717,20 +800,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
     }
 
     if (widget.embedded) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (_mode != 'home' && _mode != 'complete') ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: _statusStepsPanel(),
-            ),
-          ] else if (_isConnected) ...[
-            Padding(padding: const EdgeInsets.fromLTRB(12, 8, 12, 0), child: _connectionBanner()),
-          ],
-          Expanded(child: _body()),
-        ],
-      );
+      return _body();
     }
 
     return Container(
@@ -740,28 +810,6 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
           children: [
             _header(),
             Expanded(child: _body()),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _connectionBanner() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: AppTheme.success.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppTheme.success.withValues(alpha: 0.35)),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.circle, size: 8, color: AppTheme.success),
-            SizedBox(width: 8),
-            Text('Peer connected', style: TextStyle(color: AppTheme.success, fontSize: 12, fontWeight: FontWeight.w600)),
           ],
         ),
       ),
@@ -833,369 +881,301 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> with SingleTickerProvider
   }
 
   Widget _homeView() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          const SizedBox(height: 20),
-          AnimatedBuilder(
-            animation: _pulseCtrl,
-            builder: (_, __) => Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [
-                    AppTheme.accent.withValues(alpha: 0.25 + _pulseCtrl.value * 0.15),
-                    AppTheme.primary.withValues(alpha: 0.25 + _pulseCtrl.value * 0.15),
-                  ],
-                ),
-                boxShadow: [
-                  BoxShadow(color: AppTheme.primary.withValues(alpha: 0.15 + _pulseCtrl.value * 0.1), blurRadius: 30),
-                ],
-              ),
-              child: const Icon(Icons.swap_horiz_rounded, color: AppTheme.accent, size: 48),
+    return P2pPageFrame(
+      center: true,
+      scroll: false,
+      child: P2pHubCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const P2pCardHeader(
+              icon: LucideIcons.arrowLeftRight,
+              iconGradient: [Color(0xFF38BDF8), Color(0xFF3B82F6)],
+              title: 'P2P Transfer',
+              subtitle: 'Send files directly between devices — nothing stored on the server.',
             ),
-          ),
-          const SizedBox(height: 24),
-          const Text('Peer-to-Peer File Transfer', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-          const SizedBox(height: 8),
-          Text(
-            'Send files directly between devices.\nNothing stored on the server.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 14, color: AppTheme.textMuted.withValues(alpha: 0.9), height: 1.5),
-          ),
-          const SizedBox(height: 40),
-          _actionCard(Icons.upload_file_rounded, 'Send File', 'Pick a file and share via QR code', [AppTheme.primary, AppTheme.primaryBright], _startSendFlow),
-          const SizedBox(height: 16),
-          _actionCard(Icons.download_rounded, 'Receive File', 'Enter code to receive', [AppTheme.success, const Color(0xFF16A34A)], () => setState(() => _mode = 'receiving')),
-        ],
-      ),
-    );
-  }
-
-  Widget _actionCard(IconData ic, String t, String s, List<Color> g, VoidCallback fn) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: fn,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: AppTheme.glassPanel(borderRadius: 16).copyWith(
-            border: Border.all(color: g[0].withValues(alpha: 0.25)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(gradient: LinearGradient(colors: g), borderRadius: BorderRadius.circular(14)),
-                child: Icon(ic, color: Colors.white, size: 26),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
+            const SizedBox(height: 16),
+            const P2pFeatureStrip(),
+            const SizedBox(height: 16),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final stacked = constraints.maxWidth < 480;
+                final sendTile = P2pActionTile(
+                  icon: LucideIcons.upload,
+                  gradient: const [Color(0xFF3B82F6), Color(0xFF60A5FA)],
+                  label: 'Send file',
+                  subtitle: 'Pick & share via QR',
+                  onTap: _startSendFlow,
+                );
+                final recvTile = P2pActionTile(
+                  icon: LucideIcons.download,
+                  gradient: const [Color(0xFF10B981), Color(0xFF059669)],
+                  label: 'Receive',
+                  subtitle: 'Enter transfer code',
+                  onTap: () => setState(() => _mode = 'receiving'),
+                );
+                if (stacked) {
+                  return Column(
+                    children: [
+                      sendTile,
+                      const SizedBox(height: 10),
+                      recvTile,
+                    ],
+                  );
+                }
+                return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(t, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-                    const SizedBox(height: 4),
-                    Text(s, style: const TextStyle(fontSize: 13, color: AppTheme.textMuted)),
+                    Expanded(child: sendTile),
+                    const SizedBox(width: 10),
+                    Expanded(child: recvTile),
                   ],
-                ),
-              ),
-              const Icon(Icons.arrow_forward_ios_rounded, color: AppTheme.textMuted, size: 16),
-            ],
-          ),
+                );
+              },
+            ),
+          ],
         ),
       ),
     );
   }
 
   Widget _sendView() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: AppTheme.glassPanel(borderRadius: 16),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(12)),
-                  child: const Icon(Icons.insert_drive_file_rounded, color: AppTheme.primaryBright, size: 24),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(_selectedFileName ?? '', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
-                      Text(_fmtSize(_selectedFileSize), style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-                    ],
+    return P2pPageFrame(
+      child: P2pHubCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            P2pCardHeader(
+              icon: LucideIcons.send,
+              iconGradient: const [Color(0xFF3B82F6), Color(0xFF60A5FA)],
+              title: 'Share your file',
+              subtitle: 'Receiver can scan the QR code or enter the session code below.',
+            ),
+            const SizedBox(height: 16),
+            P2pFilePreview(
+              fileName: _selectedFileName ?? '',
+              fileSize: _fmtSize(_selectedFileSize),
+            ),
+            if (_sessionId != null) ...[
+              const SizedBox(height: 16),
+              const P2pSectionLabel('Scan or share code'),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: AppTheme.loginInsetDecoration(borderRadius: 16, emphasized: true),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppTheme.primary.withValues(alpha: 0.18),
+                          blurRadius: 24,
+                        ),
+                      ],
+                    ),
+                    child: QrImageView(
+                      data: _sessionId!,
+                      version: QrVersions.auto,
+                      size: 180,
+                      backgroundColor: Colors.white,
+                      eyeStyle: const QrEyeStyle(
+                        eyeShape: QrEyeShape.square,
+                        color: Color(0xFF0F172A),
+                      ),
+                      dataModuleStyle: const QrDataModuleStyle(
+                        dataModuleShape: QrDataModuleShape.square,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
                   ),
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          if (_sessionId != null) ...[
-            const Text('Scan QR or share code', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [BoxShadow(color: AppTheme.primary.withValues(alpha: 0.2), blurRadius: 30)],
               ),
-              child: QrImageView(
-                data: _sessionId!,
-                version: QrVersions.auto,
-                size: 200,
-                backgroundColor: Colors.white,
-                eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: Color(0xFF1E293B)),
-                dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Color(0xFF1E293B)),
-              ),
-            ),
+              const SizedBox(height: 12),
+              P2pSessionCodeBadge(code: _sessionId!, onCopy: _copySessionCode),
+            ],
             const SizedBox(height: 16),
-            GestureDetector(
-              onTap: () {
-                Clipboard.setData(ClipboardData(text: _sessionId!));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Code copied!'), backgroundColor: AppTheme.success, duration: Duration(seconds: 1)),
-                );
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                decoration: AppTheme.glassPanel(borderRadius: 12).copyWith(
-                  border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(_sessionId!, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.accent, letterSpacing: 2)),
-                    const SizedBox(width: 8),
-                    const Icon(Icons.copy_rounded, color: AppTheme.textMuted, size: 16),
-                  ],
+            _statusStepsPanel(),
+            if (!_peerFound && _sessionId != null) ...[
+              const SizedBox(height: 16),
+              const Center(
+                child: SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(strokeWidth: 2.5, color: AppTheme.primaryBright),
                 ),
               ),
+            ],
+            const SizedBox(height: 8),
+            P2pGhostButton(
+              label: 'Cancel transfer',
+              icon: LucideIcons.x,
+              onTap: _cancel,
             ),
           ],
-          const SizedBox(height: 24),
-          _statusStepsPanel(),
-          if (!_peerFound && _sessionId != null) ...[
-            const SizedBox(height: 16),
-            const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary)),
-          ],
-          const SizedBox(height: 24),
-          TextButton.icon(
-            onPressed: _cancel,
-            icon: const Icon(Icons.close_rounded, size: 18),
-            label: const Text('Cancel'),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
-          ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _recvView() {
     if (_joinedSession) {
-      return SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            _statusStepsPanel(),
-            const SizedBox(height: 24),
-            if (!_awaitingAccept) ...[
-              const CircularProgressIndicator(color: AppTheme.success, strokeWidth: 3),
-              const SizedBox(height: 20),
-            ] else ...[
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha: 0.15), shape: BoxShape.circle),
-                child: const Icon(Icons.file_download_rounded, color: AppTheme.primaryBright, size: 32),
+      return P2pPageFrame(
+        child: P2pHubCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              P2pCardHeader(
+                icon: LucideIcons.inbox,
+                iconGradient: const [Color(0xFF10B981), Color(0xFF059669)],
+                title: _awaitingAccept ? 'Incoming file' : 'Connecting…',
+                subtitle: _peerName != null
+                    ? 'From $_peerName'
+                    : 'Setting up a secure direct link with the sender.',
               ),
-              const SizedBox(height: 20),
-            ],
-            if (_peerName != null) ...[
-              Text('From: $_peerName', style: const TextStyle(color: AppTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-            ],
-            if (_awaitingAccept) ...[
-              Text(_rxFileName, style: const TextStyle(color: AppTheme.accent, fontSize: 14)),
-              Text(_fmtSize(_expectedSize), style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: _acceptIncoming,
-                  icon: const Icon(Icons.check_circle_outline_rounded),
-                  label: const Text('Accept & receive'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppTheme.success,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              const SizedBox(height: 16),
+              _statusStepsPanel(),
+              const SizedBox(height: 16),
+              if (_awaitingAccept) ...[
+                P2pFilePreview(
+                  fileName: _rxFileName,
+                  fileSize: _fmtSize(_expectedSize),
+                  icon: LucideIcons.fileDown,
+                  gradient: const [Color(0xFF10B981), Color(0xFF059669)],
+                ),
+                const SizedBox(height: 16),
+                P2pPrimaryButton(
+                  label: 'Accept & receive',
+                  icon: LucideIcons.check,
+                  onTap: _acceptIncoming,
+                  gradient: const [Color(0xFF10B981), Color(0xFF047857)],
+                ),
+              ] else ...[
+                const Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 18),
+                    child: SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: CircularProgressIndicator(strokeWidth: 2.8, color: AppTheme.success),
+                    ),
                   ),
                 ),
+              ],
+              P2pGhostButton(
+                label: 'Cancel',
+                icon: LucideIcons.x,
+                onTap: _cancel,
               ),
             ],
-            const SizedBox(height: 24),
-            TextButton.icon(
-              onPressed: _cancel,
-              icon: const Icon(Icons.close_rounded, size: 18),
-              label: const Text('Cancel'),
-              style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
-            ),
-          ],
+          ),
         ),
       );
     }
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          const SizedBox(height: 20),
-          const Icon(Icons.qr_code_scanner_rounded, color: AppTheme.success, size: 64),
-          const SizedBox(height: 20),
-          const Text('Receive a File', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-          const SizedBox(height: 32),
-          const Text('Enter the transfer code:', style: TextStyle(fontSize: 14, color: AppTheme.textMuted)),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _joinCtrl,
-            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 18, letterSpacing: 2, fontWeight: FontWeight.bold),
-            textAlign: TextAlign.center,
-            decoration: const InputDecoration(hintText: 'Paste code here'),
-            onSubmitted: (v) {
-              if (v.trim().isNotEmpty) _startReceiveFlow(v.trim());
-            },
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: () {
+    return P2pPageFrame(
+      child: P2pHubCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const P2pCardHeader(
+              icon: LucideIcons.qrCode,
+              iconGradient: [Color(0xFF10B981), Color(0xFF059669)],
+              title: 'Receive a file',
+              subtitle: 'Enter the transfer code shared by the sender.',
+            ),
+            const SizedBox(height: 16),
+            P2pJoinField(
+              controller: _joinCtrl,
+              onSubmitted: (v) {
+                if (v.trim().isNotEmpty) _startReceiveFlow(v.trim());
+              },
+            ),
+            const SizedBox(height: 14),
+            P2pPrimaryButton(
+              label: 'Join transfer',
+              icon: LucideIcons.logIn,
+              onTap: () {
                 final c = _joinCtrl.text.trim();
                 if (c.isNotEmpty) _startReceiveFlow(c);
               },
-              icon: const Icon(Icons.login_rounded, size: 18),
-              label: const Text('Join', style: TextStyle(fontWeight: FontWeight.w600)),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTheme.success,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              ),
+              gradient: const [Color(0xFF10B981), Color(0xFF047857)],
             ),
-          ),
-          const SizedBox(height: 24),
-          TextButton.icon(
-            onPressed: _cancel,
-            icon: const Icon(Icons.arrow_back_rounded, size: 18),
-            label: const Text('Back'),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.textMuted),
-          ),
-        ],
+            const SizedBox(height: 6),
+            P2pGhostButton(
+              label: 'Back',
+              icon: LucideIcons.arrowLeft,
+              onTap: _cancel,
+              color: AppTheme.textMuted,
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _xferView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 140,
-              height: 140,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  SizedBox(
-                    width: 140,
-                    height: 140,
-                    child: CircularProgressIndicator(
-                      value: _progress,
-                      strokeWidth: 8,
-                      backgroundColor: Colors.white.withValues(alpha: 0.08),
-                      valueColor: const AlwaysStoppedAnimation(AppTheme.accent),
-                    ),
-                  ),
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('${(_progress * 100).toStringAsFixed(0)}%', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-                      Text(_progress < 1 ? 'Transferring' : 'Done', style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text(_selectedFileName ?? _rxFileName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 8),
-            Text(_statusText, style: const TextStyle(fontSize: 14, color: AppTheme.textMuted)),
-            if (_bytesTransferred > 0) ...[
-              const SizedBox(height: 4),
-              Text(
-                '${_fmtSize(_bytesTransferred)} transferred',
-                style: const TextStyle(fontSize: 12, color: AppTheme.accent),
-              ),
-            ],
-            if (_peerName != null) ...[
-              const SizedBox(height: 4),
-              Text('with $_peerName', style: const TextStyle(fontSize: 13, color: AppTheme.accent)),
-            ],
-          ],
-        ),
+    return P2pPageFrame(
+      child: P2pProgressPanel(
+        progress: _progress,
+        fileName: _selectedFileName ?? _rxFileName,
+        statusText: _statusText,
+        bytesLabel: _bytesTransferred > 0 ? '${_fmtSize(_bytesTransferred)} transferred' : null,
+        peerName: _peerName,
       ),
     );
   }
 
   Widget _doneView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
+    return P2pPageFrame(
+      child: P2pHubCard(
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(color: AppTheme.success.withValues(alpha: 0.15), shape: BoxShape.circle),
-              child: const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 48),
-            ),
-            const SizedBox(height: 24),
-            const Text('Transfer Complete!', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-            const SizedBox(height: 12),
-            Text(_selectedFileName ?? _rxFileName, style: const TextStyle(fontSize: 15, color: AppTheme.accent, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(_statusText, style: const TextStyle(fontSize: 13, color: AppTheme.textMuted), textAlign: TextAlign.center),
-            ),
-            const SizedBox(height: 32),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _cancel,
-                icon: const Icon(Icons.home_rounded, size: 18),
-                label: const Text('Back to Home', style: TextStyle(fontWeight: FontWeight.w600)),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppTheme.primary,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            Center(
+              child: Container(
+                width: 80,
+                height: 80,
+                margin: const EdgeInsets.only(top: 8),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [
+                      AppTheme.success.withValues(alpha: 0.25),
+                      AppTheme.success.withValues(alpha: 0.12),
+                    ],
+                  ),
+                  border: Border.all(color: AppTheme.success.withValues(alpha: 0.45)),
                 ),
+                child: Icon(LucideIcons.badgeCheck, color: AppTheme.success, size: 42),
               ),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Transfer complete',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 14),
+            P2pFilePreview(
+              fileName: _selectedFileName ?? _rxFileName,
+              fileSize: _statusText,
+              icon: LucideIcons.fileCheck,
+              gradient: const [Color(0xFF10B981), Color(0xFF059669)],
+            ),
+            const SizedBox(height: 18),
+            P2pPrimaryButton(
+              label: 'Back to home',
+              icon: LucideIcons.home,
+              onTap: _cancel,
+              gradient: const [Color(0xFF3B82F6), Color(0xFF2563EB)],
             ),
           ],
         ),
