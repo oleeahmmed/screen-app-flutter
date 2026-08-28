@@ -4,19 +4,23 @@ import 'app_shell.dart';
 
 /// Standard shell for pushed tool pages (report, activity, vault, P2P).
 class ToolPageScaffold extends StatelessWidget {
-  final String title;
+  final String? title;
   final String? subtitle;
   final Widget child;
   final VoidCallback? onLogout;
   final bool scrollable;
+  final bool useBackground;
+  final bool showHeader;
 
   const ToolPageScaffold({
     super.key,
-    required this.title,
+    this.title,
     this.subtitle,
     required this.child,
     this.onLogout,
     this.scrollable = true,
+    this.useBackground = true,
+    this.showHeader = true,
   });
 
   @override
@@ -24,10 +28,12 @@ class ToolPageScaffold extends StatelessWidget {
     return AppShell(
       title: title,
       subtitle: subtitle,
-      showBack: true,
-      showQuickMenu: true,
+      showBack: false,
+      showQuickMenu: false,
       onLogout: onLogout,
       scrollable: scrollable,
+      useBackground: useBackground,
+      showHeader: showHeader,
       child: child,
     );
   }

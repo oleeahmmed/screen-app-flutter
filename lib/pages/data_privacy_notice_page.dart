@@ -10,6 +10,7 @@ class DataPrivacyNoticePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         title: const Text('Data & monitoring notice'),
         actions: const [
           AppHeaderMenuActions(iconColor: Colors.white70),

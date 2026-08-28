@@ -62,5 +62,8 @@ class AppNavigation {
 
   Future<void> openSubmitReport() async => await onOpenSubmitReport?.call();
 
-  Future<void> logout() async => onLogout?.call();
+  Future<void> logout() async {
+    final fn = onLogout;
+    if (fn != null) await fn();
+  }
 }

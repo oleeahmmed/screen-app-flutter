@@ -112,7 +112,9 @@ class _LoginPageState extends State<LoginPage> {
       await prefs.setString('email', data['user']?['email'] ?? '');
       await prefs.setString('full_name', data['user']?['full_name'] ?? username);
       await prefs.setString('designation', data['employee']?['designation'] ?? '');
-      await prefs.setBool('is_admin', data['employee']?['is_admin'] ?? false);
+      await UserDataService.saveEmployeeRoleFlags(
+        data['employee'] is Map ? Map<String, dynamic>.from(data['employee'] as Map) : null,
+      );
       await prefs.setString('company_id', data['company']?['id']?.toString() ?? '');
       await prefs.setString('company_name', data['company']?['name'] ?? '');
       await prefs.setString('subscription_plan', data['subscription']?['plan'] ?? '');

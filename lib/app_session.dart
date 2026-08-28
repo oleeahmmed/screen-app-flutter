@@ -6,11 +6,16 @@ class AppSession {
 
   static bool screenshotMonitoringConsent = false;
   static int screenshotIntervalSeconds = 30;
+  static bool onBreak = false;
 
   static void setConsent(bool v) {
     screenshotMonitoringConsent = v;
   }
 
+  static void setOnBreak(bool v) {
+    onBreak = v;
+  }
+
   static bool get mayCaptureScreenshots =>
-      PlatformCapabilities.screenshotMonitoring && screenshotMonitoringConsent;
+      PlatformCapabilities.screenshotMonitoring && screenshotMonitoringConsent && !onBreak;
 }

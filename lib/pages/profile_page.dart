@@ -5,11 +5,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../app_session.dart';
 import '../config.dart';
 import '../services/api_service.dart';
+import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
 import '../widgets/app_primary_button.dart';
 import '../widgets/app_shell.dart';
+import '../widgets/app_tab_shell.dart';
 import '../widgets/glass_card.dart';
 import 'data_privacy_notice_page.dart';
 
@@ -217,7 +219,12 @@ class _ProfilePageState extends State<ProfilePage> {
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => const DataPrivacyNoticePage(),
+                  builder: (_) => AppTabShell(
+                    selectedIndex: AppNavigation.tabProfile,
+                    unreadNotifs: AppNavigation.instance.unreadNotifs,
+                    onLogout: widget.onLogout,
+                    child: const DataPrivacyNoticePage(),
+                  ),
                 ),
               );
             },
@@ -411,7 +418,7 @@ class _ProfilePageState extends State<ProfilePage> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: widget.onLogout,
+                onPressed: () => AppNavigation.instance.logout(),
                 icon: const Icon(Icons.logout, color: AppTheme.danger),
                 label: const Text('Log out'),
                 style: AppTheme.secondaryButton().copyWith(

@@ -5,7 +5,6 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -17,9 +16,9 @@ import '../utils/responsive.dart';
 import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
 import '../utils/task_helpers.dart';
-import '../widgets/app_quick_menu.dart';
 import '../widgets/kanban_assignee_picker.dart';
 import '../widgets/task_action_buttons.dart';
+import '../widgets/task_description_editor.dart';
 import '../widgets/task_status_dropdown.dart';
 
 String _displayStr(dynamic v) {
@@ -40,7 +39,12 @@ List<int> _taskAssigneeIds(Map<String, dynamic> task) {
   if (raw is List && raw.isNotEmpty) {
     return raw.map((e) => int.tryParse('$e')).whereType<int>().toList();
   }
-  final uid = int.tryParse('${task['user_id'] ?? task['user'] ?? ''}');
+  final user = task['user'];
+  if (user is Map) {
+    final uid = int.tryParse('${user['id'] ?? ''}');
+    return uid != null ? [uid] : [];
+  }
+  final uid = int.tryParse('${task['user_id'] ?? (user ?? '')}');
   return uid != null ? [uid] : [];
 }
 
@@ -106,7 +110,7 @@ class _CloseIntent extends Intent {
   const _CloseIntent();
 }
 
-/// Opens the web-style task detail page (DETAILS | ACTIVITY + PROPERTIES sidebar).
+/// Opens the task detail page (Work | Activity).
 void openTaskDetailPage(
   BuildContext context, {
   required ApiService apiService,
@@ -121,7 +125,6 @@ void openTaskDetailPage(
   VoidCallback? onClosed,
   VoidCallback? onLogout,
 }) {
-  final mobile = MediaQuery.sizeOf(context).width < Responsive.mobileMax;
   final page = TaskDetailPage(
     apiService: apiService,
     taskId: taskId,
@@ -136,20 +139,17 @@ void openTaskDetailPage(
 
   Navigator.of(context).push<void>(
     MaterialPageRoute(
-      fullscreenDialog: mobile,
-      builder: (_) => mobile
-          ? page
-          : AppTabShell(
-              selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
-              unreadNotifs: AppNavigation.instance.unreadNotifs,
-              onLogout: onLogout,
-              child: page,
-            ),
+      builder: (_) => AppTabShell(
+        selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
+        unreadNotifs: AppNavigation.instance.unreadNotifs,
+        onLogout: onLogout,
+        child: page,
+      ),
     ),
   ).then((_) => onClosed?.call());
 }
 
-/// Production web task detail modal — full page with DETAILS | ACTIVITY tabs.
+/// Task detail — clear hero, checklist subtasks, and supporting details.
 class TaskDetailPage extends StatefulWidget {
   final ApiService apiService;
   final int taskId;
@@ -194,9 +194,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   List<dynamic> _activity = [];
   bool _activityLoading = false;
   bool _activityLoaded = false;
-  final List<String> _descUndo = [];
-  final List<String> _descRedo = [];
-  bool _descPreview = false;
+  int _descEditorGen = 0;
   Timer? _autoSaveTimer;
   Timer? _saveHintTimer;
   String _saveHint = '';
@@ -219,9 +217,9 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 2, vsync: this);
+    _tabCtrl = TabController(length: 5, vsync: this);
     _tabCtrl.addListener(() {
-      if (_tabCtrl.index == 1 && !_activityLoaded && widget.projectId > 0) {
+      if (_tabCtrl.index == 4 && !_activityLoaded && widget.projectId > 0) {
         _loadActivity();
       }
     });
@@ -236,8 +234,6 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       _applyTaskToForm(_task!);
       _snapshot = _captureSnapshot();
       _loading = false;
-      final desc = _descCtrl.text;
-      if (descriptionLooksLikeHtml(desc)) _descPreview = true;
     }
     for (final c in [_titleCtrl, _descCtrl, _estHoursCtrl, _actHoursCtrl]) {
       c.addListener(_onTextChanged);
@@ -311,7 +307,19 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     if (!mounted) return;
     if (r['success'] == true) {
       if (r['data'] is Map) {
-        _task = Map<String, dynamic>.from(r['data'] as Map);
+        final incoming = Map<String, dynamic>.from(r['data'] as Map);
+        if (incoming['id'] != null ||
+            incoming['name'] != null ||
+            incoming['title'] != null) {
+          final prev = _task;
+          _task = incoming;
+          if (prev != null) {
+            _task!['project_id'] ??= prev['project_id'] ?? prev['project'];
+            _task!['project'] ??= prev['project'];
+            _task!['project_name'] ??= prev['project_name'];
+          }
+          _applyTaskToForm(_task!);
+        }
       }
       _snapshot = _captureSnapshot();
       setState(() {
@@ -374,11 +382,13 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     });
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = _task == null;
-      _loadError = null;
-    });
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = _task == null;
+        _loadError = null;
+      });
+    }
     final results = await Future.wait([
       widget.apiService.getTask(widget.taskId, projectId: widget.projectId),
       widget.apiService.getSubTasks(widget.taskId),
@@ -403,9 +413,6 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       final raw = results[2]['data'];
       _attachments = raw is List ? List<dynamic>.from(raw) : [];
     }
-    if (Responsive.isMobile(context) && descriptionLooksLikeHtml(_descCtrl.text)) {
-      _descPreview = true;
-    }
     setState(() => _loading = false);
   }
 
@@ -414,6 +421,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     _autoSaveTimer?.cancel();
     _titleCtrl.text = t['name']?.toString() ?? t['title']?.toString() ?? '';
     _descCtrl.text = t['description']?.toString() ?? t['desc']?.toString() ?? '';
+    _descEditorGen++;
     _estHoursCtrl.text = t['estimated_hours']?.toString() ?? '';
     _actHoursCtrl.text = t['actual_hours']?.toString() ?? '';
     _status = taskStatusValueFromMap(t);
@@ -483,6 +491,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     if (s == null) return;
     _titleCtrl.text = s.title;
     _descCtrl.text = s.desc;
+    _descEditorGen++;
     _estHoursCtrl.text = s.estHours;
     _actHoursCtrl.text = s.actHours;
     _status = s.status;
@@ -508,7 +517,10 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     if (iso == null || iso.length < 10) return 'Not set';
     final dt = DateTime.tryParse(iso);
     if (dt == null) return iso;
-    return DateFormat('d MMM yyyy, HH:mm').format(dt);
+    if (iso.length <= 10 || (dt.hour == 0 && dt.minute == 0 && !iso.contains('T'))) {
+      return DateFormat('d MMM yyyy').format(dt);
+    }
+    return DateFormat('d MMM yyyy').format(dt);
   }
 
   Future<void> _saveAll() async {
@@ -684,26 +696,6 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     });
   }
 
-  void _pushDescHistory() {
-    _descUndo.add(_descCtrl.text);
-    if (_descUndo.length > 40) _descUndo.removeAt(0);
-    _descRedo.clear();
-  }
-
-  void _descUndoAction() {
-    if (_descUndo.isEmpty) return;
-    _descRedo.add(_descCtrl.text);
-    _descCtrl.text = _descUndo.removeLast();
-    _markDirty();
-  }
-
-  void _descRedoAction() {
-    if (_descRedo.isEmpty) return;
-    _descUndo.add(_descCtrl.text);
-    _descCtrl.text = _descRedo.removeLast();
-    _markDirty();
-  }
-
   Future<void> _openUrl(String? url) async {
     if (url == null || url.isEmpty) return;
     final uri = Uri.tryParse(url);
@@ -712,24 +704,41 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   }
 
   Future<void> _toggleSubtask(dynamic st) async {
-    final r = await widget.apiService.toggleSubTask(widget.taskId, st['id'] as int);
+    final id = int.tryParse('${st['id']}');
+    if (id == null) return;
+    final idx = _subtasks.indexWhere((s) => int.tryParse('${s['id']}') == id);
+    if (idx < 0) return;
+
+    final raw = _subtasks[idx];
+    final current = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{'id': id};
+    final wasDone = current['completed'] == true ||
+        current['status']?.toString() == 'completed' ||
+        current['status']?.toString() == 'done';
+
+    // Instant mark / unmark — then sync with server.
+    setState(() {
+      current['completed'] = !wasDone;
+      current['status'] = wasDone ? 'to_do' : 'done';
+      _subtasks[idx] = current;
+    });
+
+    final r = await widget.apiService.toggleSubTask(
+      widget.taskId,
+      id,
+      projectId: widget.projectId,
+      markDone: !wasDone,
+    );
     if (!mounted) return;
     if (r['success'] == true) {
-      await _load();
+      await _load(silent: true);
+    } else {
+      setState(() {
+        current['completed'] = wasDone;
+        current['status'] = wasDone ? 'done' : 'to_do';
+        _subtasks[idx] = current;
+      });
+      AppToast.updateFailed(context, r['error']?.toString());
     }
-  }
-
-  void _wrapSelection(String left, String right) {
-    _pushDescHistory();
-    final sel = _descCtrl.selection;
-    if (!sel.isValid) return;
-    final text = _descCtrl.text;
-    final selected = sel.textInside(text);
-    final newText = text.replaceRange(sel.start, sel.end, '$left$selected$right');
-    _descCtrl.value = TextEditingValue(
-      text: newText,
-      selection: TextSelection.collapsed(offset: sel.start + left.length + selected.length + right.length),
-    );
   }
 
   Future<void> _toggleComplete() async {
@@ -846,7 +855,37 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
                 child: TabBarView(
                   controller: _tabCtrl,
                   children: [
-                    _buildDetailsTab(t),
+                    _tabPane(child: _descriptionEditor()),
+                    _tabPane(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(child: _buildProgressStrip(_task!)),
+                              const SizedBox(width: 10),
+                              _subtaskAddButton(),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          _subtasksPanel(),
+                        ],
+                      ),
+                    ),
+                    _tabPane(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: _attachmentActions(),
+                          ),
+                          const SizedBox(height: 8),
+                          _attachmentsPanel(),
+                        ],
+                      ),
+                    ),
+                    _tabPane(child: _buildPropertiesSidebar(t)),
                     _buildActivityTab(),
                   ],
                 ),
@@ -864,342 +903,195 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   }
 
   Widget _buildTopBar() {
-    final compact = Responsive.isMobile(context);
+    final compact = MediaQuery.sizeOf(context).width < 700;
+    final t = _task!;
 
     return Padding(
-      padding: EdgeInsets.fromLTRB(compact ? 12 : 16, compact ? 8 : 10, compact ? 12 : 16, 0),
-      child: Container(
-        decoration: AppTheme.loginShell().copyWith(
-          borderRadius: BorderRadius.circular(compact ? 16 : 18),
-        ),
-        padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10, vertical: compact ? 8 : 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      padding: EdgeInsets.fromLTRB(compact ? 12 : 16, compact ? 6 : 8, compact ? 12 : 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Big editable title — primary focus for the user.
+          Container(
+            decoration: AppTheme.loginInsetDecoration(borderRadius: 16),
+            padding: EdgeInsets.fromLTRB(compact ? 12 : 14, compact ? 12 : 14, compact ? 12 : 14, compact ? 12 : 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Title',
+                  style: TextStyle(
+                    color: AppTheme.textMuted.withValues(alpha: 0.85),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: _titleCtrl,
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: compact ? 20 : 22,
+                    fontWeight: FontWeight.w800,
+                    height: 1.3,
+                    letterSpacing: -0.35,
+                  ),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    isDense: true,
+                    hintText: 'What needs to be done?',
+                    hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.4)),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  maxLines: 4,
+                  minLines: 2,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          // Title → Discard + Mark complete → (tabs below).
+          TaskDetailHeaderActions(
+            dirty: _dirty,
+            saving: _saving,
+            isCompleted: taskIsCompleted(t),
+            onDiscard: _dirty ? _discard : null,
+            onToggleComplete: _toggleComplete,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProgressStrip(Map<String, dynamic> t) {
+    final pct = _progressPct(t);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
           children: [
-            const AppBackButton(color: AppTheme.textMuted),
-            const SizedBox(width: 4),
-            Expanded(
-              child: TextField(
-                controller: _titleCtrl,
-                style: TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: compact ? 16 : 17,
-                  fontWeight: FontWeight.w700,
-                ),
-                decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(vertical: 8),
-                ),
-                maxLines: 3,
-                minLines: 1,
-              ),
+            Text(
+              'Progress',
+              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            const Spacer(),
+            Text(
+              _progressLabel(t),
+              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12),
             ),
           ],
         ),
-      ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(99),
+          child: LinearProgressIndicator(
+            value: pct / 100,
+            minHeight: 5,
+            backgroundColor: Colors.white.withValues(alpha: 0.06),
+            color: AppTheme.accent,
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildTabBar() {
-    final compact = Responsive.isMobile(context);
-    final tabBar = TabBar(
-      controller: _tabCtrl,
-      indicatorColor: AppTheme.accent,
-      indicatorWeight: 2,
-      labelColor: AppTheme.textPrimary,
-      unselectedLabelColor: AppTheme.textMuted,
-      labelStyle: TextStyle(fontSize: compact ? 12 : 11, fontWeight: FontWeight.w700),
-      tabs: const [
-        Tab(text: 'Details'),
-        Tab(text: 'Activity'),
-      ],
-    );
-
+    final compact = MediaQuery.sizeOf(context).width < 700;
+    final subCount = _subtasks.length;
+    final fileCount = _attachments.length;
     return Padding(
-      padding: EdgeInsets.fromLTRB(compact ? 12 : 16, 8, compact ? 12 : 16, 0),
+      padding: EdgeInsets.fromLTRB(compact ? 10 : 16, 8, compact ? 10 : 16, 0),
       child: Container(
-        decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        child: Row(
-          children: [
-            Expanded(child: tabBar),
-            if (_saveHint.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Text(
-                  _saveHint,
-                  style: TextStyle(
-                    color: _saveHint == 'Saved' ? AppTheme.success : AppTheme.textMuted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: Colors.white.withValues(alpha: 0.04),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: TabBar(
+          controller: _tabCtrl,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          indicatorSize: TabBarIndicatorSize.tab,
+          dividerColor: Colors.transparent,
+          indicator: BoxDecoration(
+            borderRadius: BorderRadius.circular(9),
+            color: AppTheme.primary.withValues(alpha: 0.22),
+            border: Border.all(color: AppTheme.primaryBright.withValues(alpha: 0.28)),
+          ),
+          labelColor: AppTheme.textPrimary,
+          unselectedLabelColor: AppTheme.textMuted,
+          labelPadding: const EdgeInsets.symmetric(horizontal: 12),
+          labelStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+          unselectedLabelStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+          tabs: [
+            const Tab(height: 34, text: 'Description'),
+            Tab(height: 34, text: subCount > 0 ? 'Subtasks ($subCount)' : 'Subtasks'),
+            Tab(height: 34, text: fileCount > 0 ? 'Files ($fileCount)' : 'Files'),
+            const Tab(height: 34, text: 'More'),
+            const Tab(height: 34, text: 'Activity'),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildDetailsTab(Map<String, dynamic> t) {
-    return LayoutBuilder(
-      builder: (context, c) {
-        final wide = c.maxWidth >= Responsive.tabletMax;
-        if (wide) {
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(flex: 3, child: _buildLeftColumn()),
-              Container(width: 1, color: Colors.white.withValues(alpha: 0.08)),
-              Flexible(flex: 2, child: ConstrainedBox(
-                constraints: const BoxConstraints(minWidth: 260, maxWidth: 340),
-                child: _buildPropertiesSidebar(t),
-              )),
-            ],
-          );
-        }
-        return SingleChildScrollView(
-          padding: EdgeInsets.only(bottom: Responsive.pagePadding(context) + 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (!wide) _buildMobileQuickProps(t),
-              _buildLeftColumn(scrollable: false),
-              _buildPropertiesSidebar(t, collapsible: true),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildLeftColumn({bool scrollable = true}) {
-    final pad = Responsive.pagePadding(context);
-    final gap = Responsive.isMobile(context) ? 16.0 : 22.0;
-    final content = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _sectionHeader('DESCRIPTION', Icons.notes_rounded),
-        const SizedBox(height: 8),
-        _descriptionEditor(),
-        SizedBox(height: gap),
-        _sectionHeader('ATTACHMENTS', Icons.attach_file_rounded, trailing: _attachmentActions()),
-        const SizedBox(height: 8),
-        _attachmentsPanel(),
-        SizedBox(height: gap),
-        _sectionHeader('SUBTASKS', Icons.checklist_rounded, trailing: _subtaskAddButton()),
-        const SizedBox(height: 8),
-        _subtasksPanel(),
-      ],
-    );
-
-    if (!scrollable) {
-      return Padding(padding: EdgeInsets.all(pad), child: content);
-    }
+  Widget _tabPane({required Widget child}) {
+    final pad = MediaQuery.sizeOf(context).width < 700 ? 12.0 : 16.0;
     return SingleChildScrollView(
-      padding: EdgeInsets.all(pad),
-      child: content,
-    );
-  }
-
-  Widget _sectionHeader(String title, IconData icon, {Widget? trailing}) {
-    final compact = Responsive.isMobile(context);
-    final label = Text(
-      title[0].toUpperCase() + title.substring(1).toLowerCase(),
-      style: TextStyle(
-        color: AppTheme.textMuted.withValues(alpha: 0.95),
-        fontSize: compact ? 12 : 11,
-        fontWeight: FontWeight.w600,
+      padding: EdgeInsets.fromLTRB(pad, 12, pad, pad + 8),
+      child: Container(
+        width: double.infinity,
+        decoration: _cardDeco(),
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+        child: child,
       ),
-    );
-    if (compact && trailing != null) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 14, color: AppTheme.accent),
-              const SizedBox(width: 6),
-              label,
-            ],
-          ),
-          const SizedBox(height: 8),
-          trailing,
-        ],
-      );
-    }
-    return Row(
-      children: [
-        Icon(icon, size: 14, color: AppTheme.accent),
-        const SizedBox(width: 6),
-        label,
-        if (trailing != null) ...[const Spacer(), trailing],
-      ],
     );
   }
 
   Widget _descriptionEditor() {
     final compact = Responsive.isMobile(context);
-    return Container(
-      decoration: _cardDeco(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06))),
-            ),
-            child: Row(
-              children: [
-                if (!compact && !_descPreview) ...[
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          _toolBtn(Icons.format_bold, () => _wrapSelection('**', '**')),
-                          _toolBtn(Icons.format_italic, () => _wrapSelection('_', '_')),
-                          _toolBtn(Icons.format_list_bulleted, () => _wrapSelection('\n- ', '')),
-                          _toolBtn(Icons.format_list_numbered, () => _wrapSelection('\n1. ', '')),
-                          _toolBtn(Icons.link, () => _wrapSelection('[', '](url)')),
-                          _toolBtn(Icons.code, () => _wrapSelection('`', '`')),
-                          _toolBtn(Icons.format_quote, () => _wrapSelection('\n> ', '')),
-                          _toolBtn(Icons.undo, _descUndoAction),
-                          _toolBtn(Icons.redo, _descRedoAction),
-                        ],
-                      ),
-                    ),
-                  ),
-                ] else
-                  const Spacer(),
-                _descModeBtn('Edit', !_descPreview, () => setState(() => _descPreview = false)),
-                const SizedBox(width: 4),
-                _descModeBtn('Preview', _descPreview, () => setState(() => _descPreview = true)),
-              ],
-            ),
-          ),
-          if (_descPreview)
-            Container(
-              constraints: BoxConstraints(minHeight: compact ? 120 : 160),
-              padding: const EdgeInsets.all(14),
-              child: _descCtrl.text.trim().isEmpty
-                  ? Text(
-                      'Nothing to preview',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.25), fontSize: 13),
-                    )
-                  : MarkdownBody(
-                      data: descriptionPreviewMarkdown(_descCtrl.text),
-                      selectable: true,
-                      styleSheet: MarkdownStyleSheet(
-                        p: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 13, height: 1.5),
-                        h1: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                        h2: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                        h3: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
-                        code: TextStyle(
-                          color: const Color(0xFFA78BFA),
-                          backgroundColor: Colors.black.withValues(alpha: 0.35),
-                          fontFamily: 'monospace',
-                        ),
-                        codeblockDecoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.35),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        blockquoteDecoration: BoxDecoration(
-                          border: Border(left: BorderSide(color: AppTheme.primary, width: 3)),
-                        ),
-                        blockquote: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 13),
-                        a: const TextStyle(color: AppTheme.primary, decoration: TextDecoration.underline),
-                        listBullet: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
-                      ),
-                      onTapLink: (text, href, title) {
-                        if (href != null) _openUrl(href);
-                      },
-                    ),
-            )
-          else
-            TextField(
-              controller: _descCtrl,
-              maxLines: 10,
-              minLines: compact ? 4 : 6,
-              style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 13, height: 1.5),
-              decoration: InputDecoration(
-                hintText: 'Add a description… (Markdown supported)',
-                hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.6)),
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.all(14),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _descModeBtn(String label, bool active, VoidCallback onTap) {
-    return Material(
-      color: active ? AppTheme.accent.withValues(alpha: 0.2) : Colors.transparent,
-      borderRadius: BorderRadius.circular(6),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: active ? AppTheme.accent : AppTheme.textMuted,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Description',
+          style: TextStyle(
+            color: AppTheme.textMuted.withValues(alpha: 0.9),
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _toolBtn(IconData icon, VoidCallback onTap) {
-    return IconButton(
-      onPressed: onTap,
-      icon: Icon(icon, size: 16, color: Colors.white38),
-      padding: const EdgeInsets.all(6),
-      constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+        const SizedBox(height: 8),
+        TaskDescriptionEditor(
+          key: ValueKey<String>('desc_editor_${widget.taskId}_$_descEditorGen'),
+          initialValue: _descCtrl.text,
+          minHeight: compact ? 160 : 220,
+          onChanged: (html) {
+            if (_syncingFromServer) return;
+            if (_descCtrl.text == html) return;
+            _descCtrl.value = TextEditingValue(text: html);
+          },
+        ),
+      ],
     );
   }
 
   Widget _attachmentActions() {
-    final compact = Responsive.isMobile(context);
-    if (compact) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            onPressed: _uploadFile,
-            icon: const Icon(Icons.upload, size: 18, color: AppTheme.primary),
-            tooltip: 'Upload',
-            visualDensity: VisualDensity.compact,
-          ),
-          IconButton(
-            onPressed: _pasteFromClipboard,
-            icon: Icon(Icons.content_paste, size: 18, color: Colors.white.withValues(alpha: 0.5)),
-            tooltip: 'Paste',
-            visualDensity: VisualDensity.compact,
-          ),
-        ],
-      );
-    }
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        TextButton.icon(
+        IconButton(
           onPressed: _uploadFile,
-          icon: const Icon(Icons.upload, size: 14, color: AppTheme.primary),
-          label: const Text('Upload', style: TextStyle(color: AppTheme.primary, fontSize: 12)),
+          icon: const Icon(Icons.upload_rounded, size: 18, color: AppTheme.primaryBright),
+          tooltip: 'Upload',
+          visualDensity: VisualDensity.compact,
         ),
-        TextButton.icon(
+        IconButton(
           onPressed: _pasteFromClipboard,
-          icon: Icon(Icons.content_paste, size: 14, color: Colors.white.withValues(alpha: 0.5)),
-          label: Text('Paste', style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12)),
+          icon: Icon(Icons.content_paste_rounded, size: 17, color: AppTheme.textMuted.withValues(alpha: 0.85)),
+          tooltip: 'Paste',
+          visualDensity: VisualDensity.compact,
         ),
       ],
     );
@@ -1242,14 +1134,15 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   }
 
   Widget _attachmentsPanel() {
-    final compact = Responsive.isMobile(context);
     final panel = AnimatedContainer(
       duration: const Duration(milliseconds: 150),
-      padding: EdgeInsets.all(compact ? 12 : 20),
-      decoration: _cardDeco().copyWith(
+      padding: EdgeInsets.all(_attachments.isEmpty ? 18 : 4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.black.withValues(alpha: 0.16),
         border: Border.all(
-          color: _attachmentsDragOver ? AppTheme.primary : Colors.white.withValues(alpha: 0.08),
-          width: _attachmentsDragOver ? 2 : 1,
+          color: _attachmentsDragOver ? AppTheme.primary : Colors.white.withValues(alpha: 0.06),
+          width: _attachmentsDragOver ? 1.5 : 1,
         ),
       ),
       child: _attachments.isEmpty
@@ -1257,11 +1150,9 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
               child: Text(
                 _attachmentsDragOver
                     ? 'Drop files here…'
-                    : (Responsive.isMobile(context)
-                        ? 'No attachments — tap Upload'
-                        : PlatformCapabilities.fileDragDrop
-                            ? 'No attachments yet — upload, drop, or paste (Ctrl+V)'
-                            : 'No attachments yet — upload or paste (Ctrl+V)'),
+                    : (PlatformCapabilities.fileDragDrop
+                        ? 'Drop, upload, or paste a file'
+                        : 'Upload or paste a file'),
                 style: TextStyle(
                   color: _attachmentsDragOver ? AppTheme.primary : Colors.white.withValues(alpha: 0.35),
                   fontSize: 12,
@@ -1274,19 +1165,27 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
                 final name = a['file_name']?.toString() ?? 'file';
                 return ListTile(
                   dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.insert_drive_file, color: Color(0xFFA78BFA), size: 20),
-                  title: Text(name, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                  leading: Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      color: AppTheme.featureVault.withValues(alpha: 0.15),
+                    ),
+                    child: const Icon(Icons.insert_drive_file_rounded, color: AppTheme.featureVault, size: 18),
+                  ),
+                  title: Text(name, style: const TextStyle(color: Colors.white70, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       IconButton(
-                        icon: const Icon(Icons.open_in_new, size: 16, color: Colors.white38),
+                        icon: const Icon(Icons.open_in_new_rounded, size: 16, color: Colors.white38),
                         onPressed: () => _openUrl(a['file_url']?.toString()),
                         tooltip: 'Open',
                       ),
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
+                        icon: const Icon(Icons.delete_outline_rounded, size: 16, color: Colors.redAccent),
                         onPressed: () => _deleteAttachment(a),
                         tooltip: 'Delete',
                       ),
@@ -1314,15 +1213,31 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   }
 
   Widget _subtaskAddButton() {
-    return FilledButton.icon(
-      onPressed: () => _showSubtaskDialog(),
-      icon: const Icon(Icons.add, size: 14),
-      label: const Text('Add', style: TextStyle(fontSize: 12)),
-      style: FilledButton.styleFrom(
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        visualDensity: VisualDensity.compact,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF38BDF8), Color(0xFF3B82F6)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF38BDF8).withValues(alpha: 0.35),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: FilledButton.icon(
+        onPressed: () => _showSubtaskDialog(),
+        icon: const Icon(Icons.add_rounded, size: 18),
+        label: const Text('Add subtask', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5)),
+        style: FilledButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          shadowColor: Colors.transparent,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
       ),
     );
   }
@@ -1330,184 +1245,187 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   Widget _subtasksPanel() {
     if (_subtasks.isEmpty) {
       return Container(
-        padding: const EdgeInsets.symmetric(vertical: 36),
-        decoration: _cardDeco(),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.white.withValues(alpha: 0.04),
+              AppTheme.primary.withValues(alpha: 0.08),
+            ],
+          ),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
         child: Column(
           children: [
             Container(
-              width: 48,
-              height: 48,
+              width: 52,
+              height: 52,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                color: AppTheme.accent.withValues(alpha: 0.12),
+                border: Border.all(color: AppTheme.accent.withValues(alpha: 0.3)),
               ),
-              child: Icon(Icons.add, color: Colors.white.withValues(alpha: 0.35)),
+              child: const Icon(Icons.playlist_add_check_rounded, size: 26, color: AppTheme.accent),
             ),
             const SizedBox(height: 12),
+            const Text(
+              'No subtasks yet',
+              style: TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
             Text(
-              'No subtasks yet. Break this task into smaller steps.',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 12),
+              'Split this task into small clear steps',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 12),
               textAlign: TextAlign.center,
             ),
+            const SizedBox(height: 14),
+            _subtaskAddButton(),
           ],
         ),
       );
     }
-    if (Responsive.isMobile(context)) {
-      return Column(
-        children: _subtasks.map((st) => _subtaskMobileCard(st)).toList(),
-      );
-    }
-    return Container(
-      decoration: _cardDeco(),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(Colors.white.withValues(alpha: 0.03)),
-          dataRowMinHeight: 44,
-          columns: const [
-            DataColumn(label: SizedBox(width: 28)),
-            DataColumn(label: Text('Summary', style: TextStyle(color: Colors.white54, fontSize: 10))),
-            DataColumn(label: Text('Priority', style: TextStyle(color: Colors.white54, fontSize: 10))),
-            DataColumn(label: Text('Status', style: TextStyle(color: Colors.white54, fontSize: 10))),
-            DataColumn(label: Text('Assignee', style: TextStyle(color: Colors.white54, fontSize: 10))),
-            DataColumn(label: Text('Due', style: TextStyle(color: Colors.white54, fontSize: 10))),
-            DataColumn(label: SizedBox(width: 64)),
-          ],
-          rows: _subtasks.map((st) {
-            final done = st['completed'] == true || st['status']?.toString() == 'completed';
-            final due = st['due_date']?.toString() ?? '';
-            return DataRow(
-              onSelectChanged: (_) => _showSubtaskDialog(st: st),
-              cells: [
-              DataCell(Checkbox(value: done, activeColor: AppTheme.primary, onChanged: (_) => _toggleSubtask(st))),
-              DataCell(Text(st['summary']?.toString() ?? '', style: const TextStyle(color: Colors.white, fontSize: 12))),
-              DataCell(Text(st['priority']?.toString() ?? '', style: const TextStyle(color: Colors.white54, fontSize: 11))),
-              DataCell(SubtaskStatusBadge(subtask: st)),
-              DataCell(Text(_displayStr(st['assignee_name']), style: const TextStyle(color: Colors.white54, fontSize: 11))),
-              DataCell(Text(due.length >= 10 ? due.substring(0, 10) : '—', style: const TextStyle(color: Colors.white54, fontSize: 11))),
-              DataCell(Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined, size: 16, color: Colors.white38),
-                    onPressed: () => _showSubtaskDialog(st: st),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
-                    onPressed: () => widget.apiService.deleteSubTask(widget.taskId, st['id']).then((_) => _load()),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(width: 28, height: 28),
-                  ),
-                ],
-              )),
-            ],
-            );
-          }).toList(),
-        ),
-      ),
+
+    return Column(
+      children: [
+        for (var i = 0; i < _subtasks.length; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          _subtaskRow(_subtasks[i]),
+        ],
+      ],
     );
   }
 
-  Widget _subtaskMobileCard(dynamic st) {
-    final done = st['completed'] == true || st['status']?.toString() == 'completed';
+  Widget _subtaskRow(dynamic st) {
+    final done = st['completed'] == true || st['status']?.toString() == 'completed' || st['status']?.toString() == 'done';
     final due = st['due_date']?.toString() ?? '';
+    final dueShort = due.length >= 10 ? due.substring(0, 10) : '';
+    final assignee = _displayStr(st['assignee_name']);
+    final priority = st['priority']?.toString() ?? '';
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: _cardDeco(),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: () => _showSubtaskDialog(st: st),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Checkbox(
-                  value: done,
-                  activeColor: AppTheme.accent,
-                  onChanged: (_) => _toggleSubtask(st),
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        st['summary']?.toString() ?? '',
-                        style: TextStyle(
-                          color: AppTheme.textPrimary.withValues(alpha: 0.95),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        color: done
+            ? Colors.white.withValues(alpha: 0.025)
+            : Colors.white.withValues(alpha: 0.05),
+        border: Border.all(
+          color: done
+              ? AppTheme.success.withValues(alpha: 0.22)
+              : Colors.white.withValues(alpha: 0.08),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 10, 6, 10),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Dedicated tap target — mark / unmark instantly.
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => _toggleSubtask(st),
+                borderRadius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    width: 26,
+                    height: 26,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: done ? AppTheme.success.withValues(alpha: 0.9) : Colors.transparent,
+                      border: Border.all(
+                        color: done ? AppTheme.success : Colors.white.withValues(alpha: 0.35),
+                        width: 1.8,
                       ),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          SubtaskStatusBadge(subtask: st),
-                          Text(
-                            st['priority']?.toString() ?? '',
-                            style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
-                          ),
-                          if (due.length >= 10)
-                            Text(
-                              due.substring(0, 10),
-                              style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11),
-                            ),
-                        ],
-                      ),
-                      if (_displayStr(st['assignee_name']).isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            _displayStr(st['assignee_name']),
-                            style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 11),
-                          ),
-                        ),
-                    ],
+                    ),
+                    child: done
+                        ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
+                        : null,
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.more_horiz, size: 18, color: Colors.white38),
-                  onPressed: () => _showSubtaskDialog(st: st),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ],
+              ),
             ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () => _showSubtaskDialog(st: st),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          st['summary']?.toString() ?? '',
+                          style: TextStyle(
+                            color: done ? AppTheme.textMuted : AppTheme.textPrimary,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            decoration: done ? TextDecoration.lineThrough : null,
+                            decorationColor: AppTheme.textMuted,
+                            height: 1.3,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            SubtaskStatusBadge(subtask: st),
+                            if (priority.isNotEmpty) _softPill(priority),
+                            if (assignee.isNotEmpty) _softPill(assignee),
+                            if (dueShort.isNotEmpty) _softPill(dueShort, icon: Icons.event_rounded),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              icon: Icon(Icons.edit_outlined, size: 17, color: Colors.white.withValues(alpha: 0.4)),
+              onPressed: () => _showSubtaskDialog(st: st),
+              tooltip: 'Edit',
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _softPill(String text, {IconData? icon}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.white.withValues(alpha: 0.05),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 11, color: AppTheme.textMuted),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            text,
+            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.95), fontSize: 11, fontWeight: FontWeight.w500),
           ),
-        ),
+        ],
       ),
     );
   }
 
-  Widget _buildMobileQuickProps(Map<String, dynamic> t) {
-    final pad = Responsive.pagePadding(context);
-    return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 8, pad, 4),
-      child: Container(
-        decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
-        padding: const EdgeInsets.all(12),
-        child: TaskStatusDropdown(
-          key: ValueKey<String>('qs_${t['id']}_$_status'),
-          taskId: widget.taskId,
-          task: t,
-          projectId: widget.projectId,
-          apiService: widget.apiService,
-          onUpdated: _load,
-          compact: true,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPropertiesSidebar(Map<String, dynamic> t, {bool collapsible = false}) {
+  Widget _buildPropertiesSidebar(Map<String, dynamic> t) {
     final people = _assigneeIds.map((id) {
       final emp = _employees.cast<Map?>().firstWhere(
             (e) => int.tryParse('${e?['id'] ?? e?['user_id']}') == id,
@@ -1522,86 +1440,68 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       };
     }).toList();
 
-    final stackOnNarrow = Responsive.isMobile(context);
-    final fields = Column(
+    final stageOptions = _stages
+        .map((s) => ('${s['id']}', s['name']?.toString() ?? 'Stage', const Color(0xFF3B82F6)))
+        .toList();
+
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _propLabel('Assignee'),
-        ...people.map((p) => _assigneeCard(p)),
+        _propLabel('People'),
+        if (people.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(
+              'No one assigned yet',
+              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 12),
+            ),
+          )
+        else
+          ...people.map((p) => _assigneeCard(p)),
         if (widget.isManager || _employees.isNotEmpty)
-          OutlinedButton.icon(
+          TextButton.icon(
             onPressed: _pickAssignees,
-            icon: const Icon(Icons.add, size: 14),
-            label: const Text('Add / Change', style: TextStyle(fontSize: 12)),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppTheme.accent,
-              side: BorderSide(color: AppTheme.accent.withValues(alpha: 0.4)),
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            icon: const Icon(Icons.person_add_alt_1_rounded, size: 16, color: AppTheme.accent),
+            label: Text(
+              people.isEmpty ? 'Assign someone' : 'Change assignees',
+              style: const TextStyle(color: AppTheme.accent, fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              alignment: Alignment.centerLeft,
             ),
           ),
-        const SizedBox(height: 16),
-        if (stackOnNarrow) ...[
-          if (!collapsible)
-            _propDropdown('Status', _status, _statusOptions, (v) => _setField(() => _status = v, {'status': v})),
-          if (!collapsible) const SizedBox(height: 12),
-          _propDropdown('Priority', _priority, _priorityOptions, (v) => _setField(() => _priority = v, {'priority': v})),
-          const SizedBox(height: 12),
-          _propDropdown('Type', _taskType, _typeOptions, (v) => _setField(() => _taskType = v, {'task_type': v})),
-          const SizedBox(height: 12),
+        const SizedBox(height: 12),
+        _propDropdown('Priority', _priority, _priorityOptions, (v) => _setField(() => _priority = v, {'priority': v})),
+        const SizedBox(height: 12),
+        if (stageOptions.isNotEmpty) ...[
           _propDropdown(
             'Stage',
             '${_stageId ?? ''}',
-            _stages.map((s) => ('${s['id']}', s['name']?.toString() ?? 'Stage', const Color(0xFF3B82F6))).toList(),
+            stageOptions,
             (v) {
               final sid = int.tryParse(v);
               if (sid != null) _setField(() => _stageId = sid, {'stage_id': sid});
             },
           ),
-        ] else ...[
-          Row(
-            children: [
-              Expanded(child: _propDropdown('Status', _status, _statusOptions, (v) => _setField(() => _status = v, {'status': v}))),
-              const SizedBox(width: 8),
-              Expanded(child: _propDropdown('Priority', _priority, _priorityOptions, (v) => _setField(() => _priority = v, {'priority': v}))),
-            ],
-          ),
           const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(child: _propDropdown('Type', _taskType, _typeOptions, (v) => _setField(() => _taskType = v, {'task_type': v}))),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _propDropdown(
-                  'Stage',
-                  '${_stageId ?? ''}',
-                  _stages.map((s) => ('${s['id']}', s['name']?.toString() ?? 'Stage', const Color(0xFF3B82F6))).toList(),
-                  (v) {
-                    final sid = int.tryParse(v);
-                    if (sid != null) _setField(() => _stageId = sid, {'stage_id': sid});
-                  },
-                ),
-              ),
-            ],
-          ),
         ],
-        const SizedBox(height: 16),
-        _propLabel('Progress'),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: _progressPct(t) / 100,
-            minHeight: 6,
-            backgroundColor: Colors.black.withValues(alpha: 0.4),
-            color: AppTheme.accent,
-          ),
+        _propDropdown('Type', _taskType, _typeOptions, (v) => _setField(() => _taskType = v, {'task_type': v})),
+        const SizedBox(height: 14),
+        _propLabel('Schedule'),
+        _dateField('Start', _startDate, 'start_date'),
+        const SizedBox(height: 8),
+        _dateField('Due', _dueDate, 'due_date'),
+        const SizedBox(height: 14),
+        _propLabel('Time'),
+        Row(
+          children: [
+            Expanded(child: _hoursField('Estimate', _estHoursCtrl, 'hours')),
+            const SizedBox(width: 8),
+            Expanded(child: _hoursField('Actual', _actHoursCtrl, 'hours')),
+          ],
         ),
-        const SizedBox(height: 4),
-        Text(
-          _progressLabel(t),
-          style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 10),
-        ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
         CheckboxListTile(
           value: _isAttachmentRequired,
           onChanged: (v) => _setField(
@@ -1614,131 +1514,52 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           contentPadding: EdgeInsets.zero,
           controlAffinity: ListTileControlAffinity.leading,
           title: Text(
-            'Attachment required',
-            style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.85), fontSize: 12),
+            'Require attachment to complete',
+            style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.88), fontSize: 12),
           ),
           subtitle: Text(
-            _attachments.isEmpty ? 'No files attached yet' : '${_attachments.length} file(s)',
+            _attachments.isEmpty ? 'No files yet' : '${_attachments.length} file(s)',
             style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 10),
           ),
         ),
-        const SizedBox(height: 16),
-        _propLabel('Dates'),
-        _dateField('Start Date', _startDate, 'start_date'),
-        const SizedBox(height: 8),
-        _dateField('Due Date', _dueDate, 'due_date'),
-        const SizedBox(height: 16),
-        if (stackOnNarrow) ...[
-          _hoursField('Est. Hours', _estHoursCtrl, 'e.g. 4'),
-          const SizedBox(height: 12),
-          _hoursField('Act. Hours', _actHoursCtrl, 'e.g. 3.5'),
-        ] else
-          Row(
-            children: [
-              Expanded(child: _hoursField('Est. Hours', _estHoursCtrl, 'e.g. 4')),
-              const SizedBox(width: 8),
-              Expanded(child: _hoursField('Act. Hours', _actHoursCtrl, 'e.g. 3.5')),
-            ],
-          ),
       ],
-    );
-
-    if (collapsible) {
-      return Padding(
-        padding: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 0, Responsive.pagePadding(context), 8),
-        child: DecoratedBox(
-          decoration: _cardDeco(),
-          child: Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              initiallyExpanded: false,
-              iconColor: AppTheme.textMuted,
-              collapsedIconColor: AppTheme.textMuted,
-              title: Row(
-                children: [
-                  const Icon(Icons.tune_rounded, size: 16, color: AppTheme.accent),
-                  const SizedBox(width: 8),
-                  Text(
-                    'More properties',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary.withValues(alpha: 0.9),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: fields,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: _cardDeco(),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.tune_rounded, size: 14, color: AppTheme.accent),
-                const SizedBox(width: 6),
-                Text(
-                  'Properties',
-                  style: TextStyle(
-                    color: AppTheme.textMuted.withValues(alpha: 0.95),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            fields,
-          ],
-        ),
-      ),
     );
   }
 
   Widget _assigneeCard(Map<String, dynamic> p) {
     final id = int.tryParse('${p['id']}');
     final name = p['name']?.toString() ?? 'User';
-    final role = p['role']?.toString() ?? '';
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: _fieldDeco(),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.white.withValues(alpha: 0.04),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+      ),
       child: Row(
         children: [
           CircleAvatar(
-            radius: 18,
-            backgroundColor: const Color(0xFF334155),
-            child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: const TextStyle(color: Colors.white, fontSize: 13)),
+            radius: 14,
+            backgroundColor: AppTheme.primary.withValues(alpha: 0.35),
+            child: Text(
+              name.isNotEmpty ? name[0].toUpperCase() : '?',
+              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
+            ),
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-                if (role.isNotEmpty)
-                  Text(role, style: TextStyle(color: Colors.white.withValues(alpha: 0.45), fontSize: 11)),
-              ],
+            child: Text(
+              name,
+              style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
           if (id != null && (widget.isManager || _employees.isNotEmpty))
             IconButton(
               onPressed: () => _removeAssignee(id),
-              icon: const Icon(Icons.close, size: 16, color: Colors.redAccent),
+              icon: Icon(Icons.close_rounded, size: 16, color: Colors.white.withValues(alpha: 0.45)),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints.tightFor(width: 28, height: 28),
             ),
@@ -1760,12 +1581,6 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       ),
     );
   }
-
-  static const _statusOptions = [
-    ('pending', 'Pending', Color(0xFF71717A)),
-    ('in_progress', 'In progress', Color(0xFF3B82F6)),
-    ('completed', 'Done', Color(0xFF10B981)),
-  ];
 
   static const _priorityOptions = [
     ('low', 'Low', AppTheme.success),
@@ -1922,7 +1737,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
         child: Padding(
           padding: EdgeInsets.all(pad),
           child: Text(
-            _activityLoaded ? 'No activity yet' : 'Switch to this tab to load activity',
+            _activityLoaded ? 'No activity yet' : 'Open this tab to load updates',
             style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13),
             textAlign: TextAlign.center,
           ),
@@ -1932,7 +1747,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     return ListView.separated(
       padding: EdgeInsets.fromLTRB(pad, 12, pad, pad + 8),
       itemCount: _activity.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
       itemBuilder: (context, i) {
         final a = _activity[i] as Map? ?? {};
         final user = a['user_name']?.toString() ?? 'Someone';
@@ -1940,19 +1755,23 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
         final ts = a['timestamp']?.toString() ?? '';
         String when = ts;
         final dt = DateTime.tryParse(ts);
-        if (dt != null) when = DateFormat('d MMM yyyy, HH:mm').format(dt.toLocal());
+        if (dt != null) when = DateFormat('d MMM · HH:mm').format(dt.toLocal());
         return Container(
-          decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: Colors.white.withValues(alpha: 0.04),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               CircleAvatar(
-                radius: 16,
-                backgroundColor: const Color(0xFF334155),
+                radius: 15,
+                backgroundColor: AppTheme.primary.withValues(alpha: 0.3),
                 child: Text(
                   user.isNotEmpty ? user[0].toUpperCase() : '?',
-                  style: const TextStyle(fontSize: 11, color: Colors.white),
+                  style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w700),
                 ),
               ),
               const SizedBox(width: 10),
@@ -1966,6 +1785,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
                         color: AppTheme.textPrimary.withValues(alpha: 0.95),
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
+                        height: 1.35,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -1984,23 +1804,42 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   }
 
   Widget _buildFooter() {
-    final compact = Responsive.isMobile(context);
+    final compact = MediaQuery.sizeOf(context).width < 640;
     return Container(
-      decoration: AppTheme.loginShell().copyWith(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            const Color(0xFF0B1F3A).withValues(alpha: 0.98),
+            const Color(0xFF071526),
+          ],
+        ),
+        border: Border(
+          top: BorderSide(color: AppTheme.accent.withValues(alpha: 0.28), width: 1.2),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.accent.withValues(alpha: 0.12),
+            blurRadius: 24,
+            offset: const Offset(0, -6),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.45),
+            blurRadius: 20,
+            offset: const Offset(0, -4),
+          ),
+        ],
       ),
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: EdgeInsets.fromLTRB(compact ? 12 : 20, 10, compact ? 12 : 20, compact ? 6 : 10),
+          padding: EdgeInsets.fromLTRB(compact ? 14 : 18, 12, compact ? 14 : 18, compact ? 10 : 14),
           child: TaskDetailFooterActions(
             dirty: _dirty,
             saving: _saving,
-            isCompleted: _task != null && taskIsCompleted(_task),
             saveHint: _saveHint,
-            onDiscard: _dirty ? _discard : null,
             onSave: _saveAll,
-            onToggleComplete: _toggleComplete,
           ),
         ),
       ),
@@ -2008,16 +1847,31 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
   }
 
   void _showSubtaskDialog({dynamic st}) {
+    final page = _SubtaskEditDialog(
+      apiService: widget.apiService,
+      taskId: widget.taskId,
+      projectId: widget.projectId,
+      employees: _employees,
+      subtask: st,
+      onSaved: _load,
+    );
+    final narrow = MediaQuery.sizeOf(context).width < 720;
+    if (narrow) {
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        barrierColor: AppTheme.modalBarrierColor,
+        builder: (ctx) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+          child: page,
+        ),
+      );
+      return;
+    }
     showDialog<void>(
       context: context,
-      builder: (ctx) => _SubtaskEditDialog(
-        apiService: widget.apiService,
-        taskId: widget.taskId,
-        projectId: widget.projectId,
-        employees: _employees,
-        subtask: st,
-        onSaved: _load,
-      ),
+      builder: (ctx) => page,
     );
   }
 
@@ -2168,8 +2022,15 @@ class _SubtaskEditDialogState extends State<_SubtaskEditDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 10, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            color: AppTheme.textMuted.withValues(alpha: 0.9),
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 6),
         child,
       ],
     );
@@ -2177,178 +2038,303 @@ class _SubtaskEditDialogState extends State<_SubtaskEditDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: AppTheme.surface2,
-      insetPadding: AppTheme.dialogInsets(context),
-      title: Text(_isEdit ? 'Edit subtask' : 'Add subtask', style: const TextStyle(color: Color(0xFFF8FAFC))),
-      content: SizedBox(
-        width: AppTheme.dialogMaxWidth(context, max: 440),
-        child: SingleChildScrollView(
+    final narrow = MediaQuery.sizeOf(context).width < 720;
+    final form = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (narrow) ...[
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ],
+        Text(
+          _isEdit ? 'Edit subtask' : 'Add subtask',
+          style: const TextStyle(
+            color: AppTheme.textPrimary,
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Keep it short — one clear step',
+          style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12),
+        ),
+        const SizedBox(height: 16),
+        _field(
+          'What to do',
+          TextField(
+            controller: _summaryCtrl,
+            autofocus: !_isEdit,
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+            decoration: _inputDeco('e.g. Design login screen'),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _field(
+          'Notes (optional)',
+          TextField(
+            controller: _descCtrl,
+            maxLines: 3,
+            minLines: 2,
+            style: const TextStyle(color: Colors.white, fontSize: 13),
+            decoration: _inputDeco('Extra detail…'),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _field(
+                'Priority',
+                DropdownButtonFormField<String>(
+                  initialValue: ['low', 'medium', 'high'].contains(_priority) ? _priority : 'medium',
+                  dropdownColor: AppTheme.surface2,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: _inputDeco(null),
+                  items: const [
+                    DropdownMenuItem(value: 'low', child: Text('Low')),
+                    DropdownMenuItem(value: 'medium', child: Text('Medium')),
+                    DropdownMenuItem(value: 'high', child: Text('High')),
+                  ],
+                  onChanged: (v) => setState(() => _priority = v ?? 'medium'),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _field(
+                'Status',
+                DropdownButtonFormField<String>(
+                  initialValue: ['to_do', 'in_progress', 'done'].contains(_status) ? _status : 'to_do',
+                  dropdownColor: AppTheme.surface2,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: _inputDeco(null),
+                  items: const [
+                    DropdownMenuItem(value: 'to_do', child: Text('To do')),
+                    DropdownMenuItem(value: 'in_progress', child: Text('In progress')),
+                    DropdownMenuItem(value: 'done', child: Text('Done')),
+                  ],
+                  onChanged: (v) => setState(() => _status = v ?? 'to_do'),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _field(
+                'Assignee',
+                DropdownButtonFormField<int?>(
+                  initialValue: _assigneeId,
+                  dropdownColor: AppTheme.surface2,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: _inputDeco(null),
+                  items: [
+                    const DropdownMenuItem<int?>(value: null, child: Text('Unassigned')),
+                    ...widget.employees.map((e) {
+                      final id = int.tryParse('${e['id'] ?? e['user_id']}');
+                      return DropdownMenuItem<int?>(value: id, child: Text(_displayStr(e)));
+                    }),
+                  ],
+                  onChanged: (v) => setState(() => _assigneeId = v),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _field(
+                'Due',
+                InkWell(
+                  onTap: () async {
+                    final initial = _dueDate != null ? DateTime.tryParse(_dueDate!) ?? DateTime.now() : DateTime.now();
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: initial,
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime(2035),
+                    );
+                    if (picked != null) {
+                      setState(() {
+                        _dueDate =
+                            '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+                      });
+                    }
+                  },
+                  child: InputDecorator(
+                    decoration: _inputDeco(null),
+                    child: Text(
+                      _dueDate ?? 'Not set',
+                      style: TextStyle(color: _dueDate == null ? Colors.white38 : Colors.white, fontSize: 13),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (_isEdit) ...[
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              const Text(
+                'Files',
+                style: TextStyle(color: AppTheme.textPrimary, fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _uploadAttachment,
+                icon: const Icon(Icons.upload_rounded, size: 14, color: AppTheme.primaryBright),
+                label: const Text('Upload', style: TextStyle(color: AppTheme.primaryBright, fontSize: 12)),
+              ),
+            ],
+          ),
+          if (_loadingAttachments)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary))),
+            )
+          else if (_attachments.isEmpty)
+            Text('No files', style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 12))
+          else
+            ..._attachments.map((a) {
+              final name = a['file_name']?.toString() ?? 'file';
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.attach_file_rounded, size: 16, color: AppTheme.featureVault),
+                title: Text(name, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline_rounded, size: 16, color: Colors.redAccent),
+                  onPressed: () => _deleteAttachment(a),
+                ),
+              );
+            }),
+        ],
+        const SizedBox(height: 18),
+        Container(
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: Colors.black.withValues(alpha: 0.22),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _field('Summary *', TextField(
-                controller: _summaryCtrl,
-                style: const TextStyle(color: Colors.white),
-                decoration: _inputDeco('What needs to be done…'),
-              )),
-              const SizedBox(height: 12),
-              _field('Description', TextField(
-                controller: _descCtrl,
-                maxLines: 3,
-                style: const TextStyle(color: Colors.white),
-                decoration: _inputDeco('Optional details…'),
-              )),
-              const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(
-                    child: _field('Priority', DropdownButtonFormField<String>(
-                      initialValue: ['low', 'medium', 'high'].contains(_priority) ? _priority : 'medium',
-                      dropdownColor: AppTheme.surface2,
-                      style: const TextStyle(color: Colors.white, fontSize: 13),
-                      decoration: _inputDeco(null),
-                      items: const [
-                        DropdownMenuItem(value: 'low', child: Text('Low')),
-                        DropdownMenuItem(value: 'medium', child: Text('Medium')),
-                        DropdownMenuItem(value: 'high', child: Text('High')),
-                      ],
-                      onChanged: (v) => setState(() => _priority = v ?? 'medium'),
-                    )),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _field('Status', DropdownButtonFormField<String>(
-                      initialValue: ['to_do', 'in_progress', 'done'].contains(_status) ? _status : 'to_do',
-                      dropdownColor: AppTheme.surface2,
-                      style: const TextStyle(color: Colors.white, fontSize: 13),
-                      decoration: _inputDeco(null),
-                      items: const [
-                        DropdownMenuItem(value: 'to_do', child: Text('To Do')),
-                        DropdownMenuItem(value: 'in_progress', child: Text('In Progress')),
-                        DropdownMenuItem(value: 'done', child: Text('Done')),
-                      ],
-                      onChanged: (v) => setState(() => _status = v ?? 'to_do'),
-                    )),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: _field('Assignee', DropdownButtonFormField<int?>(
-                      initialValue: _assigneeId,
-                      dropdownColor: AppTheme.surface2,
-                      style: const TextStyle(color: Colors.white, fontSize: 13),
-                      decoration: _inputDeco(null),
-                      items: [
-                        const DropdownMenuItem<int?>(value: null, child: Text('Unassigned')),
-                        ...widget.employees.map((e) {
-                          final id = int.tryParse('${e['id'] ?? e['user_id']}');
-                          return DropdownMenuItem<int?>(value: id, child: Text(_displayStr(e)));
-                        }),
-                      ],
-                      onChanged: (v) => setState(() => _assigneeId = v),
-                    )),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _field('Due date', InkWell(
-                      onTap: () async {
-                        final initial = _dueDate != null ? DateTime.tryParse(_dueDate!) ?? DateTime.now() : DateTime.now();
-                        final picked = await showDatePicker(
-                          context: context,
-                          initialDate: initial,
-                          firstDate: DateTime(2020),
-                          lastDate: DateTime(2035),
-                        );
-                        if (picked != null) {
-                          setState(() {
-                            _dueDate =
-                                '${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
-                          });
-                        }
-                      },
-                      child: InputDecorator(
-                        decoration: _inputDeco(null),
-                        child: Text(
-                          _dueDate ?? 'Not set',
-                          style: TextStyle(color: _dueDate == null ? Colors.white38 : Colors.white, fontSize: 13),
-                        ),
+                    child: OutlinedButton(
+                      onPressed: _saving ? null : () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.textPrimary,
+                        side: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
                       ),
-                    )),
+                      child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(11),
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF38BDF8), Color(0xFF3B82F6)],
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF3B82F6).withValues(alpha: 0.35),
+                            blurRadius: 10,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: FilledButton(
+                        onPressed: _saving ? null : _save,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.transparent,
+                          shadowColor: Colors.transparent,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+                        ),
+                        child: _saving
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : Text(
+                                _isEdit ? 'Save' : 'Add subtask',
+                                style: const TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                      ),
+                    ),
                   ),
                 ],
               ),
               if (_isEdit) ...[
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Text(
-                      'ATTACHMENTS',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 10, fontWeight: FontWeight.w700),
-                    ),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: _uploadAttachment,
-                      icon: const Icon(Icons.upload, size: 14, color: AppTheme.primary),
-                      label: const Text('Upload', style: TextStyle(color: AppTheme.primary, fontSize: 12)),
-                    ),
-                  ],
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: _saving
+                      ? null
+                      : () async {
+                          Navigator.pop(context);
+                          await widget.apiService.deleteSubTask(widget.taskId, widget.subtask['id']);
+                          await widget.onSaved();
+                        },
+                  icon: const Icon(Icons.delete_outline_rounded, size: 16, color: Color(0xFFF87171)),
+                  label: const Text(
+                    'Delete subtask',
+                    style: TextStyle(color: Color(0xFFF87171), fontWeight: FontWeight.w600),
+                  ),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
                 ),
-                const SizedBox(height: 6),
-                if (_loadingAttachments)
-                  const Center(child: Padding(
-                    padding: EdgeInsets.all(12),
-                    child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary)),
-                  ))
-                else if (_attachments.isEmpty)
-                  Text(
-                    'No attachments',
-                    style: TextStyle(color: Colors.white.withValues(alpha: 0.35), fontSize: 12),
-                  )
-                else
-                  ..._attachments.map((a) {
-                    final name = a['file_name']?.toString() ?? 'file';
-                    return ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.attach_file, size: 16, color: Color(0xFFA78BFA)),
-                      title: Text(name, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
-                        onPressed: () => _deleteAttachment(a),
-                      ),
-                    );
-                  }),
               ],
             ],
           ),
         ),
-      ),
-      actions: [
-        if (_isEdit)
-          TextButton(
-            onPressed: _saving
-                ? null
-                : () async {
-                    Navigator.pop(context);
-                    await widget.apiService.deleteSubTask(widget.taskId, widget.subtask['id']);
-                    await widget.onSaved();
-                  },
-            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
-          ),
-        TextButton(onPressed: _saving ? null : () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(
-          onPressed: _saving ? null : _save,
-          style: AppTheme.taskPrimaryButtonStyle(),
-          child: _saving
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : const Text('Save'),
-        ),
       ],
+    );
+
+    final panel = Container(
+      constraints: BoxConstraints(maxWidth: narrow ? double.infinity : 460),
+      decoration: AppTheme.loginInsetDecoration(borderRadius: narrow ? 20 : 16),
+      padding: EdgeInsets.fromLTRB(16, narrow ? 10 : 18, 16, 16),
+      child: SingleChildScrollView(child: form),
+    );
+
+    if (narrow) {
+      return SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+          child: panel,
+        ),
+      );
+    }
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: AppTheme.dialogInsets(context),
+      child: panel,
     );
   }
 }

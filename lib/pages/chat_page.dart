@@ -427,14 +427,16 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   // ═══════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width > 600;
+    final isWide = Responsive.useChatSplit(context);
     final hasChat = _selectedUser != null || _selectedGroup != null;
-    final listWidth = isWide ? (MediaQuery.of(context).size.width * 0.32).clamp(280.0, 420.0) : double.infinity;
-    final bottomInset = Responsive.bottomNavInset(context);
+    final listWidth = isWide ? Responsive.chatListPaneWidth(context) : double.infinity;
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    final bottomInset = keyboard > 0 ? 0.0 : Responsive.bottomNavInset(context);
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
       child: SafeArea(
+        top: false,
         bottom: false,
         child: isWide
             ? Row(children: [
@@ -716,7 +718,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   // ─── Chat Area (Right Side) ───
   Widget _buildChatArea() {
-    final isWide = MediaQuery.of(context).size.width > 600;
+    final isWide = Responsive.useChatSplit(context);
     final isGroup = _selectedGroup != null;
     final name = isGroup
         ? (_selectedGroup['name'] ?? 'Group')

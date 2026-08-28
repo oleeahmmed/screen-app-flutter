@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
@@ -41,11 +42,7 @@ class AppLogoutButton extends StatelessWidget {
       ),
     );
     if (ok == true) {
-      if (onLogout != null) {
-        onLogout();
-      } else {
-        await AppNavigation.instance.logout();
-      }
+      await AppNavigation.instance.logout();
     }
   }
 
@@ -92,7 +89,7 @@ class AppLogoutButton extends StatelessWidget {
   }
 }
 
-/// Submit daily report — opens closing report modal (dashboard glass style).
+/// Submit daily report — opens closing report bottom sheet (same pattern as Take Break).
 class AppSubmitReportButton extends StatelessWidget {
   const AppSubmitReportButton({super.key});
 
@@ -121,7 +118,7 @@ class AppSubmitReportButton extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Icon(
-                  Icons.assignment_turned_in_rounded,
+                  LucideIcons.clipboardCheck,
                   size: 16,
                   color: AppTheme.accent,
                 ),
@@ -176,7 +173,7 @@ class AppHeaderMenuActions extends StatelessWidget {
   }
 }
 
-/// Jump to app shortcuts (Vault, Project) from any screen.
+/// Jump to app shortcuts (Vault, Project, P2P) from any screen.
 class AppQuickMenuButton extends StatelessWidget {
   final Color? iconColor;
   final double iconSize;
@@ -232,7 +229,7 @@ class AppQuickMenuButton extends StatelessWidget {
                         ),
                         const SizedBox(height: 12),
                         ListTile(
-                          leading: const Icon(Icons.lock_outline_rounded, color: Color(0xFFA78BFA)),
+                          leading: _menuIcon(LucideIcons.shield, const Color(0xFFA78BFA)),
                           title: const Text('Vault', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
                           subtitle: Text('Project credentials', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -242,7 +239,7 @@ class AppQuickMenuButton extends StatelessWidget {
                           },
                         ),
                         ListTile(
-                          leading: const Icon(Icons.folder_open_rounded, color: AppTheme.primaryBright),
+                          leading: _menuIcon(LucideIcons.folderOpen, AppTheme.primaryBright),
                           title: const Text('Project', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
                           subtitle: Text('Browse & manage projects', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -251,6 +248,17 @@ class AppQuickMenuButton extends StatelessWidget {
                             AppNavigation.instance.openProject();
                           },
                         ),
+                        if (PlatformCapabilities.peerToPeerFileTransfer)
+                          ListTile(
+                            leading: _menuIcon(LucideIcons.arrowLeftRight, AppTheme.accent),
+                            title: const Text('P2P Transfer', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+                            subtitle: Text('Send files directly — nothing stored on server', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            onTap: () {
+                              Navigator.pop(ctx);
+                              AppNavigation.instance.openP2P();
+                            },
+                          ),
                       ],
                     ),
                   ),
@@ -290,7 +298,7 @@ class AppQuickMenuButton extends StatelessWidget {
           value: -4,
           onTap: () => AppNavigation.instance.openVault(),
           child: const Row(children: [
-            Icon(Icons.lock_outline_rounded, color: Color(0xFFA78BFA), size: 18),
+            _MenuIconChip(icon: LucideIcons.shield, color: Color(0xFFA78BFA)),
             SizedBox(width: 10),
             Text('Vault', style: TextStyle(color: AppTheme.textPrimary)),
           ]),
@@ -299,12 +307,34 @@ class AppQuickMenuButton extends StatelessWidget {
           value: -5,
           onTap: () => AppNavigation.instance.openProject(),
           child: const Row(children: [
-            Icon(Icons.folder_open_rounded, color: AppTheme.primaryBright, size: 18),
+            _MenuIconChip(icon: LucideIcons.folderOpen, color: AppTheme.primaryBright),
             SizedBox(width: 10),
             Text('Project', style: TextStyle(color: AppTheme.textPrimary)),
           ]),
         ),
+        if (PlatformCapabilities.peerToPeerFileTransfer)
+          PopupMenuItem<int>(
+            value: -6,
+            onTap: () => AppNavigation.instance.openP2P(),
+            child: const Row(children: [
+              _MenuIconChip(icon: LucideIcons.arrowLeftRight, color: AppTheme.accent),
+              SizedBox(width: 10),
+              Text('P2P Transfer', style: TextStyle(color: AppTheme.textPrimary)),
+            ]),
+          ),
       ],
+    );
+  }
+
+  static Widget _menuIcon(IconData icon, Color color) {
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Icon(icon, color: color, size: 18),
     );
   }
 
@@ -313,7 +343,27 @@ class AppQuickMenuButton extends StatelessWidget {
     return IconButton(
       onPressed: () => _open(context),
       tooltip: 'Quick menu',
-      icon: Icon(Icons.apps_rounded, color: iconColor ?? AppTheme.textMuted, size: iconSize),
+      icon: Icon(LucideIcons.layoutGrid, color: iconColor ?? AppTheme.textMuted, size: iconSize),
+    );
+  }
+}
+
+class _MenuIconChip extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+
+  const _MenuIconChip({required this.icon, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, color: color, size: 16),
     );
   }
 }

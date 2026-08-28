@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_quill/flutter_quill.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
@@ -31,7 +32,9 @@ import 'widgets/tool_page_scaffold.dart';
 import 'widgets/notification_banner.dart';
 import 'widgets/app_tab_shell.dart';
 import 'services/app_navigation.dart';
-import 'utils/platform_capabilities.dart';
+
+/// Root navigator — used to close pushed routes on logout.
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 int _intFromDynamic(dynamic v, int fallback) {
   if (v is int) return v;
@@ -69,7 +72,10 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Aims',
       debugShowCheckedModeBanner: false,
+      navigatorKey: appNavigatorKey,
       theme: AppTheme.dark(),
+      localizationsDelegates: FlutterQuillLocalizations.localizationsDelegates,
+      supportedLocales: FlutterQuillLocalizations.supportedLocales,
       home: const MainScreen(),
     );
   }
@@ -129,12 +135,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         );
       case 2:
         _chatPage ??= AppTheme.homeGlassBackground(
-          child: SafeArea(
-            bottom: false,
-            child: ChatPage(
-              apiService: _apiService,
-              notificationService: _notificationService,
-            ),
+          child: ChatPage(
+            apiService: _apiService,
+            notificationService: _notificationService,
           ),
         );
       case 3:
@@ -217,7 +220,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               final emp = data['employee'];
               await UserDataService.saveEmployeeId(emp);
               await prefs.setString('designation', emp['designation'] ?? '');
-              await prefs.setBool('is_admin', emp['is_admin'] ?? false);
+              await UserDataService.saveEmployeeRoleFlags(
+                emp is Map ? Map<String, dynamic>.from(emp) : null,
+              );
               final c = emp['screenshot_monitoring_consent'] == true;
               await prefs.setBool('screenshot_monitoring_consent', c);
               AppSession.setConsent(c);
@@ -451,16 +456,26 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Future<void> _handleLogout() async {
     _stopNotifications();
-    await SharedPreferences.getInstance().then((p) => p.clear());
-    AppSession.setConsent(false);
     _screenshotService.stopCapture();
+
+    // Close tool/detail routes and dialogs so LoginPage is visible.
+    appNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+
+    _apiService.setToken('');
+    AppSession.setConsent(false);
+    await UserDataService.clearAllData();
     _clearPageCache();
+
+    AppNavigation.instance.selectedTabIndex = 0;
+    AppNavigation.instance.unreadNotifs = 0;
+
     if (!mounted) return;
     setState(() {
       _isLoggedIn = false;
       _username = '';
       _currentIndex = 0;
       _unreadNotifs = 0;
+      _isLoading = false;
     });
   }
 
@@ -495,10 +510,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           selectedIndex: AppNavigation.instance.selectedTabIndex,
           unreadNotifs: _unreadNotifs,
           onLogout: _handleLogout,
+          homeStyleBackground: true,
           child: ToolPageScaffold(
-            title: 'File transfer',
-            subtitle: 'Send files directly between devices',
             scrollable: false,
+            useBackground: false,
+            showHeader: false,
             onLogout: _handleLogout,
             child: Peer2PeerPage(apiService: _apiService, embedded: true),
           ),
@@ -628,11 +644,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   void _onNavSelected(int i) {
+    final comingHome = i == 0 && _currentIndex != 0;
     setState(() {
       _currentIndex = i;
-      if (i == 0) {
+      if (comingHome) {
         _homeRefreshToken++;
-        _dashboardPage = null;
       }
     });
     _syncNavState();

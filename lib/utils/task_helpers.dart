@@ -15,6 +15,19 @@ int? taskProjectIdFrom(dynamic task) {
   return int.tryParse('$raw');
 }
 
+int? taskStageIdFrom(dynamic task) {
+  if (task is! Map) return null;
+  final raw = task['stage_id'] ?? task['stageId'] ?? task['stage'];
+  if (raw == null || '$raw'.isEmpty || '$raw' == 'null') return null;
+  if (raw is Map) return int.tryParse('${raw['id']}');
+  return int.tryParse('$raw');
+}
+
+String taskStageNameFrom(dynamic task) {
+  if (task is! Map) return '';
+  return (task['stage_name'] ?? task['stageName'] ?? '').toString();
+}
+
 bool taskIsCompleted(dynamic task) {
   if (task is! Map) return false;
   if (task['completed'] == true) return true;
@@ -37,7 +50,12 @@ List<int> taskAssigneeIdsFrom(dynamic task) {
   if (raw is List && raw.isNotEmpty) {
     return raw.map((e) => int.tryParse('$e')).whereType<int>().toList();
   }
-  final uid = int.tryParse('${task['user_id'] ?? task['user'] ?? task['assignee_id'] ?? ''}');
+  final user = task['user'];
+  if (user is Map) {
+    final uid = int.tryParse('${user['id'] ?? ''}');
+    return uid != null ? [uid] : [];
+  }
+  final uid = int.tryParse('${task['user_id'] ?? task['assignee_id'] ?? (user ?? '')}');
   return uid != null ? [uid] : [];
 }
 

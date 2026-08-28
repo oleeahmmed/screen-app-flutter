@@ -82,6 +82,9 @@ Write-Host "==> AIMS Windows build (v$Version+$($ver.Build))"
 
 Write-Host '==> flutter build windows --release'
 flutter build windows --release
+if ($LASTEXITCODE -ne 0) {
+    throw "flutter build windows failed (exit $LASTEXITCODE)"
+}
 if (-not (Test-Path (Join-Path $ReleaseDir 'aims.exe'))) {
     throw "Build output not found: $ReleaseDir\aims.exe"
 }
