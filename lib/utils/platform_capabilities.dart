@@ -5,7 +5,10 @@ abstract final class PlatformCapabilities {
   static bool get isDesktop =>
       Platform.isLinux || Platform.isWindows || Platform.isMacOS;
 
-  static bool get nativeAudio => Platform.isAndroid || Platform.isIOS;
+  /// Asset chime via audioplayers — Windows needs this (SystemSound alone is often silent).
+  /// Linux kept off: some GTK builds crash on native audio plugin init.
+  static bool get nativeAudio =>
+      Platform.isAndroid || Platform.isIOS || Platform.isWindows || Platform.isMacOS;
 
   /// WebRTC P2P is unreliable on Linux desktop (native SDK / GStreamer issues).
   static bool get peerToPeerFileTransfer =>

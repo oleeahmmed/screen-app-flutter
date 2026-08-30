@@ -32,9 +32,7 @@ import 'widgets/tool_page_scaffold.dart';
 import 'widgets/notification_banner.dart';
 import 'widgets/app_tab_shell.dart';
 import 'services/app_navigation.dart';
-
-/// Root navigator — used to close pushed routes on logout.
-final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
+import 'utils/platform_capabilities.dart';
 
 /// Root navigator — used to close pushed routes on logout.
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
@@ -375,8 +373,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycle = state;
-    if (state == AppLifecycleState.resumed && _isLoggedIn) {
+    if (!_isLoggedIn) return;
+    if (state == AppLifecycleState.resumed) {
+      _notificationService.setAppInBackground(false);
       unawaited(_notificationService.reconnect());
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _notificationService.setAppInBackground(true);
     }
   }
 
@@ -408,6 +412,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final inForeground = _lifecycle == AppLifecycleState.resumed;
     final rawId = data['id'];
     final notifId = rawId is int ? rawId : int.tryParse('$rawId') ?? title.hashCode;
+    final isChat = notifType == 'new_message' || notifType == 'new_group_message';
 
     if (inForeground) {
       NotificationBanner.show(
@@ -417,12 +422,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         notificationType: notifType,
         onTap: () => unawaited(_openNotifications()),
       );
-    } else if (LocalNotificationService.supported) {
+    }
+
+    // Chat: always show system tray heads-up on Android/iOS (even in foreground),
+    // so desktop→phone alerts are visible when the app is open on another tab.
+    // Other types: tray only when backgrounded.
+    if (LocalNotificationService.supported && (!inForeground || isChat)) {
       await LocalNotificationService.show(
         id: notifId,
         title: title,
         body: message.isNotEmpty ? message : 'Tap to open AIMS',
-        payload: 'alerts',
+        payload: isChat ? 'chat' : 'alerts',
       );
     }
 

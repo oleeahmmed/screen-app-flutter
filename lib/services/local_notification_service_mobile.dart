@@ -38,10 +38,13 @@ class LocalNotificationService {
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
       await androidImpl?.createNotificationChannel(
         const AndroidNotificationChannel(
-          'aims_alerts',
+          'aims_alerts_v2',
           'AIMS Alerts',
           description: 'Tasks, chat, attendance and HR alerts',
-          importance: Importance.high,
+          importance: Importance.max,
+          playSound: true,
+          enableVibration: true,
+          showBadge: true,
         ),
       );
     }
@@ -83,11 +86,14 @@ class LocalNotificationService {
     await initialize();
 
     const androidDetails = AndroidNotificationDetails(
-      'aims_alerts',
+      'aims_alerts_v2',
       'AIMS Alerts',
       channelDescription: 'Tasks, chat, attendance and HR alerts',
-      importance: Importance.high,
-      priority: Priority.high,
+      importance: Importance.max,
+      priority: Priority.max,
+      playSound: true,
+      enableVibration: true,
+      category: AndroidNotificationCategory.message,
       icon: '@mipmap/ic_launcher',
     );
     const iosDetails = DarwinNotificationDetails(

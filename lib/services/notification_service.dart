@@ -42,13 +42,30 @@ class NotificationService {
     return const Duration(seconds: 30);
   }
 
+  Duration _activePollInterval = const Duration(seconds: 30);
+
+  /// Faster polling while Android/iOS is backgrounded (WS often dies).
+  void setAppInBackground(bool background) {
+    if (!_running) return;
+    final next = (!kIsWeb && (Platform.isAndroid || Platform.isIOS) && background)
+        ? const Duration(seconds: 6)
+        : _pollInterval;
+    if (next == _activePollInterval) return;
+    _activePollInterval = next;
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(_activePollInterval, (_) {
+      refreshUnreadCount(playSoundOnIncrease: true);
+    });
+  }
+
   Future<void> start() async {
     if (_running) return;
     _running = true;
+    _activePollInterval = _pollInterval;
     await refreshUnreadCount();
     unawaited(_connectWebSocket());
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(_pollInterval, (_) {
+    _pollTimer = Timer.periodic(_activePollInterval, (_) {
       refreshUnreadCount(playSoundOnIncrease: true);
     });
   }

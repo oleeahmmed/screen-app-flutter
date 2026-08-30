@@ -100,7 +100,7 @@ class _ChatPageState extends State<ChatPage> {
     final result = await widget.apiService.getChatUsers();
     if (result['success'] && mounted) {
       setState(() {
-        _users = result['data'] ?? [];
+        _users = _sortUsersByRecent(result['data'] ?? []);
         _isLoadingUsers = false;
         if (_selectedUser != null) {
           final id = _selectedUser['id'];
@@ -116,6 +116,41 @@ class _ChatPageState extends State<ChatPage> {
       setState(() => _isLoadingUsers = false);
       if (!silent) _showError('Failed to load users');
     }
+  }
+
+  List<dynamic> _sortUsersByRecent(List<dynamic> users) {
+    final list = List<dynamic>.from(users);
+    list.sort((a, b) {
+      final at = DateTime.tryParse('${a['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = DateTime.tryParse('${b['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bt.compareTo(at);
+    });
+    return list;
+  }
+
+  String _formatChatListTime(dynamic iso) {
+    final dt = DateTime.tryParse('${iso ?? ''}');
+    if (dt == null) return '';
+    final local = dt.toLocal();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(local.year, local.month, local.day);
+    final t = '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    if (day == today) return t;
+    if (day == today.subtract(const Duration(days: 1))) return 'Yesterday';
+    if (now.difference(local).inDays < 7) {
+      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      return days[local.weekday - 1];
+    }
+    return '${local.day}/${local.month}/${local.year % 100}';
+  }
+
+  String _chatPreviewText(Map user) {
+    final raw = (user['last_message'] ?? '').toString().trim();
+    if (raw.isNotEmpty) return raw;
+    final designation = (user['designation'] ?? '').toString().trim();
+    if (designation.isNotEmpty) return designation;
+    return 'Tap to chat';
   }
 
   void _onPresenceUpdate(Map<String, dynamic> data) {
@@ -635,7 +670,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         final isOnline = _parseOnline(user['is_online']);
         final unread = user['unread_count'] ?? 0;
         final name = user['full_name'] ?? user['username'] ?? 'User';
-        final designation = user['designation'] ?? 'Employee';
+        final preview = _chatPreviewText(Map<String, dynamic>.from(user as Map));
+        final timeLabel = _formatChatListTime(user['last_message_at']);
         final uid = user['id'] is int ? user['id'] as int : int.tryParse('${user['id']}') ?? 0;
 
         return Material(
@@ -695,36 +731,72 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(name, style: TextStyle(
-                          fontSize: immersive ? 16 : 14,
-                          fontWeight: FontWeight.w600,
-                          color: isSelected ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.92),
-                        ), overflow: TextOverflow.ellipsis),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(name, style: TextStyle(
+                                fontSize: immersive ? 16 : 14,
+                                fontWeight: FontWeight.w600,
+                                color: isSelected ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.92),
+                              ), overflow: TextOverflow.ellipsis),
+                            ),
+                            if (timeLabel.isNotEmpty) ...[
+                              const SizedBox(width: 8),
+                              Text(
+                                timeLabel,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: unread > 0
+                                      ? AppTheme.success
+                                      : AppTheme.textMuted.withValues(alpha: 0.85),
+                                  fontWeight: unread > 0 ? FontWeight.w600 : FontWeight.w400,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                         const SizedBox(height: 2),
-                        Text(designation, style: TextStyle(
-                          fontSize: 13, color: AppTheme.textMuted.withValues(alpha: 0.9),
-                        ), overflow: TextOverflow.ellipsis),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                preview,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: unread > 0
+                                      ? AppTheme.textPrimary.withValues(alpha: 0.85)
+                                      : AppTheme.textMuted.withValues(alpha: 0.9),
+                                  fontWeight: unread > 0 ? FontWeight.w500 : FontWeight.w400,
+                                ),
+                              ),
+                            ),
+                            if (unread > 0) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+                                padding: const EdgeInsets.symmetric(horizontal: 6),
+                                decoration: const BoxDecoration(
+                                  color: AppTheme.danger,
+                                  borderRadius: BorderRadius.all(Radius.circular(11)),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  unread > 99 ? '99+' : '$unread',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ],
                     ),
                   ),
-                  if (unread > 0)
-                    Container(
-                      constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      decoration: const BoxDecoration(
-                        color: AppTheme.danger,
-                        borderRadius: BorderRadius.all(Radius.circular(11)),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        unread > 99 ? '99+' : '$unread',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
                 ],
               ),
             ),
@@ -771,6 +843,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                         final unread = group['unread_count'] ?? 0;
                         final name = group['name'] ?? 'Group';
                         final members = group['member_count'] ?? 0;
+                        final preview = (group['last_message'] ?? '').toString().trim();
+                        final subtitle = preview.isNotEmpty ? preview : '$members members';
+                        final timeLabel = _formatChatListTime(group['last_message_at'] ?? group['updated_at']);
 
                         return GestureDetector(
                           onTap: () => _selectGroup(group),
@@ -805,11 +880,29 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text(name, style: TextStyle(
-                                        fontSize: 14, fontWeight: FontWeight.w600,
-                                        color: isSelected ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.85),
-                                      ), overflow: TextOverflow.ellipsis),
-                                      Text('$members members', style: TextStyle(
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(name, style: TextStyle(
+                                              fontSize: 14, fontWeight: FontWeight.w600,
+                                              color: isSelected ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.85),
+                                            ), overflow: TextOverflow.ellipsis),
+                                          ),
+                                          if (timeLabel.isNotEmpty) ...[
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              timeLabel,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: unread > 0
+                                                    ? AppTheme.success
+                                                    : AppTheme.textMuted.withValues(alpha: 0.85),
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                      Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(
                                         fontSize: 12, color: AppTheme.textMuted,
                                       )),
                                     ],

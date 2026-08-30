@@ -575,7 +575,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     await _pc!.setRemoteDescription(RTCSessionDescription(sdp['sdp']?.toString(), sdp['type']?.toString()));
     _remoteReady = true;
     await _flushCandidates();
-    final answer = await _pc!.createAnswer(_sessionConstraints);
+    final answer = await _pc!.createAnswer(_pcConstraints);
     await _pc!.setLocalDescription(answer);
     _wsSend({'type': 'answer', 'sdp': await _localSdpPayload(_pc!)});
   }
@@ -873,20 +873,19 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     if (contentUri == null) {
       final f = File(path);
       if (!await f.exists()) {
-        _showError('File not found');
-        await P2pReceivedStore.remove(path);
-        await _loadReceived();
-        return;
+        // Still try native MediaStore lookup by file name.
       }
     }
     final r = await LocalFileActions.openFile(path, contentUri: contentUri);
     if (!mounted) return;
     if (r == 'missing') {
       _showError('File not found');
+      await P2pReceivedStore.remove(path);
+      await _loadReceived();
       return;
     }
     if (r == 'no_handler') {
-      _showOpenWithHelp(path);
+      _showOpenWithHelp(path, contentUri: contentUri);
       return;
     }
     if (r != 'ok' && r != 'ok_downloads') {
@@ -894,7 +893,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     }
   }
 
-  Future<void> _openLocalFolder(String path) async {
+  Future<void> _openLocalFolder(String path, {String? contentUri}) async {
     final file = File(path);
     final dirPath = file.parent.path;
     final r = await LocalFileActions.openFolder(path);
@@ -943,7 +942,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                   ),
                   onTap: () {
                     Navigator.pop(ctx);
-                    _openLocalFile(path);
+                    _openLocalFile(path, contentUri: contentUri);
                   },
                 ),
                 ListTile(
@@ -965,7 +964,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     );
   }
 
-  void _showOpenWithHelp(String path) {
+  void _showOpenWithHelp(String path, {String? contentUri}) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppTheme.bgDeep,
@@ -996,7 +995,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                   title: const Text('Try Open with again', style: TextStyle(color: AppTheme.textPrimary)),
                   onTap: () {
                     Navigator.pop(ctx);
-                    LocalFileActions.openFile(path);
+                    _openLocalFile(path, contentUri: contentUri);
                   },
                 ),
                 ListTile(
@@ -1004,7 +1003,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                   title: const Text('Open folder', style: TextStyle(color: AppTheme.textPrimary)),
                   onTap: () {
                     Navigator.pop(ctx);
-                    _openLocalFolder(path);
+                    _openLocalFolder(path, contentUri: contentUri);
                   },
                 ),
               ],
@@ -1352,7 +1351,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
             ),
             IconButton(
               tooltip: 'Open folder',
-              onPressed: path.isEmpty ? null : () => _openLocalFolder(path),
+              onPressed: path.isEmpty ? null : () => _openLocalFolder(path, contentUri: contentUri),
               icon: Icon(Icons.folder_open_rounded, size: 20, color: AppTheme.textMuted.withValues(alpha: 0.9)),
             ),
           ],
@@ -1657,7 +1656,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
             P2pPrimaryButton(
               label: 'Open folder',
               icon: LucideIcons.folderOpen,
-              onTap: () => _openLocalFolder(path),
+              onTap: () => _openLocalFolder(path, contentUri: _rxContentUri),
               gradient: const [Color(0xFF3B82F6), Color(0xFF2563EB)],
             ),
             const SizedBox(height: 18),

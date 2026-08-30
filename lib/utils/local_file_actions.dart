@@ -63,20 +63,17 @@ class LocalFileActions {
 
   /// Opens [path] with the system “Open with” chooser on Android.
   static Future<String> openFile(String path, {String? contentUri}) async {
-    final file = File(path);
-    if (contentUri == null && !await file.exists()) return 'missing';
-
     if (Platform.isAndroid) {
       try {
         final r = await _channel.invokeMethod<String>('openFile', {
           'path': path,
-          if (contentUri != null) 'contentUri': contentUri,
+          if (contentUri != null && contentUri.isNotEmpty) 'contentUri': contentUri,
         });
-        if (r == 'ok' || r == 'no_handler') return r ?? 'ok';
+        if (r == 'ok' || r == 'no_handler' || r == 'missing') return r ?? 'ok';
       } catch (e) {
         debugPrint('[LocalFileActions] openFile channel failed: $e');
       }
-      // Fallback — open_filex uses FileProvider on Android too.
+      final file = File(path);
       if (await file.exists()) {
         final mime = lookupMimeType(path);
         final r = await OpenFilex.open(path, type: mime);
@@ -86,6 +83,9 @@ class LocalFileActions {
       }
       return 'missing';
     }
+
+    final file = File(path);
+    if (!await file.exists()) return 'missing';
 
     if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
       final r = await OpenFilex.open(path);

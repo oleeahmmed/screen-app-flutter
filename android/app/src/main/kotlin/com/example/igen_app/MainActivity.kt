@@ -127,32 +127,62 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun openFileWithChooser(path: String?, contentUri: String?): String {
-        val uri: Uri
-        val mime: String
+        var uri: Uri? = null
+        var mime = mimeFromName(path) ?: "*/*"
 
         if (!contentUri.isNullOrBlank()) {
             uri = Uri.parse(contentUri)
-            mime = contentResolver.getType(uri) ?: mimeFromName(path) ?: "*/*"
-        } else {
-            val file = File(path ?: return "missing")
-            if (!file.exists()) return "missing"
-            uri = FileProvider.getUriForFile(
-                this,
-                "${applicationContext.packageName}.fileprovider",
-                file,
-            )
-            mime = mimeFor(file) ?: "*/*"
+            mime = contentResolver.getType(uri!!) ?: mime
         }
+
+        // Resolve MediaStore URI by file name when only a Display path is stored.
+        if (uri == null && !path.isNullOrBlank()) {
+            uri = findDownloadsUriByName(File(path).name)
+            if (uri != null) {
+                mime = contentResolver.getType(uri) ?: mime
+            }
+        }
+
+        if (uri == null && !path.isNullOrBlank()) {
+            val file = File(path)
+            if (file.exists()) {
+                uri = try {
+                    FileProvider.getUriForFile(
+                        this,
+                        "${applicationContext.packageName}.fileprovider",
+                        file,
+                    )
+                } catch (_: Exception) {
+                    // Scoped storage: copy into app cache then share via FileProvider.
+                    try {
+                        val cached = File(cacheDir, file.name)
+                        file.copyTo(cached, overwrite = true)
+                        FileProvider.getUriForFile(
+                            this,
+                            "${applicationContext.packageName}.fileprovider",
+                            cached,
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+                mime = mimeFor(file) ?: mime
+            }
+        }
+
+        if (uri == null) return "missing"
 
         val view = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, mime)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         grantUriToResolvers(uri, view)
 
         val chooser = Intent.createChooser(view, "Open with").apply {
             clipData = android.content.ClipData.newRawUri("", uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
         return try {
@@ -162,6 +192,7 @@ class MainActivity : FlutterActivity() {
             val any = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "*/*")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             grantUriToResolvers(uri, any)
             try {
@@ -169,6 +200,7 @@ class MainActivity : FlutterActivity() {
                     Intent.createChooser(any, "Open with").apply {
                         clipData = android.content.ClipData.newRawUri("", uri)
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     },
                 )
                 "ok"
@@ -178,38 +210,123 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun findDownloadsUriByName(displayName: String): Uri? {
+        if (displayName.isBlank()) return null
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                contentResolver.query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Downloads._ID),
+                    "${MediaStore.Downloads.DISPLAY_NAME}=?",
+                    arrayOf(displayName),
+                    "${MediaStore.Downloads.DATE_ADDED} DESC",
+                )?.use { c ->
+                    if (c.moveToFirst()) {
+                        val id = c.getLong(0)
+                        return Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
+                    }
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun grantUriToResolvers(uri: Uri, intent: Intent) {
         val flags = PackageManager.MATCH_DEFAULT_ONLY
         val activities = packageManager.queryIntentActivities(intent, flags)
         for (info in activities) {
-            grantUriPermission(
-                info.activityInfo.packageName,
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION,
-            )
+            try {
+                grantUriPermission(
+                    info.activityInfo.packageName,
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            } catch (_: Exception) {
+            }
         }
     }
 
     private fun openFolderInManager(path: String?): String {
-        // Always prefer the public Aims folder — where committed files live.
         val aims = aimsPublicDir()
+        if (!aims.exists()) aims.mkdirs()
+
         if (tryOpenDocumentsUi(aims)) return "ok"
+        if (tryOpenGoogleFiles(aims)) return "ok"
 
         if (!path.isNullOrBlank()) {
             val target = File(path)
             val folder = if (target.isDirectory) target else target.parentFile
-            if (folder != null && folder.exists() && tryOpenDocumentsUi(folder)) {
-                return "ok"
-            }
-            if (folder != null && folder.exists() && tryOpenWithFolderMime(folder)) {
-                return "ok"
+            if (folder != null) {
+                if (tryOpenDocumentsUi(folder)) return "ok"
+                if (tryOpenWithFolderMime(folder)) return "ok"
             }
         }
+
+        if (tryOpenViewDownloads()) return "ok_downloads"
 
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         if (tryOpenDocumentsUi(downloads)) return "ok_downloads"
 
         return "no_handler"
+    }
+
+    private fun tryOpenViewDownloads(): Boolean {
+        val intents = listOf(
+            Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS),
+            Intent("android.intent.action.VIEW_DOWNLOADS"),
+        )
+        for (intent in intents) {
+            try {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (intent.resolveActivity(packageManager) != null) {
+                    startActivity(intent)
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return false
+    }
+
+    private fun tryOpenGoogleFiles(folder: File): Boolean {
+        val rel = relativePrimaryPath(folder) ?: return false
+        val docId = "primary:$rel"
+        val uri = Uri.parse(
+            "content://com.android.externalstorage.documents/document/${Uri.encode(docId)}",
+        )
+        val packages = listOf(
+            "com.google.android.apps.nbu.files",
+            "com.google.android.documentsui",
+            "com.android.documentsui",
+            "com.sec.android.app.myfiles",
+            "com.mi.android.globalFileexplorer",
+        )
+        for (pkg in packages) {
+            try {
+                val launch = packageManager.getLaunchIntentForPackage(pkg)
+                if (launch != null) {
+                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    launch.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
+                    startActivity(launch)
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+            try {
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setPackage(pkg)
+                    setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+                return true
+            } catch (_: Exception) {
+            }
+        }
+        return false
     }
 
     private fun tryOpenDocumentsUi(folder: File): Boolean {
@@ -223,12 +340,17 @@ class MainActivity : FlutterActivity() {
             Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
             },
             Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "vnd.android.document/directory")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
+            },
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "resource/folder")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             },
         )
 
@@ -252,6 +374,7 @@ class MainActivity : FlutterActivity() {
                     setClassName(pkg, cls)
                     setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
                     putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 startActivity(intent)
                 return true
@@ -266,6 +389,7 @@ class MainActivity : FlutterActivity() {
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(Uri.parse("file://$folderPath"), "resource/folder")
             putExtra("org.openintents.extra.ABSOLUTE_PATH", folderPath)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         return try {
             if (intent.resolveActivity(packageManager) != null) {

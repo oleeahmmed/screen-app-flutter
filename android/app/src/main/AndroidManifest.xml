@@ -91,5 +91,8 @@
         </intent>
         <package android:name="com.google.android.documentsui" />
         <package android:name="com.android.documentsui" />
+        <package android:name="com.google.android.apps.nbu.files" />
+        <package android:name="com.sec.android.app.myfiles" />
+        <package android:name="com.mi.android.globalFileexplorer" />
     </queries>
 </manifest>
