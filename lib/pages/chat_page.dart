@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
@@ -59,8 +61,10 @@ class _ChatPageState extends State<ChatPage> {
   String? _playingUrl;
   int? _myUserId;
   bool _iAmTyping = false;
+  Map<String, dynamic>? _replyTo;
   /// peerUserId / groupId → display name while typing
   final Map<String, String> _typingPeers = {};
+  final _imagePicker = ImagePicker();
 
   bool get _supportsNativeAudio => PlatformCapabilities.nativeAudio;
 
@@ -339,6 +343,7 @@ class _ChatPageState extends State<ChatPage> {
       _selectedUser = user;
       _selectedGroup = null;
       _messages = [];
+      _replyTo = null;
       _typingPeers.removeWhere((k, _) => k.startsWith('g:'));
     });
     _startRefresh();
@@ -356,6 +361,7 @@ class _ChatPageState extends State<ChatPage> {
       _selectedGroup = group;
       _selectedUser = null;
       _messages = [];
+      _replyTo = null;
       _typingPeers.removeWhere((k, _) => k.startsWith('u:'));
     });
     _startRefresh();
@@ -391,13 +397,17 @@ class _ChatPageState extends State<ChatPage> {
 
     _stopTypingSignal();
     _msgController.clear();
-    setState(() => _isSending = true);
+    final replyId = _replyToId;
+    setState(() {
+      _isSending = true;
+      _replyTo = null;
+    });
 
     Map<String, dynamic> result;
     if (_selectedUser != null) {
-      result = await widget.apiService.sendMessage(_selectedUser['id'], text);
+      result = await widget.apiService.sendMessage(_selectedUser['id'], text, replyToId: replyId);
     } else {
-      result = await widget.apiService.sendGroupMessage(_selectedGroup['id'], text);
+      result = await widget.apiService.sendGroupMessage(_selectedGroup['id'], text, replyToId: replyId);
     }
 
     if (!mounted) return;
@@ -428,6 +438,44 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   bool get _hasDraft => _msgController.text.trim().isNotEmpty;
+
+  int? get _replyToId {
+    final raw = _replyTo?['id'];
+    if (raw is int) return raw;
+    return int.tryParse('${raw ?? ''}');
+  }
+
+  void _setReplyTo(dynamic msg) {
+    if (msg == null) return;
+    final map = Map<String, dynamic>.from(msg as Map);
+    final preview = _replyPreviewFromMessage(map);
+    setState(() {
+      _replyTo = {
+        'id': map['id'],
+        'sender_name': map['sender_name'] ??
+            map['sender_full_name'] ??
+            map['sender_username'] ??
+            (map['is_own'] == true ? 'You' : 'User'),
+        'preview': preview,
+        'message_type': map['message_type'] ?? 'text',
+      };
+    });
+    _msgFocus.requestFocus();
+  }
+
+  String _replyPreviewFromMessage(Map<String, dynamic> msg) {
+    if (msg['is_deleted'] == true) return 'Message deleted';
+    final type = (msg['message_type'] ?? 'text').toString();
+    if (type == 'image') return 'Photo';
+    if (type == 'voice') return 'Voice message';
+    if (type == 'file') {
+      final name = (msg['file_name'] ?? '').toString().trim();
+      return name.isNotEmpty ? 'File: $name' : 'File';
+    }
+    final text = (msg['message'] ?? '').toString().trim();
+    if (text.isEmpty) return 'Message';
+    return text.length > 100 ? '${text.substring(0, 100)}…' : text;
+  }
 
   // ─── Voice recording (Android/iOS: record package, Windows: PowerShell) ───
   Future<void> _toggleRecording() async {
@@ -530,33 +578,244 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     if (mounted) setState(() => _recordSeconds = 0);
   }
 
-  // ─── Pick & Send Image ───
-  Future<void> _pickImage() async {
-    if (_selectedUser == null) return;
-    final result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: false);
-    if (result != null && result.files.isNotEmpty) {
-      final file = File(result.files.first.path!);
-      setState(() => _isSending = true);
-      final bytes = await file.readAsBytes();
-      final r = await widget.apiService.sendImageMessage(_selectedUser['id'], bytes, result.files.first.name);
-      setState(() => _isSending = false);
-      if (r['success']) { _refreshMessages(); } else { _showError('Failed to send image'); }
+  // ─── Attach (camera / gallery / document) ───
+  Future<void> _showAttachSheet() async {
+    if (_selectedUser == null && _selectedGroup == null) return;
+    final mobile = Responsive.isMobile(context);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppTheme.surface2,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: AppTheme.textMuted.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Attach',
+                  style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700, fontSize: 16),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  if (mobile)
+                    Expanded(
+                      child: _attachTile(
+                        icon: Icons.photo_camera_rounded,
+                        label: 'Camera',
+                        color: const Color(0xFF0EA5E9),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          unawaited(_takePhoto());
+                        },
+                      ),
+                    ),
+                  if (mobile) const SizedBox(width: 10),
+                  Expanded(
+                    child: _attachTile(
+                      icon: Icons.photo_library_rounded,
+                      label: 'Gallery',
+                      color: const Color(0xFF8B5CF6),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        unawaited(_pickGalleryImage());
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _attachTile(
+                      icon: Icons.insert_drive_file_rounded,
+                      label: 'Document',
+                      color: const Color(0xFF10B981),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        unawaited(_pickFile());
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _attachTile({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: Colors.white.withValues(alpha: 0.04),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.18),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 22),
+              ),
+              const SizedBox(height: 8),
+              Text(label, style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _takePhoto() async {
+    if (Platform.isAndroid || Platform.isIOS) {
+      final cam = await Permission.camera.request();
+      if (!cam.isGranted) {
+        _showError('Camera permission needed');
+        return;
+      }
+    }
+    try {
+      final shot = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+        maxWidth: 1920,
+      );
+      if (shot == null) return;
+      await _sendPickedImagePath(shot.path, shot.name);
+    } catch (e) {
+      _showError('Camera unavailable');
     }
   }
 
-  // ─── Pick & Send File ───
+  Future<void> _pickGalleryImage() async {
+    try {
+      if (Platform.isAndroid || Platform.isIOS) {
+        final shot = await _imagePicker.pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 85,
+          maxWidth: 1920,
+        );
+        if (shot == null) return;
+        await _sendPickedImagePath(shot.path, shot.name);
+        return;
+      }
+    } catch (_) {
+      // Fall through to file picker on desktop / failures.
+    }
+    final result = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: false);
+    if (result == null || result.files.isEmpty || result.files.first.path == null) return;
+    await _sendPickedImagePath(result.files.first.path!, result.files.first.name);
+  }
+
+  Future<void> _sendPickedImagePath(String path, String name) async {
+    if (_selectedUser == null && _selectedGroup == null) return;
+    final file = File(path);
+    if (!await file.exists()) {
+      _showError('Could not read image');
+      return;
+    }
+    final bytes = await file.readAsBytes();
+    if (bytes.length > 10 * 1024 * 1024) {
+      _showError('Image must be under 10MB');
+      return;
+    }
+    final replyId = _replyToId;
+    setState(() {
+      _isSending = true;
+      _replyTo = null;
+    });
+    Map<String, dynamic> r;
+    if (_selectedUser != null) {
+      r = await widget.apiService.sendImageMessage(
+        _selectedUser['id'],
+        bytes,
+        name.isNotEmpty ? name : 'photo.jpg',
+        replyToId: replyId,
+      );
+    } else {
+      r = await widget.apiService.sendGroupImageMessage(
+        _selectedGroup['id'],
+        bytes,
+        name.isNotEmpty ? name : 'photo.jpg',
+        replyToId: replyId,
+      );
+    }
+    if (!mounted) return;
+    setState(() => _isSending = false);
+    if (r['success'] == true) {
+      _refreshMessages();
+    } else {
+      _showError(r['error']?.toString() ?? 'Failed to send image');
+    }
+  }
+
   Future<void> _pickFile() async {
-    if (_selectedUser == null) return;
+    if (_selectedUser == null && _selectedGroup == null) return;
     final result = await FilePicker.platform.pickFiles(allowMultiple: false);
-    if (result != null && result.files.isNotEmpty) {
-      final pf = result.files.first;
-      if (pf.size > 10 * 1024 * 1024) { _showError('File must be under 10MB'); return; }
-      final file = File(pf.path!);
-      setState(() => _isSending = true);
-      final bytes = await file.readAsBytes();
-      final r = await widget.apiService.sendFileMessage(_selectedUser['id'], bytes, pf.name);
-      setState(() => _isSending = false);
-      if (r['success']) { _refreshMessages(); } else { _showError(r['error'] ?? 'Failed to send file'); }
+    if (result == null || result.files.isEmpty) return;
+    final pf = result.files.first;
+    if (pf.path == null) return;
+    if (pf.size > 10 * 1024 * 1024) {
+      _showError('File must be under 10MB');
+      return;
+    }
+    final file = File(pf.path!);
+    setState(() => _isSending = true);
+    final bytes = await file.readAsBytes();
+    final replyId = _replyToId;
+    setState(() => _replyTo = null);
+    Map<String, dynamic> r;
+    if (_selectedUser != null) {
+      r = await widget.apiService.sendFileMessage(
+        _selectedUser['id'],
+        bytes,
+        pf.name,
+        replyToId: replyId,
+      );
+    } else {
+      r = await widget.apiService.sendGroupFileMessage(
+        _selectedGroup['id'],
+        bytes,
+        pf.name,
+        replyToId: replyId,
+      );
+    }
+    if (!mounted) return;
+    setState(() => _isSending = false);
+    if (r['success'] == true) {
+      _refreshMessages();
+    } else {
+      _showError(r['error']?.toString() ?? 'Failed to send file');
     }
   }
 
@@ -1293,145 +1552,141 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       ),
       child: SafeArea(
         top: false,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            if (mobile)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: PopupMenuButton<String>(
-                  tooltip: 'Attach',
-                  icon: Icon(Icons.add_circle_rounded, color: AppTheme.textMuted.withValues(alpha: 0.95), size: 28),
-                  color: AppTheme.surface2,
-                  onSelected: (v) {
-                    if (v == 'image') _pickImage();
-                    else if (v == 'file') _pickFile();
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: 'image',
-                      child: Row(children: [
-                        Icon(Icons.photo_outlined, size: 18, color: AppTheme.textPrimary),
-                        SizedBox(width: 10),
-                        Text('Photo', style: TextStyle(color: AppTheme.textPrimary)),
-                      ]),
-                    ),
-                    PopupMenuItem(
-                      value: 'file',
-                      child: Row(children: [
-                        Icon(Icons.attach_file_rounded, size: 18, color: AppTheme.textPrimary),
-                        SizedBox(width: 10),
-                        Text('Document', style: TextStyle(color: AppTheme.textPrimary)),
-                      ]),
-                    ),
-                  ],
-                ),
-              )
-            else ...[
-              IconButton(
-                onPressed: _pickImage,
-                tooltip: 'Photo',
-                icon: const Icon(Icons.photo_outlined, color: AppTheme.textMuted, size: 22),
-              ),
-              IconButton(
-                onPressed: _pickFile,
-                tooltip: 'Document',
-                icon: const Icon(Icons.attach_file_rounded, color: AppTheme.textMuted, size: 22),
-              ),
-            ],
-            Expanded(
-              child: CallbackShortcuts(
-                bindings: {
-                  const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
-                  const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
-                },
-                child: Container(
-                  constraints: const BoxConstraints(minHeight: 44, maxHeight: 140),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(22),
-                    border: Border.all(
-                      color: _msgFocus.hasFocus
-                          ? AppTheme.primaryBright.withValues(alpha: 0.4)
-                          : Colors.white.withValues(alpha: 0.1),
+            if (_replyTo != null) _buildReplyComposerBar(),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: IconButton(
+                    tooltip: 'Attach',
+                    onPressed: _isSending ? null : _showAttachSheet,
+                    icon: Icon(
+                      Icons.add_circle_rounded,
+                      color: AppTheme.textMuted.withValues(alpha: 0.95),
+                      size: mobile ? 28 : 24,
                     ),
                   ),
-                  child: TextField(
-                    controller: _msgController,
-                    focusNode: _msgFocus,
-                    enabled: !_isSending,
-                    minLines: 1,
-                    maxLines: 6,
-                    keyboardType: TextInputType.multiline,
-                    textInputAction: TextInputAction.newline,
-                    textCapitalization: TextCapitalization.sentences,
-                    style: const TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 15,
-                      height: 1.35,
-                    ),
-                    cursorColor: AppTheme.primaryBright,
-                    decoration: InputDecoration(
-                      isDense: true,
-                      hintText: 'Message',
-                      hintStyle: TextStyle(
-                        color: AppTheme.textMuted.withValues(alpha: 0.65),
-                        fontSize: 15,
-                      ),
-                      border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: _isSending
-                      ? null
-                      : (hasText ? _sendMessage : _toggleRecording),
-                  customBorder: const CircleBorder(),
-                  child: Ink(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: hasText
-                            ? const [Color(0xFF5B9CFF), Color(0xFF2563EB)]
-                            : [AppTheme.primary.withValues(alpha: 0.9), AppTheme.primary],
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppTheme.primary.withValues(alpha: 0.35),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
+                Expanded(
+                  child: CallbackShortcuts(
+                    bindings: {
+                      const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
+                      const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
+                    },
+                    child: Container(
+                      constraints: const BoxConstraints(minHeight: 44, maxHeight: 140),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(
+                          color: _msgFocus.hasFocus
+                              ? AppTheme.primaryBright.withValues(alpha: 0.4)
+                              : Colors.white.withValues(alpha: 0.1),
                         ),
-                      ],
+                      ),
+                      child: TextField(
+                        controller: _msgController,
+                        focusNode: _msgFocus,
+                        minLines: 1,
+                        maxLines: 6,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        textCapitalization: TextCapitalization.sentences,
+                        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15, height: 1.35),
+                        decoration: InputDecoration(
+                          hintText: 'Message',
+                          hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7)),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        ),
+                      ),
                     ),
-                    child: _isSending
-                        ? const Padding(
-                            padding: EdgeInsets.all(13),
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                          )
-                        : Icon(
-                            hasText ? Icons.send_rounded : Icons.mic_rounded,
-                            color: Colors.white,
-                            size: 20,
-                          ),
                   ),
                 ),
-              ),
+                const SizedBox(width: 6),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: _isSending
+                          ? null
+                          : (hasText ? _sendMessage : _toggleRecording),
+                      borderRadius: BorderRadius.circular(22),
+                      child: Ink(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            colors: hasText
+                                ? const [Color(0xFF3B82F6), Color(0xFF2563EB)]
+                                : const [Color(0xFF64748B), Color(0xFF475569)],
+                          ),
+                        ),
+                        child: Icon(
+                          hasText ? Icons.send_rounded : Icons.mic_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildReplyComposerBar() {
+    final reply = _replyTo!;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border(
+          left: BorderSide(color: AppTheme.primaryBright.withValues(alpha: 0.9), width: 3),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Replying to ${reply['sender_name'] ?? 'message'}',
+                  style: const TextStyle(
+                    color: AppTheme.primaryBright,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${reply['preview'] ?? ''}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.95), fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Cancel reply',
+            onPressed: () => setState(() => _replyTo = null),
+            icon: Icon(Icons.close_rounded, size: 18, color: AppTheme.textMuted.withValues(alpha: 0.9)),
+          ),
+        ],
       ),
     );
   }
@@ -1450,6 +1705,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final imageUrl = msg['image_url'];
     final fileUrl = msg['file_url'];
     final fileName = msg['file_name'] ?? 'file';
+    final reply = msg['reply'] is Map ? Map<String, dynamic>.from(msg['reply'] as Map) : null;
 
     return Align(
       alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
@@ -1457,7 +1713,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         margin: const EdgeInsets.only(bottom: 10),
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
         child: GestureDetector(
-          onLongPress: isOwn && !isDeleted ? () => _showMessageOptions(msg) : null,
+          onLongPress: !isDeleted ? () => _showMessageOptions(msg) : null,
           child: Column(
             crossAxisAlignment: isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
@@ -1487,8 +1743,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                           color: Colors.white.withValues(alpha: 0.75),
                         )),
                       ),
+                    if (reply != null) ...[
+                      _buildQuotedReply(reply, isOwn: isOwn),
+                      const SizedBox(height: 6),
+                    ],
                     if (isDeleted)
-                      Text('🗑️ This message was deleted', style: TextStyle(color: Colors.white.withValues(alpha: 0.54), fontSize: 14, fontStyle: FontStyle.italic))
+                      Text('This message was deleted', style: TextStyle(color: Colors.white.withValues(alpha: 0.54), fontSize: 14, fontStyle: FontStyle.italic))
                     else if (msgType == 'voice' && voiceUrl != null)
                       GestureDetector(
                         onTap: () => _playVoice(voiceUrl),
@@ -1506,7 +1766,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                         ClipRRect(
                           borderRadius: BorderRadius.circular(8),
                           child: Image.network(imageUrl, width: 220, fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(width: 220, height: 100, color: Colors.white10, child: const Icon(Icons.broken_image, color: Colors.white38))),
+                            errorBuilder: (context, error, stackTrace) => Container(width: 220, height: 100, color: Colors.white10, child: const Icon(Icons.broken_image, color: Colors.white38))),
                         ),
                         if (text.isNotEmpty) ...[const SizedBox(height: 6), Text(text, style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 14))],
                       ])
@@ -1573,6 +1833,46 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
+  Widget _buildQuotedReply(Map<String, dynamic> reply, {required bool isOwn}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: isOwn ? 0.18 : 0.22),
+        borderRadius: BorderRadius.circular(10),
+        border: Border(
+          left: BorderSide(
+            color: isOwn ? Colors.white.withValues(alpha: 0.85) : AppTheme.primaryBright,
+            width: 3,
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${reply['sender_name'] ?? 'Message'}',
+            style: TextStyle(
+              color: isOwn ? Colors.white : AppTheme.primaryBright,
+              fontWeight: FontWeight.w700,
+              fontSize: 11.5,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '${reply['preview'] ?? ''}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.78),
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _openFileUrl(String url) async {
     final uri = Uri.tryParse(url);
     if (uri == null) return;
@@ -1581,30 +1881,50 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     }
   }
 
-  // ─── Message Options (Edit/Delete) ───
+  // ─── Message Options (Reply / Edit / Delete) ───
   void _showMessageOptions(dynamic msg) {
+    final isOwn = msg['is_own'] == true;
     showModalBottomSheet(
       context: context,
       backgroundColor: AppTheme.surface2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 40, height: 4, margin: EdgeInsets.symmetric(vertical: 12),
-              decoration: BoxDecoration(color: AppTheme.textMuted, borderRadius: BorderRadius.circular(2))),
-            if (msg['message_type'] == 'text' || msg['message_type'] == null)
-              ListTile(
-                leading: Icon(Icons.edit, color: AppTheme.primary),
-                title: Text('Edit Message', style: TextStyle(color: AppTheme.textPrimary)),
-                onTap: () { Navigator.pop(context); _showEditDialog(msg); },
-              ),
-            ListTile(
-              leading: Icon(Icons.delete, color: AppTheme.danger),
-              title: Text('Delete Message', style: TextStyle(color: AppTheme.textPrimary)),
-              onTap: () { Navigator.pop(context); _deleteMessage(msg); },
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(color: AppTheme.textMuted, borderRadius: BorderRadius.circular(2)),
             ),
-            SizedBox(height: 8),
+            ListTile(
+              leading: const Icon(Icons.reply_rounded, color: AppTheme.primaryBright),
+              title: const Text('Reply', style: TextStyle(color: AppTheme.textPrimary)),
+              onTap: () {
+                Navigator.pop(context);
+                _setReplyTo(msg);
+              },
+            ),
+            if (isOwn && (msg['message_type'] == 'text' || msg['message_type'] == null))
+              ListTile(
+                leading: const Icon(Icons.edit, color: AppTheme.primary),
+                title: const Text('Edit Message', style: TextStyle(color: AppTheme.textPrimary)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showEditDialog(msg);
+                },
+              ),
+            if (isOwn)
+              ListTile(
+                leading: const Icon(Icons.delete, color: AppTheme.danger),
+                title: const Text('Delete Message', style: TextStyle(color: AppTheme.textPrimary)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _deleteMessage(msg);
+                },
+              ),
+            const SizedBox(height: 8),
           ],
         ),
       ),
