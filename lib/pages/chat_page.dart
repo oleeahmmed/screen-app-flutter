@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
+import '../services/user_data_service.dart';
 import '../services/voice_recorder_service.dart';
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
@@ -43,7 +44,11 @@ class _ChatPageState extends State<ChatPage> {
   String _searchQuery = '';
   Timer? _refreshTimer;
   Timer? _usersPollTimer;
+  Timer? _typingDebounce;
+  Timer? _typingIdle;
   StreamSubscription<Map<String, dynamic>>? _presenceSub;
+  StreamSubscription<Map<String, dynamic>>? _typingSub;
+  StreamSubscription<Map<String, dynamic>>? _messagesReadSub;
   bool _isRecording = false;
   int _recordSeconds = 0;
   Timer? _recordTimer;
@@ -52,6 +57,10 @@ class _ChatPageState extends State<ChatPage> {
   VoiceRecorderService? _voiceRecorder;
   AudioPlayer? _audioPlayer;
   String? _playingUrl;
+  int? _myUserId;
+  bool _iAmTyping = false;
+  /// peerUserId / groupId → display name while typing
+  final Map<String, String> _typingPeers = {};
 
   bool get _supportsNativeAudio => PlatformCapabilities.nativeAudio;
 
@@ -73,20 +82,35 @@ class _ChatPageState extends State<ChatPage> {
     _msgFocus.addListener(() {
       if (mounted) setState(() {});
     });
+    _msgController.addListener(_onComposerChanged);
     _loadUsers();
+    _loadMyUserId();
     _usersPollTimer = Timer.periodic(const Duration(seconds: 25), (_) => _loadUsers(silent: true));
     _presenceSub = widget.notificationService?.presenceStream.listen(_onPresenceUpdate);
+    _typingSub = widget.notificationService?.typingStream.listen(_onTypingEvent);
+    _messagesReadSub = widget.notificationService?.messagesReadStream.listen(_onMessagesRead);
+  }
+
+  Future<void> _loadMyUserId() async {
+    final id = int.tryParse(await UserDataService.getUserId());
+    if (mounted) setState(() => _myUserId = id);
   }
 
   @override
   void dispose() {
+    _stopTypingSignal();
     _refreshTimer?.cancel();
     _usersPollTimer?.cancel();
+    _typingDebounce?.cancel();
+    _typingIdle?.cancel();
     _presenceSub?.cancel();
+    _typingSub?.cancel();
+    _messagesReadSub?.cancel();
     _recordTimer?.cancel();
     _recProcess?.kill();
     _voiceRecorder?.dispose();
     _audioPlayer?.dispose();
+    _msgController.removeListener(_onComposerChanged);
     _msgController.dispose();
     _msgFocus.dispose();
     _searchController.dispose();
@@ -146,6 +170,8 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _chatPreviewText(Map user) {
+    final key = 'u:${user['id']}';
+    if (_typingPeers.containsKey(key)) return 'typing…';
     final raw = (user['last_message'] ?? '').toString().trim();
     if (raw.isNotEmpty) return raw;
     final designation = (user['designation'] ?? '').toString().trim();
@@ -171,6 +197,115 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   bool _parseOnline(dynamic v) => v == true || v == 1 || v == 'true';
+
+  void _onTypingEvent(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final type = data['type']?.toString() ?? '';
+    final isTyping = data['is_typing'] == true;
+    final senderId = data['sender_id'];
+    final name = (data['sender_username'] ?? data['sender_full_name'] ?? 'Someone').toString();
+
+    if (type == 'typing_indicator') {
+      final receiverId = data['receiver_id'];
+      // Only care when we are the intended receiver.
+      if (_myUserId != null && receiverId != null && receiverId != _myUserId) return;
+      if (senderId == _myUserId) return;
+      final key = 'u:$senderId';
+      setState(() {
+        if (isTyping) {
+          _typingPeers[key] = name;
+        } else {
+          _typingPeers.remove(key);
+        }
+      });
+      return;
+    }
+
+    if (type == 'group_typing') {
+      final groupId = data['group_id'];
+      if (senderId == _myUserId) return;
+      final key = 'g:$groupId:$senderId';
+      setState(() {
+        if (isTyping) {
+          _typingPeers[key] = name;
+        } else {
+          _typingPeers.remove(key);
+        }
+      });
+    }
+  }
+
+  void _onMessagesRead(Map<String, dynamic> data) {
+    if (!mounted || _myUserId == null) return;
+    final readerId = data['reader_id'];
+    final senderId = data['sender_id'];
+    // Peer read my messages.
+    if (senderId != _myUserId) return;
+    if (_selectedUser == null || _selectedUser['id'] != readerId) return;
+    setState(() {
+      _messages = _messages.map((m) {
+        final map = Map<String, dynamic>.from(m as Map);
+        if (map['is_own'] == true) map['is_read'] = true;
+        return map;
+      }).toList();
+    });
+  }
+
+  String? _activeTypingLabel() {
+    if (_selectedUser != null) {
+      final key = 'u:${_selectedUser['id']}';
+      if (_typingPeers.containsKey(key)) return 'typing…';
+      return null;
+    }
+    if (_selectedGroup != null) {
+      final prefix = 'g:${_selectedGroup['id']}:';
+      final names = _typingPeers.entries
+          .where((e) => e.key.startsWith(prefix))
+          .map((e) => e.value)
+          .toList();
+      if (names.isEmpty) return null;
+      if (names.length == 1) return '${names.first} is typing…';
+      return '${names.length} people typing…';
+    }
+    return null;
+  }
+
+  void _onComposerChanged() {
+    if (!_hasDraft) {
+      _stopTypingSignal();
+      return;
+    }
+    _typingIdle?.cancel();
+    _typingIdle = Timer(const Duration(seconds: 2), _stopTypingSignal);
+    _typingDebounce?.cancel();
+    _typingDebounce = Timer(const Duration(milliseconds: 350), () {
+      if (!_hasDraft || !mounted) return;
+      _emitTyping(true);
+    });
+    if (mounted) setState(() {});
+  }
+
+  void _emitTyping(bool isTyping) {
+    final ns = widget.notificationService;
+    if (ns == null) return;
+    if (isTyping == _iAmTyping) return;
+    _iAmTyping = isTyping;
+    if (_selectedUser != null) {
+      final id = _selectedUser['id'];
+      final uid = id is int ? id : int.tryParse('$id');
+      if (uid != null) ns.sendTyping(receiverId: uid, isTyping: isTyping);
+    } else if (_selectedGroup != null) {
+      final id = _selectedGroup['id'];
+      final gid = id is int ? id : int.tryParse('$id');
+      if (gid != null) ns.sendGroupTyping(groupId: gid, isTyping: isTyping);
+    }
+  }
+
+  void _stopTypingSignal() {
+    _typingDebounce?.cancel();
+    _typingIdle?.cancel();
+    if (_iAmTyping) _emitTyping(false);
+  }
 
   String _initials(String name) {
     final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
@@ -199,18 +334,30 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _selectUser(dynamic user) async {
-    setState(() { _selectedUser = user; _selectedGroup = null; _messages = []; });
+    _stopTypingSignal();
+    setState(() {
+      _selectedUser = user;
+      _selectedGroup = null;
+      _messages = [];
+      _typingPeers.removeWhere((k, _) => k.startsWith('g:'));
+    });
     _startRefresh();
     final result = await widget.apiService.getConversation(user['id']);
     if (result['success']) {
       setState(() => _messages = result['data'] ?? []);
       _scrollToBottom();
-      widget.apiService.markMessagesRead(user['id']);
+      unawaited(widget.apiService.markMessagesRead(user['id']));
     }
   }
 
   Future<void> _selectGroup(dynamic group) async {
-    setState(() { _selectedGroup = group; _selectedUser = null; _messages = []; });
+    _stopTypingSignal();
+    setState(() {
+      _selectedGroup = group;
+      _selectedUser = null;
+      _messages = [];
+      _typingPeers.removeWhere((k, _) => k.startsWith('u:'));
+    });
     _startRefresh();
     final result = await widget.apiService.getGroupMessages(group['id']);
     if (result['success']) {
@@ -221,13 +368,16 @@ class _ChatPageState extends State<ChatPage> {
 
   void _startRefresh() {
     _refreshTimer?.cancel();
-    _refreshTimer = Timer.periodic(Duration(seconds: 5), (_) => _silentRefresh());
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) => _silentRefresh());
   }
 
   Future<void> _silentRefresh() async {
     if (_selectedUser != null) {
       final r = await widget.apiService.getConversation(_selectedUser['id']);
-      if (r['success'] && mounted) setState(() => _messages = r['data'] ?? []);
+      if (r['success'] && mounted) {
+        setState(() => _messages = r['data'] ?? []);
+        unawaited(widget.apiService.markMessagesRead(_selectedUser['id']));
+      }
     } else if (_selectedGroup != null) {
       final r = await widget.apiService.getGroupMessages(_selectedGroup['id']);
       if (r['success'] && mounted) setState(() => _messages = r['data'] ?? []);
@@ -239,6 +389,7 @@ class _ChatPageState extends State<ChatPage> {
     if (text.isEmpty || _isSending) return;
     if (_selectedUser == null && _selectedGroup == null) return;
 
+    _stopTypingSignal();
     _msgController.clear();
     setState(() => _isSending = true);
 
@@ -252,12 +403,20 @@ class _ChatPageState extends State<ChatPage> {
     if (!mounted) return;
     setState(() => _isSending = false);
     if (result['success'] == true) {
+      final payload = result['data'];
       setState(() {
-        _messages.add(result['data'] ?? {
-          'message': text,
-          'is_own': true,
-          'timestamp': DateTime.now().toIso8601String(),
-        });
+        _messages.add(payload is Map
+            ? {
+                ...Map<String, dynamic>.from(payload),
+                'is_own': true,
+                'is_read': payload['is_read'] == true,
+              }
+            : {
+                'message': text,
+                'is_own': true,
+                'is_read': false,
+                'timestamp': DateTime.now().toIso8601String(),
+              });
       });
       _scrollToBottom();
       _msgFocus.requestFocus();
@@ -671,6 +830,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         final unread = user['unread_count'] ?? 0;
         final name = user['full_name'] ?? user['username'] ?? 'User';
         final preview = _chatPreviewText(Map<String, dynamic>.from(user as Map));
+        final isPeerTyping = _typingPeers.containsKey('u:${user['id']}');
         final timeLabel = _formatChatListTime(user['last_message_at']);
         final uid = user['id'] is int ? user['id'] as int : int.tryParse('${user['id']}') ?? 0;
 
@@ -765,10 +925,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   fontSize: 13,
-                                  color: unread > 0
-                                      ? AppTheme.textPrimary.withValues(alpha: 0.85)
-                                      : AppTheme.textMuted.withValues(alpha: 0.9),
-                                  fontWeight: unread > 0 ? FontWeight.w500 : FontWeight.w400,
+                                  color: isPeerTyping
+                                      ? const Color(0xFF34D399)
+                                      : unread > 0
+                                          ? AppTheme.textPrimary.withValues(alpha: 0.85)
+                                          : AppTheme.textMuted.withValues(alpha: 0.9),
+                                  fontWeight: isPeerTyping || unread > 0 ? FontWeight.w500 : FontWeight.w400,
+                                  fontStyle: isPeerTyping ? FontStyle.italic : FontStyle.normal,
                                 ),
                               ),
                             ),
@@ -941,9 +1104,19 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         ? (_selectedGroup['name'] ?? 'Group')
         : (_selectedUser['full_name'] ?? _selectedUser['username'] ?? 'Chat');
     final isOnline = !isGroup && _parseOnline(_selectedUser?['is_online']);
-    final subtitle = isGroup
-        ? '${_selectedGroup['member_count'] ?? 0} members'
-        : (isOnline ? 'Online' : 'Offline');
+    final typingLabel = _activeTypingLabel();
+    final designation = !isGroup
+        ? (_selectedUser?['designation'] ?? '').toString().trim()
+        : '';
+    final subtitle = typingLabel ??
+        (isGroup
+            ? '${_selectedGroup['member_count'] ?? 0} members'
+            : (isOnline
+                ? 'online'
+                : (designation.isNotEmpty ? designation : 'offline')));
+    final subtitleColor = typingLabel != null
+        ? const Color(0xFF34D399)
+        : (isOnline ? const Color(0xFF34D399) : AppTheme.textMuted);
     final headerUid = !isGroup && _selectedUser != null
         ? (_selectedUser['id'] is int ? _selectedUser['id'] as int : int.tryParse('${_selectedUser['id']}') ?? 0)
         : 0;
@@ -951,50 +1124,64 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     return Column(
       children: [
         Container(
-          height: PlatformCapabilities.immersiveChatChrome ? 64 : 72,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+          height: PlatformCapabilities.immersiveChatChrome ? 66 : 74,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
-            color: const Color(0xE60F172A),
-            border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+            color: const Color(0xF20B1220),
+            border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
           ),
           child: Row(
             children: [
               if (!isWide)
                 IconButton(
                   tooltip: 'Back',
-                  onPressed: () => setState(() {
-                    _selectedUser = null;
-                    _selectedGroup = null;
-                    _refreshTimer?.cancel();
-                  }),
+                  onPressed: () {
+                    _stopTypingSignal();
+                    setState(() {
+                      _selectedUser = null;
+                      _selectedGroup = null;
+                      _refreshTimer?.cancel();
+                    });
+                  },
                   icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppTheme.textPrimary, size: 20),
                 ),
               if (isGroup)
                 Container(
-                  width: 42, height: 42,
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(colors: [AppTheme.primary, AppTheme.primaryBright]),
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
+                    gradient: const LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+                    ),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
                   ),
-                  child: const Center(child: Icon(Icons.group, color: Colors.white, size: 20)),
+                  child: const Center(child: Icon(Icons.group_rounded, color: Colors.white, size: 22)),
                 )
               else
                 Stack(
                   clipBehavior: Clip.none,
                   children: [
                     CircleAvatar(
-                      radius: 21,
+                      radius: 22,
                       backgroundColor: _avatarColor(headerUid),
-                      child: Text(_initials(name), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                      child: Text(
+                        _initials(name),
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
+                      ),
                     ),
                     Positioned(
-                      bottom: 0, right: 0,
+                      bottom: 0,
+                      right: 0,
                       child: Container(
-                        width: 12, height: 12,
+                        width: 13,
+                        height: 13,
                         decoration: BoxDecoration(
-                          color: isOnline ? const Color(0xFF34D399) : const Color(0xFF6B7280),
+                          color: isOnline ? const Color(0xFF34D399) : const Color(0xFF64748B),
                           shape: BoxShape.circle,
-                          border: Border.all(color: AppTheme.bgDeep, width: 2),
+                          border: Border.all(color: const Color(0xFF0B1220), width: 2),
                         ),
                       ),
                     ),
@@ -1006,13 +1193,27 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(name, style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white,
-                    ), overflow: TextOverflow.ellipsis),
-                    Text(subtitle, style: TextStyle(
-                      fontSize: 12,
-                      color: isOnline ? const Color(0xFF34D399) : AppTheme.textMuted,
-                    )),
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        letterSpacing: -0.2,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: typingLabel != null ? FontWeight.w600 : FontWeight.w400,
+                        fontStyle: typingLabel != null ? FontStyle.italic : FontStyle.normal,
+                        color: subtitleColor,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ],
                 ),
               ),
@@ -1342,6 +1543,16 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                               child: Text('edited', style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: 0.5), fontStyle: FontStyle.italic)),
                             ),
                           Text(time, style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: 0.65))),
+                          if (!isGroup && !isDeleted) ...[
+                            const SizedBox(width: 3),
+                            Icon(
+                              Icons.done_all_rounded,
+                              size: 15,
+                              color: msg['is_read'] == true
+                                  ? const Color(0xFF53BDEB)
+                                  : Colors.white.withValues(alpha: 0.55),
+                            ),
+                          ],
                         ],
                       ),
                     ],
