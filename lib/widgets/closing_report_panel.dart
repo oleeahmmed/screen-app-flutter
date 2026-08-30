@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
-import '../utils/responsive.dart';
 import 'app_bottom_sheet.dart';
 import 'empty_state.dart';
 import 'glass_card.dart';
@@ -613,29 +612,6 @@ class _ClosingReportSheetState extends State<_ClosingReportSheet> {
                             ],
                           ],
                         ),
-                        if (!widget.required)
-                          IconButton(
-                            onPressed: _close,
-                            tooltip: 'Close',
-                            style: IconButton.styleFrom(
-                              backgroundColor: Colors.white.withValues(alpha: 0.06),
-                            ),
-                            icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.symmetric(horizontal: desktop ? 28 : 20),
-                    child: Divider(height: 1, color: Colors.white.withValues(alpha: 0.08)),
-                  ),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(
-                        desktop ? 28 : 20,
-                        16,
-                        desktop ? 28 : 20,
-                        12,
                       ),
                     ),
                     Padding(
