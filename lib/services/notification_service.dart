@@ -33,7 +33,42 @@ class NotificationService {
   final _presenceController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get presenceStream => _presenceController.stream;
 
+  final _typingController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get typingStream => _typingController.stream;
+
+  final _messagesReadController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get messagesReadStream => _messagesReadController.stream;
+
   void Function(int count)? onUnreadCountChanged;
+
+  /// Send a chat signaling payload on the shared `/ws/chat/` socket.
+  bool sendChatPayload(Map<String, dynamic> payload) {
+    final ch = _channel;
+    if (ch == null) return false;
+    try {
+      ch.sink.add(jsonEncode(payload));
+      return true;
+    } catch (e) {
+      if (kDebugMode) debugPrint('[NotificationService] sendChatPayload: $e');
+      return false;
+    }
+  }
+
+  void sendTyping({required int receiverId, required bool isTyping}) {
+    sendChatPayload({
+      'type': 'typing',
+      'receiver_id': receiverId,
+      'is_typing': isTyping,
+    });
+  }
+
+  void sendGroupTyping({required int groupId, required bool isTyping}) {
+    sendChatPayload({
+      'type': 'group_typing',
+      'group_id': groupId,
+      'is_typing': isTyping,
+    });
+  }
 
   Duration get _pollInterval {
     if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
@@ -226,6 +261,14 @@ class NotificationService {
       _presenceController.add(data);
       return;
     }
+    if (type == 'typing_indicator' || type == 'group_typing') {
+      _typingController.add(data);
+      return;
+    }
+    if (type == 'messages_read') {
+      _messagesReadController.add(data);
+      return;
+    }
     if (type != 'notification' && type != 'task_notification') return;
 
     await refreshUnreadCount();
@@ -248,6 +291,8 @@ class NotificationService {
 
   void dispose() {
     stop();
+    _typingController.close();
+    _messagesReadController.close();
     _pushController.close();
     _presenceController.close();
   }
