@@ -102,8 +102,6 @@ class AppSubmitReportButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 380;
-
     return Tooltip(
       message: 'Submit report',
       child: Material(
@@ -112,31 +110,12 @@ class AppSubmitReportButton extends StatelessWidget {
           onTap: _open,
           borderRadius: BorderRadius.circular(20),
           child: Ink(
-            padding: EdgeInsets.symmetric(
-              horizontal: compact ? 8 : 10,
-              vertical: 6,
-            ),
+            padding: const EdgeInsets.all(8),
             decoration: AppTheme.loginInsetDecoration(borderRadius: 20),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  LucideIcons.clipboardCheck,
-                  size: 16,
-                  color: AppTheme.accent,
-                ),
-                if (!compact) ...[
-                  const SizedBox(width: 6),
-                  const Text(
-                    'Submit Report',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ],
+            child: const Icon(
+              LucideIcons.clipboardCheck,
+              size: 18,
+              color: AppTheme.accent,
             ),
           ),
         ),
@@ -145,27 +124,51 @@ class AppSubmitReportButton extends StatelessWidget {
   }
 }
 
-/// Quick menu + logout icon (logout sits on the right).
+/// Submit report · P2P · notifications · profile · logout.
 class AppHeaderMenuActions extends StatelessWidget {
   final VoidCallback? onLogout;
   final Color? iconColor;
   final double iconSize;
+  final int unreadNotifs;
 
   const AppHeaderMenuActions({
     super.key,
     this.onLogout,
     this.iconColor,
     this.iconSize = 22,
+    this.unreadNotifs = 0,
   });
 
   @override
   Widget build(BuildContext context) {
+    final muted = iconColor ?? AppTheme.textMuted;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         const AppSubmitReportButton(),
-        const SizedBox(width: 6),
-        AppQuickMenuButton(iconColor: iconColor, iconSize: iconSize),
+        if (PlatformCapabilities.peerToPeerFileTransfer)
+          IconButton(
+            onPressed: () => AppNavigation.instance.openP2P(),
+            tooltip: 'P2P transfer',
+            visualDensity: VisualDensity.compact,
+            icon: Icon(LucideIcons.arrowLeftRight, color: muted, size: iconSize),
+          ),
+        IconButton(
+          onPressed: () => AppNavigation.instance.openNotifications(),
+          tooltip: 'Notifications',
+          visualDensity: VisualDensity.compact,
+          icon: Badge(
+            isLabelVisible: unreadNotifs > 0,
+            label: Text(unreadNotifs > 9 ? '9+' : '$unreadNotifs'),
+            child: Icon(Icons.notifications_outlined, color: muted, size: iconSize),
+          ),
+        ),
+        IconButton(
+          onPressed: () => AppNavigation.instance.goProfile(),
+          tooltip: 'Profile',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(Icons.person_outline_rounded, color: muted, size: iconSize),
+        ),
         AppLogoutButton(
           onLogout: onLogout,
           iconColor: iconColor ?? AppTheme.danger,
@@ -232,16 +235,6 @@ class AppQuickMenuButton extends StatelessWidget {
                         ),
                         const SizedBox(height: 12),
                         ListTile(
-                          leading: _menuIcon(LucideIcons.shield, const Color(0xFFA78BFA)),
-                          title: const Text('Vault', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
-                          subtitle: Text('Project credentials', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            AppNavigation.instance.openVault();
-                          },
-                        ),
-                        ListTile(
                           leading: _menuIcon(LucideIcons.folderOpen, AppTheme.primaryBright),
                           title: const Text('Project', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
                           subtitle: Text('Browse & manage projects', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
@@ -251,17 +244,6 @@ class AppQuickMenuButton extends StatelessWidget {
                             AppNavigation.instance.openProject();
                           },
                         ),
-                        if (PlatformCapabilities.peerToPeerFileTransfer)
-                          ListTile(
-                            leading: _menuIcon(LucideIcons.arrowLeftRight, AppTheme.accent),
-                            title: const Text('P2P Transfer', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
-                            subtitle: Text('Send files directly — nothing stored on server', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            onTap: () {
-                              Navigator.pop(ctx);
-                              AppNavigation.instance.openP2P();
-                            },
-                          ),
                       ],
                     ),
                   ),
@@ -298,15 +280,6 @@ class AppQuickMenuButton extends StatelessWidget {
           child: Text('Shortcuts', style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w600)),
         ),
         PopupMenuItem<int>(
-          value: -4,
-          onTap: () => AppNavigation.instance.openVault(),
-          child: const Row(children: [
-            _MenuIconChip(icon: LucideIcons.shield, color: Color(0xFFA78BFA)),
-            SizedBox(width: 10),
-            Text('Vault', style: TextStyle(color: AppTheme.textPrimary)),
-          ]),
-        ),
-        PopupMenuItem<int>(
           value: -5,
           onTap: () => AppNavigation.instance.openProject(),
           child: const Row(children: [
@@ -315,16 +288,6 @@ class AppQuickMenuButton extends StatelessWidget {
             Text('Project', style: TextStyle(color: AppTheme.textPrimary)),
           ]),
         ),
-        if (PlatformCapabilities.peerToPeerFileTransfer)
-          PopupMenuItem<int>(
-            value: -6,
-            onTap: () => AppNavigation.instance.openP2P(),
-            child: const Row(children: [
-              _MenuIconChip(icon: LucideIcons.arrowLeftRight, color: AppTheme.accent),
-              SizedBox(width: 10),
-              Text('P2P Transfer', style: TextStyle(color: AppTheme.textPrimary)),
-            ]),
-          ),
       ],
     );
   }

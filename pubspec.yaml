@@ -55,6 +55,7 @@ dependencies:
   flutter_quill_delta_from_html: ^1.5.3
   vsc_quill_delta_to_html: ^1.0.5
   lucide_icons: ^0.257.0
+  open_filex: ^4.7.0
 
 dev_dependencies:
   flutter_test:

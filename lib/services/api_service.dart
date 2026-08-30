@@ -3126,6 +3126,21 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getVaultEntry(int projectId, int entryId) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.vaultEntryUrl(projectId, entryId)));
+      if (response.statusCode == 200) {
+        final raw = jsonDecode(response.body);
+        if (raw is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+        }
+      }
+      return {'success': false, 'error': 'Failed to load entry (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> updateVaultEntry(
     int projectId,
     int entryId, {

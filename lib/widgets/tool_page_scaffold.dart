@@ -19,7 +19,8 @@ class ToolPageScaffold extends StatelessWidget {
     required this.child,
     this.onLogout,
     this.scrollable = true,
-    this.useBackground = true,
+    /// Prefer false inside [AppTabShell] so Home ambient background is not doubled.
+    this.useBackground = false,
     this.showHeader = true,
   });
 

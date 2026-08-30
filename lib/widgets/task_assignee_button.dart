@@ -4,20 +4,9 @@ import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/task_helpers.dart';
-import 'kanban_assignee_picker.dart';
+import 'premium_task_pickers.dart';
 
-Color _avatarColorForName(String name) {
-  const palette = [
-    Color(0xFF3B82F6),
-    Color(0xFF8B5CF6),
-    Color(0xFF10B981),
-    Color(0xFFF59E0B),
-    Color(0xFFEF4444),
-    Color(0xFF06B6D4),
-  ];
-  if (name.isEmpty) return palette[0];
-  return palette[name.codeUnitAt(0) % palette.length];
-}
+Color _avatarColorForName(String name) => avatarColorForName(name);
 
 /// Compact assign control for task cards — opens multi-select picker.
 class TaskAssigneeButton extends StatefulWidget {
@@ -83,7 +72,7 @@ class _TaskAssigneeButtonState extends State<TaskAssigneeButton> {
       return;
     }
 
-    final ids = await showKanbanAssigneePicker(
+    final ids = await showPremiumAssigneeSheet(
       context: context,
       employees: employees,
       selectedIds: taskAssigneeIdsFrom(widget.task),

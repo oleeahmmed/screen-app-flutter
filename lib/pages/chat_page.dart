@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
@@ -8,7 +9,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
 import '../services/voice_recorder_service.dart';
+import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_logo.dart';
 import '../widgets/empty_state.dart';
 import '../utils/responsive.dart';
 import '../utils/platform_capabilities.dart';
@@ -60,12 +63,16 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   final _msgController = TextEditingController();
+  final _msgFocus = FocusNode();
   final _searchController = TextEditingController();
   final _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
+    _msgFocus.addListener(() {
+      if (mounted) setState(() {});
+    });
     _loadUsers();
     _usersPollTimer = Timer.periodic(const Duration(seconds: 25), (_) => _loadUsers(silent: true));
     _presenceSub = widget.notificationService?.presenceStream.listen(_onPresenceUpdate);
@@ -81,6 +88,7 @@ class _ChatPageState extends State<ChatPage> {
     _voiceRecorder?.dispose();
     _audioPlayer?.dispose();
     _msgController.dispose();
+    _msgFocus.dispose();
     _searchController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -193,32 +201,39 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _sendMessage() async {
     final text = _msgController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isSending) return;
+    if (_selectedUser == null && _selectedGroup == null) return;
+
     _msgController.clear();
     setState(() => _isSending = true);
 
     Map<String, dynamic> result;
     if (_selectedUser != null) {
       result = await widget.apiService.sendMessage(_selectedUser['id'], text);
-    } else if (_selectedGroup != null) {
-      result = await widget.apiService.sendGroupMessage(_selectedGroup['id'], text);
     } else {
-      return;
+      result = await widget.apiService.sendGroupMessage(_selectedGroup['id'], text);
     }
 
+    if (!mounted) return;
     setState(() => _isSending = false);
-    if (result['success']) {
+    if (result['success'] == true) {
       setState(() {
         _messages.add(result['data'] ?? {
-          'message': text, 'is_own': true,
+          'message': text,
+          'is_own': true,
           'timestamp': DateTime.now().toIso8601String(),
         });
       });
       _scrollToBottom();
+      _msgFocus.requestFocus();
     } else {
-      _showError('Failed to send message');
+      _msgController.text = text;
+      _msgController.selection = TextSelection.collapsed(offset: text.length);
+      _showError(result['error']?.toString() ?? 'Failed to send message');
     }
   }
+
+  bool get _hasDraft => _msgController.text.trim().isNotEmpty;
 
   // ─── Voice recording (Android/iOS: record package, Windows: PowerShell) ───
   Future<void> _toggleRecording() async {
@@ -423,6 +438,24 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   }
 
   // ═══════════════════════════════════════════════════════════════
+  /// Logo → dashboard (home tab). Used when immersive chrome hides the main top bar.
+  Widget _dashboardLogoButton() {
+    return Tooltip(
+      message: 'Dashboard',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => AppNavigation.instance.goHome(),
+          borderRadius: BorderRadius.circular(10),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: AppLogo(size: 30, showBorder: false),
+          ),
+        ),
+      ),
+    );
+  }
+
   // BUILD
   // ═══════════════════════════════════════════════════════════════
   @override
@@ -431,12 +464,17 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final hasChat = _selectedUser != null || _selectedGroup != null;
     final listWidth = isWide ? Responsive.chatListPaneWidth(context) : double.infinity;
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
-    final bottomInset = keyboard > 0 ? 0.0 : Responsive.bottomNavInset(context);
+    final immersive = PlatformCapabilities.immersiveChatChrome;
+    final bottomInset = keyboard > 0
+        ? 0.0
+        : (immersive
+            ? MediaQuery.paddingOf(context).bottom
+            : Responsive.bottomNavInset(context));
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
       child: SafeArea(
-        top: false,
+        top: immersive,
         bottom: false,
         child: isWide
             ? Row(children: [
@@ -451,40 +489,89 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   // ─── LEFT SIDEBAR ───
   Widget _buildSidebar() {
+    final immersive = PlatformCapabilities.immersiveChatChrome;
     return Column(
       children: [
         Padding(
-          padding: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 8, Responsive.pagePadding(context), 4),
-          child: const Text(
-            'Chat',
-            style: TextStyle(color: AppTheme.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
+          padding: EdgeInsets.fromLTRB(
+            immersive ? 4 : Responsive.pagePadding(context),
+            immersive ? 4 : 8,
+            Responsive.pagePadding(context),
+            4,
           ),
-        ),
-        Container(
-          margin: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 0, Responsive.pagePadding(context), 8),
-          padding: const EdgeInsets.all(4),
-          decoration: AppTheme.taskCardDecoration(borderRadius: 12),
           child: Row(
             children: [
-              _buildTab('Direct', Icons.person, 'direct'),
-              _buildTab('Groups', Icons.group, 'group'),
+              if (immersive)
+                IconButton(
+                  tooltip: 'Back',
+                  onPressed: () => AppNavigation.instance.goHome(),
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AppTheme.textPrimary),
+                ),
+              Expanded(
+                child: Text(
+                  'Chat',
+                  textAlign: immersive ? TextAlign.left : TextAlign.center,
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+              ),
+              if (immersive && _currentTab == 'group')
+                IconButton(
+                  tooltip: 'New group',
+                  onPressed: _showCreateGroupDialog,
+                  icon: const Icon(Icons.group_add_rounded, color: AppTheme.primaryBright, size: 22),
+                ),
+              if (immersive) _dashboardLogoButton(),
             ],
           ),
         ),
-        // Search
+        Container(
+          margin: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 4, Responsive.pagePadding(context), 10),
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Row(
+            children: [
+              _buildTab('Direct', Icons.person_outline_rounded, 'direct'),
+              _buildTab('Groups', Icons.groups_outlined, 'group'),
+            ],
+          ),
+        ),
         Padding(
-          padding: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 0, Responsive.pagePadding(context), 8),
+          padding: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 0, Responsive.pagePadding(context), 10),
           child: TextField(
             controller: _searchController,
             onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
-            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-            decoration: AppTheme.taskInputDecoration('Search...').copyWith(
-              prefixIcon: const Icon(Icons.search, color: AppTheme.textMuted, size: 20),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+            decoration: InputDecoration(
+              hintText: 'Search people or groups',
+              hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 14),
+              prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9), size: 22),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.07),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.55)),
+              ),
             ),
           ),
         ),
-        // List
         Expanded(
           child: _currentTab == 'direct' ? _buildUsersList() : _buildGroupsList(),
         ),
@@ -534,9 +621,14 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       return name.contains(_searchQuery);
     }).toList();
 
-    return ListView.builder(
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    final immersive = PlatformCapabilities.immersiveChatChrome;
+
+    return ListView.separated(
+      padding: EdgeInsets.fromLTRB(immersive ? 8 : 12, 0, immersive ? 8 : 12, 8),
       itemCount: filtered.length,
+      separatorBuilder: (_, __) => immersive
+          ? Divider(height: 1, indent: 72, color: Colors.white.withValues(alpha: 0.06))
+          : const SizedBox(height: 6),
       itemBuilder: (_, i) {
         final user = filtered[i];
         final isSelected = _selectedUser != null && _selectedUser['id'] == user['id'];
@@ -546,64 +638,95 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         final designation = user['designation'] ?? 'Employee';
         final uid = user['id'] is int ? user['id'] as int : int.tryParse('${user['id']}') ?? 0;
 
-        return GestureDetector(
-          onTap: () => _selectUser(user),
-          child: Container(
-            margin: const EdgeInsets.only(bottom: 6),
-            padding: const EdgeInsets.all(12),
-            decoration: isSelected
-                ? AppTheme.taskCardDecoration(borderRadius: 12).copyWith(
-                    color: AppTheme.primary.withValues(alpha: 0.18),
-                    border: Border.all(color: AppTheme.primary.withValues(alpha: 0.4)),
-                  )
-                : AppTheme.taskFieldDecoration(borderRadius: 12),
-            child: Row(
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    CircleAvatar(
-                      radius: 20,
-                      backgroundColor: _avatarColor(uid),
-                      child: Text(_initials(name),
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _selectUser(user),
+            borderRadius: BorderRadius.circular(immersive ? 14 : 12),
+            child: Container(
+              margin: immersive ? EdgeInsets.zero : const EdgeInsets.only(bottom: 0),
+              padding: EdgeInsets.symmetric(
+                horizontal: immersive ? 10 : 12,
+                vertical: immersive ? 12 : 12,
+              ),
+              decoration: immersive
+                  ? (isSelected
+                      ? BoxDecoration(
+                          color: AppTheme.primary.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(14),
+                        )
+                      : null)
+                  : (isSelected
+                      ? AppTheme.taskCardDecoration(borderRadius: 12).copyWith(
+                          color: AppTheme.primary.withValues(alpha: 0.18),
+                          border: Border.all(color: AppTheme.primary.withValues(alpha: 0.4)),
+                        )
+                      : AppTheme.taskFieldDecoration(borderRadius: 12)),
+              child: Row(
+                children: [
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      CircleAvatar(
+                        radius: immersive ? 24 : 20,
+                        backgroundColor: _avatarColor(uid),
+                        child: Text(_initials(name),
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: immersive ? 15 : 14,
+                          )),
+                      ),
+                      Positioned(
+                        bottom: 0, right: 0,
+                        child: Container(
+                          width: 12, height: 12,
+                          decoration: BoxDecoration(
+                            color: isOnline ? const Color(0xFF34D399) : const Color(0xFF6B7280),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: AppTheme.bgDeep, width: 2),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name, style: TextStyle(
+                          fontSize: immersive ? 16 : 14,
+                          fontWeight: FontWeight.w600,
+                          color: isSelected ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.92),
+                        ), overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 2),
+                        Text(designation, style: TextStyle(
+                          fontSize: 13, color: AppTheme.textMuted.withValues(alpha: 0.9),
+                        ), overflow: TextOverflow.ellipsis),
+                      ],
                     ),
-                    Positioned(
-                      bottom: 0, right: 0,
-                      child: Container(
-                        width: 11, height: 11,
-                        decoration: BoxDecoration(
-                          color: isOnline ? const Color(0xFF34D399) : const Color(0xFF6B7280),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: AppTheme.bgDeep, width: 2),
+                  ),
+                  if (unread > 0)
+                    Container(
+                      constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      decoration: const BoxDecoration(
+                        color: AppTheme.danger,
+                        borderRadius: BorderRadius.all(Radius.circular(11)),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        unread > 99 ? '99+' : '$unread',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
-                  ],
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(name, style: TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600,
-                        color: isSelected ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.85),
-                      ), overflow: TextOverflow.ellipsis),
-                      Text(designation, style: TextStyle(
-                        fontSize: 12, color: AppTheme.textMuted,
-                      ), overflow: TextOverflow.ellipsis),
-                    ],
-                  ),
-                ),
-                if (unread > 0)
-                  Container(
-                    width: 20, height: 20,
-                    decoration: BoxDecoration(color: AppTheme.danger, shape: BoxShape.circle),
-                    child: Center(child: Text('$unread',
-                      style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold))),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -613,33 +736,34 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   // ─── Groups List ───
   Widget _buildGroupsList() {
+    final immersive = PlatformCapabilities.immersiveChatChrome;
     return Column(
       children: [
-        // Create Group button
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _showCreateGroupDialog,
-              icon: Icon(Icons.add, size: 18),
-              label: Text('Create Group', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        if (!immersive)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _showCreateGroupDialog,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Create Group', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
               ),
             ),
           ),
-        ),
         Expanded(
           child: _isLoadingGroups
               ? _buildLoader('Loading groups...')
               : _groups.isEmpty
                   ? _buildEmpty('No groups yet')
                   : ListView.builder(
-                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      padding: EdgeInsets.symmetric(horizontal: immersive ? 8 : 12, vertical: 4),
                       itemCount: _filteredGroups.length,
                       itemBuilder: (_, i) {
                         final group = _filteredGroups[i];
@@ -734,27 +858,28 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     return Column(
       children: [
         Container(
-          height: 72,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: AppTheme.taskCardDecoration(borderRadius: 0).copyWith(
-            borderRadius: BorderRadius.zero,
-            boxShadow: const [],
+          height: PlatformCapabilities.immersiveChatChrome ? 64 : 72,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xE60F172A),
             border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
           ),
           child: Row(
             children: [
               if (!isWide)
-                GestureDetector(
-                  onTap: () => setState(() { _selectedUser = null; _selectedGroup = null; _refreshTimer?.cancel(); }),
-                  child: const Padding(
-                    padding: EdgeInsets.only(right: 12),
-                    child: Icon(Icons.arrow_back_ios, color: AppTheme.textMuted, size: 20),
-                  ),
+                IconButton(
+                  tooltip: 'Back',
+                  onPressed: () => setState(() {
+                    _selectedUser = null;
+                    _selectedGroup = null;
+                    _refreshTimer?.cancel();
+                  }),
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppTheme.textPrimary, size: 20),
                 ),
               if (isGroup)
                 Container(
-                  width: 40, height: 40,
-                  decoration: BoxDecoration(
+                  width: 42, height: 42,
+                  decoration: const BoxDecoration(
                     gradient: LinearGradient(colors: [AppTheme.primary, AppTheme.primaryBright]),
                     shape: BoxShape.circle,
                   ),
@@ -765,14 +890,14 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   clipBehavior: Clip.none,
                   children: [
                     CircleAvatar(
-                      radius: 20,
+                      radius: 21,
                       backgroundColor: _avatarColor(headerUid),
                       child: Text(_initials(name), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
                     ),
                     Positioned(
                       bottom: 0, right: 0,
                       child: Container(
-                        width: 11, height: 11,
+                        width: 12, height: 12,
                         decoration: BoxDecoration(
                           color: isOnline ? const Color(0xFF34D399) : const Color(0xFF6B7280),
                           shape: BoxShape.circle,
@@ -789,7 +914,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(name, style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white,
+                      fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white,
                     ), overflow: TextOverflow.ellipsis),
                     Text(subtitle, style: TextStyle(
                       fontSize: 12,
@@ -799,17 +924,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                 ),
               ),
               if (isGroup)
-                GestureDetector(
-                  onTap: () => _showGroupSettings(_selectedGroup),
-                  child: Container(
-                    width: 40, height: 40,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.transparent,
-                    ),
-                    child: Icon(Icons.settings, color: AppTheme.textMuted, size: 20),
-                  ),
+                IconButton(
+                  tooltip: 'Group settings',
+                  onPressed: () => _showGroupSettings(_selectedGroup),
+                  icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted, size: 22),
                 ),
+              if (PlatformCapabilities.immersiveChatChrome) _dashboardLogoButton(),
             ],
           ),
         ),
@@ -817,12 +937,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         Expanded(
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: const Color(0xF20F172A),
+              color: const Color(0xF20B1220),
               gradient: RadialGradient(
                 center: Alignment.topCenter,
                 radius: 1.2,
                 colors: [
-                  AppTheme.primary.withValues(alpha: 0.08),
+                  AppTheme.primary.withValues(alpha: 0.07),
                   Colors.transparent,
                 ],
               ),
@@ -861,94 +981,164 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             ]),
           )
         else
-          Container(
-            padding: EdgeInsets.fromLTRB(
-              Responsive.isMobile(context) ? 10 : 16,
-              10,
-              Responsive.isMobile(context) ? 10 : 16,
-              10,
-            ),
-            decoration: BoxDecoration(
-              color: AppTheme.surface.withValues(alpha: 0.35),
-              border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
-            ),
-          child: Row(
-            children: [
-              if (Responsive.isMobile(context))
-                PopupMenuButton<String>(
-                  icon: const Icon(Icons.add_circle_outline, color: AppTheme.textMuted, size: 24),
+          _buildMessageComposer(),
+      ],
+    );
+  }
+
+  /// WhatsApp-style multi-line composer (Enter = newline; send via button / Ctrl+Enter).
+  Widget _buildMessageComposer() {
+    final mobile = Responsive.isMobile(context);
+    final hasText = _hasDraft;
+
+    return Container(
+      padding: EdgeInsets.fromLTRB(mobile ? 8 : 14, 8, mobile ? 8 : 14, 8),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.42),
+        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (mobile)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: PopupMenuButton<String>(
+                  tooltip: 'Attach',
+                  icon: Icon(Icons.add_circle_rounded, color: AppTheme.textMuted.withValues(alpha: 0.95), size: 28),
                   color: AppTheme.surface2,
                   onSelected: (v) {
                     if (v == 'image') _pickImage();
                     else if (v == 'file') _pickFile();
                   },
                   itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'image', child: Row(children: [Icon(Icons.image, size: 18), SizedBox(width: 8), Text('Photo')])),
-                    PopupMenuItem(value: 'file', child: Row(children: [Icon(Icons.attach_file, size: 18), SizedBox(width: 8), Text('File')])),
+                    PopupMenuItem(
+                      value: 'image',
+                      child: Row(children: [
+                        Icon(Icons.photo_outlined, size: 18, color: AppTheme.textPrimary),
+                        SizedBox(width: 10),
+                        Text('Photo', style: TextStyle(color: AppTheme.textPrimary)),
+                      ]),
+                    ),
+                    PopupMenuItem(
+                      value: 'file',
+                      child: Row(children: [
+                        Icon(Icons.attach_file_rounded, size: 18, color: AppTheme.textPrimary),
+                        SizedBox(width: 10),
+                        Text('Document', style: TextStyle(color: AppTheme.textPrimary)),
+                      ]),
+                    ),
                   ],
-                )
-              else ...[
-                GestureDetector(
-                  onTap: _pickImage,
-                  child: const Padding(
-                    padding: EdgeInsets.only(right: 4),
-                    child: Icon(Icons.image, color: AppTheme.textMuted, size: 22),
-                  ),
                 ),
-                GestureDetector(
-                  onTap: _pickFile,
-                  child: const Padding(
-                    padding: EdgeInsets.only(right: 8),
-                    child: Icon(Icons.attach_file, color: AppTheme.textMuted, size: 22),
-                  ),
-                ),
-              ],
-              Expanded(
-                child: TextField(
-                  controller: _msgController,
-                  enabled: !_isSending,
-                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-                  decoration: AppTheme.taskInputDecoration('Type a message...').copyWith(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide(color: AppTheme.featureVault.withValues(alpha: 0.6)),
-                    ),
-                  ),
-                  onSubmitted: (_) => _sendMessage(),
-                  onChanged: (_) => setState(() {}),
-                ),
+              )
+            else ...[
+              IconButton(
+                onPressed: _pickImage,
+                tooltip: 'Photo',
+                icon: const Icon(Icons.photo_outlined, color: AppTheme.textMuted, size: 22),
               ),
-              SizedBox(width: 12),
-              GestureDetector(
-                onTap: _isSending ? null : (_msgController.text.trim().isEmpty ? _toggleRecording : _sendMessage),
-                child: Container(
-                  width: 44, height: 44,
-                  decoration: BoxDecoration(
-                    color: AppTheme.primary,
-                    shape: BoxShape.circle,
-                    boxShadow: [BoxShadow(color: AppTheme.primary.withValues(alpha: 0.3), blurRadius: 12)],
-                  ),
-                  child: _isSending
-                      ? Padding(
-                          padding: EdgeInsets.all(12),
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                        )
-                      : Icon(_msgController.text.trim().isEmpty ? Icons.mic : Icons.send, color: Colors.white, size: 18),
-                ),
+              IconButton(
+                onPressed: _pickFile,
+                tooltip: 'Document',
+                icon: const Icon(Icons.attach_file_rounded, color: AppTheme.textMuted, size: 22),
               ),
             ],
-          ),
+            Expanded(
+              child: CallbackShortcuts(
+                bindings: {
+                  const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
+                  const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
+                },
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 44, maxHeight: 140),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(22),
+                    border: Border.all(
+                      color: _msgFocus.hasFocus
+                          ? AppTheme.primaryBright.withValues(alpha: 0.4)
+                          : Colors.white.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  child: TextField(
+                    controller: _msgController,
+                    focusNode: _msgFocus,
+                    enabled: !_isSending,
+                    minLines: 1,
+                    maxLines: 6,
+                    keyboardType: TextInputType.multiline,
+                    textInputAction: TextInputAction.newline,
+                    textCapitalization: TextCapitalization.sentences,
+                    style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 15,
+                      height: 1.35,
+                    ),
+                    cursorColor: AppTheme.primaryBright,
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: 'Message',
+                      hintStyle: TextStyle(
+                        color: AppTheme.textMuted.withValues(alpha: 0.65),
+                        fontSize: 15,
+                      ),
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _isSending
+                      ? null
+                      : (hasText ? _sendMessage : _toggleRecording),
+                  customBorder: const CircleBorder(),
+                  child: Ink(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: hasText
+                            ? const [Color(0xFF5B9CFF), Color(0xFF2563EB)]
+                            : [AppTheme.primary.withValues(alpha: 0.9), AppTheme.primary],
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppTheme.primary.withValues(alpha: 0.35),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: _isSending
+                        ? const Padding(
+                            padding: EdgeInsets.all(13),
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : Icon(
+                            hasText ? Icons.send_rounded : Icons.mic_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -1039,7 +1229,15 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                         ]),
                       )
                     else
-                      Text(text, style: TextStyle(color: isOwn ? Colors.white : const Color(0xFFE4E4E7), fontSize: 14, height: 1.5)),
+                      Text(
+                        text.toString(),
+                        softWrap: true,
+                        style: TextStyle(
+                          color: isOwn ? Colors.white : const Color(0xFFE4E4E7),
+                          fontSize: 14,
+                          height: 1.45,
+                        ),
+                      ),
                     if (isOwn) ...[
                       const SizedBox(height: 4),
                       Row(
@@ -1119,7 +1317,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         title: Text('Edit Message', style: TextStyle(color: AppTheme.textPrimary)),
         content: TextField(
           controller: controller,
-          style: TextStyle(color: AppTheme.textPrimary),
+          minLines: 1,
+          maxLines: 6,
+          keyboardType: TextInputType.multiline,
+          textInputAction: TextInputAction.newline,
+          textCapitalization: TextCapitalization.sentences,
+          style: const TextStyle(color: AppTheme.textPrimary, height: 1.35),
           decoration: InputDecoration(
             filled: true, fillColor: AppTheme.surface2.withValues(alpha: 0.5),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),

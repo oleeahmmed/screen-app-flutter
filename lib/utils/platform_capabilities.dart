@@ -25,4 +25,8 @@ abstract final class PlatformCapabilities {
   /// FOREGROUND_SERVICE_MEDIA_PROJECTION so installs never request screen capture.
   static bool get screenshotMonitoring =>
       Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+  /// Full-screen chat on phone — hide app top bar + bottom nav (back stays in chat UI).
+  static bool get immersiveChatChrome =>
+      Platform.isAndroid || Platform.isIOS;
 }
