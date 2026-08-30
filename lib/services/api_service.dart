@@ -1040,17 +1040,19 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> sendMessage(int userId, String message) async {
+  Future<Map<String, dynamic>> sendMessage(int userId, String message, {int? replyToId}) async {
     try {
       print('💬 Sending message to user $userId: $message');
+      final body = <String, dynamic>{
+        'receiver_id': userId,
+        'message': message,
+      };
+      if (replyToId != null) body['reply_to_id'] = replyToId;
       final response = await http
           .post(
             Uri.parse(AppConfig.chatSendUrl),
             headers: _getHeaders(),
-            body: jsonEncode({
-              'receiver_id': userId,
-              'message': message,
-            }),
+            body: jsonEncode(body),
           )
           .timeout(Duration(seconds: 10));
 
@@ -1068,13 +1070,14 @@ class ApiService {
   }
 
   // ─── Mark Messages Read ───
-  Future<Map<String, dynamic>> sendVoiceMessage(int userId, List<int> audioBytes, String filename) async {
+  Future<Map<String, dynamic>> sendVoiceMessage(int userId, List<int> audioBytes, String filename, {int? replyToId}) async {
     try {
       var request = http.MultipartRequest('POST', Uri.parse(AppConfig.chatSendUrl));
       final headers = _getHeaders(); headers.remove('Content-Type');
       request.headers.addAll(headers);
       request.fields['receiver_id'] = userId.toString();
       request.fields['message'] = '';
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
       request.files.add(http.MultipartFile.fromBytes('voice_message', audioBytes, filename: filename));
       var response = await request.send().timeout(Duration(seconds: 30));
       final body = await response.stream.bytesToString();
@@ -1083,13 +1086,14 @@ class ApiService {
     } catch (e) { return {'success': false, 'error': '$e'}; }
   }
 
-  Future<Map<String, dynamic>> sendImageMessage(int userId, List<int> imageBytes, String filename, {String message = ''}) async {
+  Future<Map<String, dynamic>> sendImageMessage(int userId, List<int> imageBytes, String filename, {String message = '', int? replyToId}) async {
     try {
       var request = http.MultipartRequest('POST', Uri.parse(AppConfig.chatSendUrl));
       final headers = _getHeaders(); headers.remove('Content-Type');
       request.headers.addAll(headers);
       request.fields['receiver_id'] = userId.toString();
       request.fields['message'] = message;
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
       request.files.add(http.MultipartFile.fromBytes('image', imageBytes, filename: filename, contentType: MediaType('image', filename.endsWith('.png') ? 'png' : 'jpeg')));
       var response = await request.send().timeout(Duration(seconds: 30));
       final body = await response.stream.bytesToString();
@@ -1098,13 +1102,14 @@ class ApiService {
     } catch (e) { return {'success': false, 'error': '$e'}; }
   }
 
-  Future<Map<String, dynamic>> sendFileMessage(int userId, List<int> fileBytes, String filename, {String message = ''}) async {
+  Future<Map<String, dynamic>> sendFileMessage(int userId, List<int> fileBytes, String filename, {String message = '', int? replyToId}) async {
     try {
       var request = http.MultipartRequest('POST', Uri.parse(AppConfig.chatSendUrl));
       final headers = _getHeaders(); headers.remove('Content-Type');
       request.headers.addAll(headers);
       request.fields['receiver_id'] = userId.toString();
       request.fields['message'] = message;
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
       // Detect content type from filename extension
       final ext = filename.split('.').last.toLowerCase();
       final mimeTypes = {
@@ -1284,19 +1289,82 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> sendGroupMessage(int groupId, String message) async {
+  Future<Map<String, dynamic>> sendGroupMessage(int groupId, String message, {int? replyToId}) async {
     try {
+      final body = <String, dynamic>{'message': message};
+      if (replyToId != null) body['reply_to_id'] = replyToId;
       final response = await http
           .post(
             Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
             headers: _getHeaders(),
-            body: jsonEncode({'message': message}),
+            body: jsonEncode(body),
           )
           .timeout(Duration(seconds: 10));
       if (response.statusCode == 200 || response.statusCode == 201) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
       return {'success': false, 'error': 'Failed to send group message'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> sendGroupImageMessage(
+    int groupId,
+    List<int> imageBytes,
+    String filename, {
+    int? replyToId,
+  }) async {
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
+      );
+      final headers = _getHeaders();
+      headers.remove('Content-Type');
+      request.headers.addAll(headers);
+      request.fields['message'] = '';
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
+      request.files.add(http.MultipartFile.fromBytes(
+        'image',
+        imageBytes,
+        filename: filename,
+        contentType: MediaType('image', filename.endsWith('.png') ? 'png' : 'jpeg'),
+      ));
+      final response = await request.send().timeout(const Duration(seconds: 30));
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(body)};
+      }
+      return {'success': false, 'error': 'Failed: ${response.statusCode}'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> sendGroupFileMessage(
+    int groupId,
+    List<int> fileBytes,
+    String filename, {
+    int? replyToId,
+  }) async {
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
+      );
+      final headers = _getHeaders();
+      headers.remove('Content-Type');
+      request.headers.addAll(headers);
+      request.fields['message'] = '';
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
+      request.files.add(http.MultipartFile.fromBytes('file', fileBytes, filename: filename));
+      final response = await request.send().timeout(const Duration(seconds: 60));
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(body)};
+      }
+      return {'success': false, 'error': 'Failed: ${response.statusCode} - $body'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
