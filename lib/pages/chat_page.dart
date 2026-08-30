@@ -578,39 +578,31 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     if (mounted) setState(() => _recordSeconds = 0);
   }
 
-  // ─── Attach (camera / gallery / document) ───
+  // ─── Attach (WhatsApp paperclip sheet) ───
   Future<void> _showAttachSheet() async {
     if (_selectedUser == null && _selectedGroup == null) return;
     final mobile = Responsive.isMobile(context);
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppTheme.surface2,
+      backgroundColor: const Color(0xFF1F2C34),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
       builder: (ctx) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 40,
+                width: 36,
                 height: 4,
-                margin: const EdgeInsets.only(bottom: 14),
+                margin: const EdgeInsets.only(bottom: 16),
                 decoration: BoxDecoration(
-                  color: AppTheme.textMuted.withValues(alpha: 0.45),
+                  color: Colors.white.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Attach',
-                  style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700, fontSize: 16),
-                ),
-              ),
-              const SizedBox(height: 14),
               Row(
                 children: [
                   if (mobile)
@@ -618,7 +610,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       child: _attachTile(
                         icon: Icons.photo_camera_rounded,
                         label: 'Camera',
-                        color: const Color(0xFF0EA5E9),
+                        color: const Color(0xFFEF4444),
                         onTap: () {
                           Navigator.pop(ctx);
                           unawaited(_takePhoto());
@@ -630,7 +622,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     child: _attachTile(
                       icon: Icons.photo_library_rounded,
                       label: 'Gallery',
-                      color: const Color(0xFF8B5CF6),
+                      color: const Color(0xFFA855F7),
                       onTap: () {
                         Navigator.pop(ctx);
                         unawaited(_pickGalleryImage());
@@ -642,7 +634,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     child: _attachTile(
                       icon: Icons.insert_drive_file_rounded,
                       label: 'Document',
-                      color: const Color(0xFF10B981),
+                      color: const Color(0xFF6366F1),
                       onTap: () {
                         Navigator.pop(ctx);
                         unawaited(_pickFile());
@@ -1488,23 +1480,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         ),
 
         Expanded(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: const Color(0xF20B1220),
-              gradient: RadialGradient(
-                center: Alignment.topCenter,
-                radius: 1.2,
-                colors: [
-                  AppTheme.primary.withValues(alpha: 0.07),
-                  Colors.transparent,
-                ],
-              ),
-            ),
+          child: ColoredBox(
+            color: const Color(0xFF0B141A),
             child: _messages.isEmpty
                 ? _buildEmpty('No messages yet\nStart the conversation!')
                 : ListView.builder(
                     controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
                     itemCount: _messages.length,
                     itemBuilder: (_, i) => _buildMessageBubble(_messages[i]),
                   ),
@@ -1539,17 +1521,80 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
-  /// WhatsApp-style multi-line composer (Enter = newline; send via button / Ctrl+Enter).
+  Future<void> _showEmojiPicker() async {
+    const emojis = [
+      '😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '🤔', '😢',
+      '😭', '😡', '👍', '👎', '👏', '🙏', '🔥', '❤️', '💯', '✅',
+      '🎉', '🤝', '💪', '🙌', '😅', '😉', '😴', '🤗', '🫡', '🫶',
+    ];
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1F2C34),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              GridView.builder(
+                shrinkWrap: true,
+                itemCount: emojis.length,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 8,
+                  mainAxisSpacing: 4,
+                  crossAxisSpacing: 4,
+                ),
+                itemBuilder: (_, i) {
+                  final e = emojis[i];
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () {
+                      final t = _msgController.text;
+                      final sel = _msgController.selection;
+                      final start = sel.start >= 0 ? sel.start : t.length;
+                      final end = sel.end >= 0 ? sel.end : t.length;
+                      final next = t.replaceRange(start, end, e);
+                      _msgController.value = TextEditingValue(
+                        text: next,
+                        selection: TextSelection.collapsed(offset: start + e.length),
+                      );
+                      setState(() {});
+                    },
+                    child: Center(child: Text(e, style: const TextStyle(fontSize: 24))),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    _msgFocus.requestFocus();
+  }
+
+  /// WhatsApp-style composer: [emoji | Message | 📎 📷]  (🎤/➤)
   Widget _buildMessageComposer() {
     final mobile = Responsive.isMobile(context);
     final hasText = _hasDraft;
+    const waGreen = Color(0xFF00A884);
+    const inputBg = Color(0xFF2A3942);
+    const iconGrey = Color(0xFF8696A0);
 
     return Container(
-      padding: EdgeInsets.fromLTRB(mobile ? 8 : 14, 8, mobile ? 8 : 14, 8),
-      decoration: BoxDecoration(
-        color: AppTheme.surface.withValues(alpha: 0.42),
-        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
-      ),
+      color: const Color(0xFF0B141A),
+      padding: EdgeInsets.fromLTRB(mobile ? 6 : 12, 6, mobile ? 6 : 12, 6),
       child: SafeArea(
         top: false,
         child: Column(
@@ -1559,80 +1604,89 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 2),
-                  child: IconButton(
-                    tooltip: 'Attach',
-                    onPressed: _isSending ? null : _showAttachSheet,
-                    icon: Icon(
-                      Icons.add_circle_rounded,
-                      color: AppTheme.textMuted.withValues(alpha: 0.95),
-                      size: mobile ? 28 : 24,
-                    ),
-                  ),
-                ),
                 Expanded(
-                  child: CallbackShortcuts(
-                    bindings: {
-                      const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
-                      const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
-                    },
-                    child: Container(
-                      constraints: const BoxConstraints(minHeight: 44, maxHeight: 140),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.06),
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(
-                          color: _msgFocus.hasFocus
-                              ? AppTheme.primaryBright.withValues(alpha: 0.4)
-                              : Colors.white.withValues(alpha: 0.1),
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 48, maxHeight: 140),
+                    decoration: BoxDecoration(
+                      color: inputBg,
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        IconButton(
+                          tooltip: 'Emoji',
+                          onPressed: _isSending ? null : _showEmojiPicker,
+                          icon: const Icon(Icons.emoji_emotions_outlined, color: iconGrey, size: 26),
                         ),
-                      ),
-                      child: TextField(
-                        controller: _msgController,
-                        focusNode: _msgFocus,
-                        minLines: 1,
-                        maxLines: 6,
-                        keyboardType: TextInputType.multiline,
-                        textInputAction: TextInputAction.newline,
-                        textCapitalization: TextCapitalization.sentences,
-                        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15, height: 1.35),
-                        decoration: InputDecoration(
-                          hintText: 'Message',
-                          hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7)),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        Expanded(
+                          child: CallbackShortcuts(
+                            bindings: {
+                              const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
+                              const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
+                            },
+                            child: TextField(
+                              controller: _msgController,
+                              focusNode: _msgFocus,
+                              enabled: !_isSending,
+                              minLines: 1,
+                              maxLines: 6,
+                              keyboardType: TextInputType.multiline,
+                              textInputAction: TextInputAction.newline,
+                              textCapitalization: TextCapitalization.sentences,
+                              style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 16, height: 1.35),
+                              cursorColor: waGreen,
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                hintText: 'Message',
+                                hintStyle: TextStyle(color: iconGrey, fontSize: 16),
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(vertical: 12),
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
+                        IconButton(
+                          tooltip: 'Attach',
+                          onPressed: _isSending ? null : _showAttachSheet,
+                          icon: const Icon(Icons.attach_file_rounded, color: iconGrey, size: 24),
+                        ),
+                        if (!hasText)
+                          IconButton(
+                            tooltip: 'Camera',
+                            onPressed: _isSending ? null : () => unawaited(_takePhoto()),
+                            icon: const Icon(Icons.photo_camera_outlined, color: iconGrey, size: 24),
+                          ),
+                        const SizedBox(width: 2),
+                      ],
                     ),
                   ),
                 ),
                 const SizedBox(width: 6),
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 2),
+                  padding: const EdgeInsets.only(bottom: 1),
                   child: Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: _isSending
-                          ? null
-                          : (hasText ? _sendMessage : _toggleRecording),
-                      borderRadius: BorderRadius.circular(22),
+                      customBorder: const CircleBorder(),
+                      onTap: _isSending ? null : (hasText ? _sendMessage : _toggleRecording),
                       child: Ink(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
+                        width: 48,
+                        height: 48,
+                        decoration: const BoxDecoration(
+                          color: waGreen,
                           shape: BoxShape.circle,
-                          gradient: LinearGradient(
-                            colors: hasText
-                                ? const [Color(0xFF3B82F6), Color(0xFF2563EB)]
-                                : const [Color(0xFF64748B), Color(0xFF475569)],
-                          ),
                         ),
-                        child: Icon(
-                          hasText ? Icons.send_rounded : Icons.mic_rounded,
-                          color: Colors.white,
-                          size: 20,
-                        ),
+                        child: _isSending
+                            ? const Padding(
+                                padding: EdgeInsets.all(14),
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : Icon(
+                                hasText ? Icons.send_rounded : Icons.mic_rounded,
+                                color: Colors.white,
+                                size: 22,
+                              ),
                       ),
                     ),
                   ),
@@ -1647,46 +1701,68 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   Widget _buildReplyComposerBar() {
     final reply = _replyTo!;
+    const accent = Color(0xFF00A884);
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+      margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(12),
-        border: Border(
-          left: BorderSide(color: AppTheme.primaryBright.withValues(alpha: 0.9), width: 3),
-        ),
+        color: const Color(0xFF1F2C34),
+        borderRadius: BorderRadius.circular(10),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Replying to ${reply['sender_name'] ?? 'message'}',
-                  style: const TextStyle(
-                    color: AppTheme.primaryBright,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${reply['preview'] ?? ''}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.95), fontSize: 12.5),
-                ),
-              ],
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              width: 4,
+              decoration: const BoxDecoration(
+                color: accent,
+                borderRadius: BorderRadius.horizontal(left: Radius.circular(10)),
+              ),
             ),
-          ),
-          IconButton(
-            tooltip: 'Cancel reply',
-            onPressed: () => setState(() => _replyTo = null),
-            icon: Icon(Icons.close_rounded, size: 18, color: AppTheme.textMuted.withValues(alpha: 0.9)),
-          ),
-        ],
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 4, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Reply',
+                      style: TextStyle(
+                        color: accent,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${reply['sender_name'] ?? 'Message'}',
+                      style: const TextStyle(
+                        color: Color(0xFFE9EDEF),
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      '${reply['preview'] ?? ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: const Color(0xFF8696A0).withValues(alpha: 0.95),
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Cancel reply',
+              onPressed: () => setState(() => _replyTo = null),
+              icon: const Icon(Icons.close_rounded, size: 20, color: Color(0xFF8696A0)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1706,127 +1782,174 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final fileUrl = msg['file_url'];
     final fileName = msg['file_name'] ?? 'file';
     final reply = msg['reply'] is Map ? Map<String, dynamic>.from(msg['reply'] as Map) : null;
+    const ownBubble = Color(0xFF005C4B);
+    const otherBubble = Color(0xFF1F2C34);
+
+    Widget metaRow({required bool light}) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isEdited)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Text(
+                  'edited',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontStyle: FontStyle.italic,
+                    color: light ? Colors.white.withValues(alpha: 0.55) : const Color(0xFF8696A0),
+                  ),
+                ),
+              ),
+            Text(
+              time,
+              style: TextStyle(
+                fontSize: 11,
+                color: light ? Colors.white.withValues(alpha: 0.65) : const Color(0xFF8696A0),
+              ),
+            ),
+            if (isOwn && !isGroup && !isDeleted) ...[
+              const SizedBox(width: 3),
+              Icon(
+                Icons.done_all_rounded,
+                size: 16,
+                color: msg['is_read'] == true
+                    ? const Color(0xFF53BDEB)
+                    : Colors.white.withValues(alpha: 0.55),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
 
     return Align(
       alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+        margin: const EdgeInsets.only(bottom: 4),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         child: GestureDetector(
           onLongPress: !isDeleted ? () => _showMessageOptions(msg) : null,
-          child: Column(
-            crossAxisAlignment: isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: isOwn ? const Color(0xFF2563EB) : const Color(0xE00F172A),
-                  borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(18),
-                    topRight: const Radius.circular(18),
-                    bottomLeft: Radius.circular(isOwn ? 18 : 4),
-                    bottomRight: Radius.circular(isOwn ? 4 : 18),
-                  ),
-                  border: isOwn ? null : Border.all(color: const Color(0x1F93C5FD)),
-                  boxShadow: isOwn
-                      ? [BoxShadow(color: AppTheme.primary.withValues(alpha: 0.25), blurRadius: 12)]
-                      : [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 8)],
-                ),
-                child: Column(
-                  crossAxisAlignment: isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                  children: [
-                    if (!isOwn && isGroup)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text(senderName, style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600,
-                          color: Colors.white.withValues(alpha: 0.75),
-                        )),
-                      ),
-                    if (reply != null) ...[
-                      _buildQuotedReply(reply, isOwn: isOwn),
-                      const SizedBox(height: 6),
-                    ],
-                    if (isDeleted)
-                      Text('This message was deleted', style: TextStyle(color: Colors.white.withValues(alpha: 0.54), fontSize: 14, fontStyle: FontStyle.italic))
-                    else if (msgType == 'voice' && voiceUrl != null)
-                      GestureDetector(
-                        onTap: () => _playVoice(voiceUrl),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(_playingUrl == voiceUrl ? Icons.stop_circle : Icons.play_circle_fill, color: isOwn ? Colors.white : AppTheme.primary, size: 28),
-                          const SizedBox(width: 8),
-                          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text('Voice Message', style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600)),
-                            Text(_playingUrl == voiceUrl ? 'Playing...' : 'Tap to play', style: TextStyle(color: Colors.white.withValues(alpha: 0.54), fontSize: 10)),
-                          ]),
-                        ]),
-                      )
-                    else if (msgType == 'image' && imageUrl != null)
-                      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.network(imageUrl, width: 220, fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) => Container(width: 220, height: 100, color: Colors.white10, child: const Icon(Icons.broken_image, color: Colors.white38))),
-                        ),
-                        if (text.isNotEmpty) ...[const SizedBox(height: 6), Text(text, style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 14))],
-                      ])
-                    else if (msgType == 'file' && fileUrl != null)
-                      GestureDetector(
-                        onTap: () => _openFileUrl(fileUrl),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          const Icon(Icons.insert_drive_file, color: AppTheme.primaryBright, size: 24),
-                          const SizedBox(width: 8),
-                          Flexible(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(fileName, style: TextStyle(color: isOwn ? Colors.white : AppTheme.textPrimary.withValues(alpha: 0.9), fontSize: 12, fontWeight: FontWeight.w600), maxLines: 1, overflow: TextOverflow.ellipsis),
-                            Text('Tap to download', style: TextStyle(color: Colors.white.withValues(alpha: 0.54), fontSize: 10)),
-                          ])),
-                        ]),
-                      )
-                    else
-                      Text(
-                        text.toString(),
-                        softWrap: true,
-                        style: TextStyle(
-                          color: isOwn ? Colors.white : const Color(0xFFE4E4E7),
-                          fontSize: 14,
-                          height: 1.45,
-                        ),
-                      ),
-                    if (isOwn) ...[
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (isEdited)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 4),
-                              child: Text('edited', style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: 0.5), fontStyle: FontStyle.italic)),
-                            ),
-                          Text(time, style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: 0.65))),
-                          if (!isGroup && !isDeleted) ...[
-                            const SizedBox(width: 3),
-                            Icon(
-                              Icons.done_all_rounded,
-                              size: 15,
-                              color: msg['is_read'] == true
-                                  ? const Color(0xFF53BDEB)
-                                  : Colors.white.withValues(alpha: 0.55),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(9, 6, 9, 5),
+            decoration: BoxDecoration(
+              color: isOwn ? ownBubble : otherBubble,
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(12),
+                topRight: const Radius.circular(12),
+                bottomLeft: Radius.circular(isOwn ? 12 : 2),
+                bottomRight: Radius.circular(isOwn ? 2 : 12),
               ),
-              if (!isOwn) ...[
-                const SizedBox(height: 4),
-                Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: Text(time, style: TextStyle(fontSize: 10, color: AppTheme.textMuted.withValues(alpha: 0.9))),
-                ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (!isOwn && isGroup)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 3, left: 2),
+                    child: Text(
+                      senderName,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF53BDEB),
+                      ),
+                    ),
+                  ),
+                if (reply != null) ...[
+                  _buildQuotedReply(reply, isOwn: isOwn),
+                  const SizedBox(height: 4),
+                ],
+                if (isDeleted)
+                  Text(
+                    'This message was deleted',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.55),
+                      fontSize: 14,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  )
+                else if (msgType == 'voice' && voiceUrl != null)
+                  GestureDetector(
+                    onTap: () => _playVoice(voiceUrl),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(
+                        _playingUrl == voiceUrl ? Icons.stop_circle : Icons.play_circle_fill,
+                        color: isOwn ? Colors.white : const Color(0xFF00A884),
+                        size: 28,
+                      ),
+                      const SizedBox(width: 8),
+                      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(
+                          'Voice message',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.92),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          _playingUrl == voiceUrl ? 'Playing…' : 'Tap to play',
+                          style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11),
+                        ),
+                      ]),
+                    ]),
+                  )
+                else if (msgType == 'image' && imageUrl != null)
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        imageUrl,
+                        width: 220,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          width: 220,
+                          height: 100,
+                          color: Colors.white10,
+                          child: const Icon(Icons.broken_image, color: Colors.white38),
+                        ),
+                      ),
+                    ),
+                    if (text.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(text, style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 14.5, height: 1.35)),
+                    ],
+                  ])
+                else if (msgType == 'file' && fileUrl != null)
+                  GestureDetector(
+                    onTap: () => _openFileUrl(fileUrl),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.insert_drive_file_rounded, color: Color(0xFF53BDEB), size: 24),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(
+                            fileName,
+                            style: const TextStyle(
+                              color: Color(0xFFE9EDEF),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text('Tap to open', style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11)),
+                        ]),
+                      ),
+                    ]),
+                  )
+                else
+                  Text(
+                    text.toString(),
+                    softWrap: true,
+                    style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 15, height: 1.35),
+                  ),
+                Align(alignment: Alignment.bottomRight, child: metaRow(light: true)),
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -1834,41 +1957,55 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   }
 
   Widget _buildQuotedReply(Map<String, dynamic> reply, {required bool isOwn}) {
+    final accent = isOwn ? const Color(0xFF06CF9C) : const Color(0xFF53BDEB);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: isOwn ? 0.18 : 0.22),
-        borderRadius: BorderRadius.circular(10),
-        border: Border(
-          left: BorderSide(
-            color: isOwn ? Colors.white.withValues(alpha: 0.85) : AppTheme.primaryBright,
-            width: 3,
-          ),
-        ),
+        color: Colors.black.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(8),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${reply['sender_name'] ?? 'Message'}',
-            style: TextStyle(
-              color: isOwn ? Colors.white : AppTheme.primaryBright,
-              fontWeight: FontWeight.w700,
-              fontSize: 11.5,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              width: 4,
+              decoration: BoxDecoration(
+                color: accent,
+                borderRadius: const BorderRadius.horizontal(left: Radius.circular(8)),
+              ),
             ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            '${reply['preview'] ?? ''}',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.78),
-              fontSize: 12,
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${reply['sender_name'] ?? 'Message'}',
+                      style: TextStyle(
+                        color: accent,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      '${reply['preview'] ?? ''}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.72),
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
