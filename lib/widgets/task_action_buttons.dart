@@ -8,6 +8,8 @@ class TaskCompleteButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final bool compact;
   final bool dense;
+  /// When false, button sizes to its label (for app-bar placement).
+  final bool expand;
 
   const TaskCompleteButton({
     super.key,
@@ -15,6 +17,7 @@ class TaskCompleteButton extends StatelessWidget {
     this.onPressed,
     this.compact = false,
     this.dense = false,
+    this.expand = true,
   });
 
   double get _verticalPad {
@@ -25,55 +28,66 @@ class TaskCompleteButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final radius = expand ? 14.0 : 20.0;
+    final hPad = expand ? 0.0 : 14.0;
+
+    final Widget button;
     if (isCompleted) {
-      return SizedBox(
-        width: double.infinity,
-        child: OutlinedButton.icon(
-          onPressed: onPressed,
-          icon: Icon(Icons.replay_rounded, size: compact ? 18 : 20),
-          label: Text(compact ? 'Reopen' : 'Restore task'),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: AppTheme.warning,
-            side: BorderSide(color: AppTheme.warning.withValues(alpha: 0.55)),
-            padding: EdgeInsets.symmetric(vertical: _verticalPad),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          ),
+      button = OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(Icons.replay_rounded, size: compact ? 16 : 20),
+        label: Text(compact ? 'Reopen' : 'Restore task'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: AppTheme.warning,
+          side: BorderSide(color: AppTheme.warning.withValues(alpha: 0.55)),
+          padding: EdgeInsets.symmetric(vertical: expand ? _verticalPad : 8, horizontal: hPad),
+          minimumSize: expand ? null : const Size(0, 36),
+          tapTargetSize: expand ? null : MaterialTapTargetSize.shrinkWrap,
+          visualDensity: expand ? VisualDensity.standard : VisualDensity.compact,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
         ),
       );
-    }
-    return SizedBox(
-      width: double.infinity,
-      child: DecoratedBox(
+    } else {
+      button = DecoratedBox(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(radius),
           gradient: const LinearGradient(
             colors: [Color(0xFF10B981), Color(0xFF059669)],
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF10B981).withValues(alpha: 0.35),
-              blurRadius: 14,
+              color: const Color(0xFF10B981).withValues(alpha: expand ? 0.35 : 0.28),
+              blurRadius: expand ? 14 : 10,
               offset: const Offset(0, 4),
             ),
           ],
         ),
         child: FilledButton.icon(
           onPressed: onPressed,
-          icon: Icon(Icons.check_circle_outline_rounded, size: dense ? 18 : 20),
+          icon: Icon(Icons.check_circle_outline_rounded, size: dense || !expand ? 16 : 20),
           label: Text(
             compact ? 'Complete' : 'Mark complete',
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: expand ? 15 : 13,
+            ),
           ),
           style: FilledButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
             foregroundColor: Colors.white,
-            padding: EdgeInsets.symmetric(vertical: _verticalPad),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            padding: EdgeInsets.symmetric(vertical: expand ? _verticalPad : 8, horizontal: hPad),
+            minimumSize: expand ? null : const Size(0, 36),
+            tapTargetSize: expand ? null : MaterialTapTargetSize.shrinkWrap,
+            visualDensity: expand ? VisualDensity.standard : VisualDensity.compact,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
           ),
         ),
-      ),
-    );
+      );
+    }
+
+    if (!expand) return button;
+    return SizedBox(width: double.infinity, child: button);
   }
 }
 
@@ -84,6 +98,7 @@ class TaskDetailHeaderActions extends StatelessWidget {
   final bool isCompleted;
   final VoidCallback? onDiscard;
   final VoidCallback? onToggleComplete;
+  final bool completeOnly;
 
   const TaskDetailHeaderActions({
     super.key,
@@ -92,10 +107,19 @@ class TaskDetailHeaderActions extends StatelessWidget {
     this.isCompleted = false,
     this.onDiscard,
     this.onToggleComplete,
+    this.completeOnly = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (completeOnly) {
+      return TaskCompleteButton(
+        isCompleted: isCompleted,
+        onPressed: saving ? null : onToggleComplete,
+        dense: true,
+        compact: true,
+      );
+    }
     return Row(
       children: [
         Expanded(

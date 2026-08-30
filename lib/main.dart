@@ -36,6 +36,9 @@ import 'services/app_navigation.dart';
 /// Root navigator — used to close pushed routes on logout.
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
+/// Root navigator — used to close pushed routes on logout.
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
+
 int _intFromDynamic(dynamic v, int fallback) {
   if (v is int) return v;
   if (v is String) return int.tryParse(v) ?? fallback;
@@ -105,15 +108,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Widget? _dashboardPage;
   Widget? _tasksPage;
   Widget? _chatPage;
-  Widget? _notificationsPage;
-  Widget? _profilePage;
+  Widget? _vaultPage;
+  Widget? _projectPage;
 
   void _clearPageCache() {
     _dashboardPage = null;
     _tasksPage = null;
     _chatPage = null;
-    _notificationsPage = null;
-    _profilePage = null;
+    _vaultPage = null;
+    _projectPage = null;
   }
 
   void _ensurePageBuilt(int index) {
@@ -127,28 +130,30 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           onLogout: _handleLogout,
         );
       case 1:
-        _tasksPage ??= AppTheme.homeGlassBackground(
-          child: SafeArea(
-            bottom: false,
-            child: TasksPage(apiService: _apiService),
-          ),
+        _tasksPage ??= SafeArea(
+          top: false,
+          bottom: false,
+          child: TasksPage(apiService: _apiService),
         );
       case 2:
-        _chatPage ??= AppTheme.homeGlassBackground(
-          child: ChatPage(
-            apiService: _apiService,
-            notificationService: _notificationService,
-          ),
+        _chatPage ??= ChatPage(
+          apiService: _apiService,
+          notificationService: _notificationService,
         );
       case 3:
-        _notificationsPage ??= NotificationsPage(
-          apiService: _apiService,
-          refreshToken: _notifListRefreshToken,
-          onNotificationsChanged: () => _notificationService.syncUnreadCount(),
+        _vaultPage ??= SafeArea(
+          top: false,
+          bottom: false,
+          child: VaultHubPage(
+            apiService: _apiService,
+            onLogout: _handleLogout,
+            embeddedInTabs: true,
+          ),
         );
       case 4:
-        _profilePage ??= ProfilePage(
+        _projectPage ??= WorkHubPage(
           apiService: _apiService,
+          screenshotService: _screenshotService,
           onLogout: _handleLogout,
         );
     }
@@ -160,8 +165,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       _dashboardPage ?? const SizedBox.shrink(),
       _tasksPage ?? const SizedBox.shrink(),
       _chatPage ?? const SizedBox.shrink(),
-      _notificationsPage ?? const SizedBox.shrink(),
-      _profilePage ?? const SizedBox.shrink(),
+      _vaultPage ?? const SizedBox.shrink(),
+      _projectPage ?? const SizedBox.shrink(),
     ];
   }
 
@@ -170,7 +175,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     LocalNotificationService.onTap = (_) {
-      if (_isLoggedIn && mounted) _onNavSelected(AppNavigation.tabAlerts);
+      if (_isLoggedIn && mounted) unawaited(_openNotifications());
     };
     AppNavigation.instance.onSelectTab = _onNavSelected;
     AppNavigation.instance.onNavigateToTab = _navigateToTab;
@@ -182,6 +187,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenProject = _openProjectTool;
     AppNavigation.instance.onOpenP2P = _openP2P;
     AppNavigation.instance.onOpenSubmitReport = _openSubmitReport;
+    AppNavigation.instance.onOpenNotifications = _openNotifications;
+    AppNavigation.instance.onOpenProfile = _openProfile;
     _notificationService.onUnreadCountChanged = _onUnreadCountChanged;
     _initializeApp();
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
@@ -408,7 +415,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         title: title,
         message: message,
         notificationType: notifType,
-        onTap: () => _onNavSelected(AppNavigation.tabAlerts),
+        onTap: () => unawaited(_openNotifications()),
       );
     } else if (LocalNotificationService.supported) {
       await LocalNotificationService.show(
@@ -419,7 +426,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       );
     }
 
-    _notificationsPage = null;
     setState(() => _notifListRefreshToken++);
 
     if (notifType == 'closing_report_due') {
@@ -576,15 +582,24 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Future<void> _openProjectTool() async {
     if (!mounted) return;
+    _onNavSelected(AppNavigation.tabProject);
+  }
+
+  Future<void> _openVaultTool() async {
+    if (!mounted) return;
+    _onNavSelected(AppNavigation.tabVault);
+  }
+
+  Future<void> _openProfile() async {
+    if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => AppTabShell(
-          selectedIndex: AppNavigation.instance.selectedTabIndex,
+          selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
           unreadNotifs: _unreadNotifs,
           onLogout: _handleLogout,
-          child: WorkHubPage(
+          child: ProfilePage(
             apiService: _apiService,
-            screenshotService: _screenshotService,
             onLogout: _handleLogout,
           ),
         ),
@@ -592,7 +607,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _openVaultTool() async {
+  Future<void> _openNotifications() async {
+    if (!mounted) return;
+    setState(() => _notifListRefreshToken++);
+    await _refreshNotificationBadge();
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -600,13 +618,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           selectedIndex: AppNavigation.instance.selectedTabIndex,
           unreadNotifs: _unreadNotifs,
           onLogout: _handleLogout,
-          child: VaultHubPage(
+          child: NotificationsPage(
             apiService: _apiService,
-            onLogout: _handleLogout,
+            refreshToken: _notifListRefreshToken,
+            onNotificationsChanged: () => _notificationService.syncUnreadCount(),
           ),
         ),
       ),
     );
+    if (mounted) await _refreshNotificationBadge();
   }
 
   @override
@@ -631,11 +651,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     _syncNavState();
 
+    final immersiveChat = PlatformCapabilities.immersiveChatChrome &&
+        _currentIndex == AppNavigation.tabChat;
+
     return AppTabShell(
       selectedIndex: _currentIndex,
       unreadNotifs: _unreadNotifs,
       onLogout: _handleLogout,
-      showTopBar: true,
+      showTopBar: !immersiveChat,
+      showBottomNav: !immersiveChat,
+      homeStyleBackground: immersiveChat,
       child: IndexedStack(
         index: _currentIndex,
         children: _mainStackChildren(),
@@ -653,7 +678,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     });
     _syncNavState();
     _ensurePageBuilt(i);
-    if (i == AppNavigation.tabAlerts) _refreshNotificationBadge();
   }
 
   @override
@@ -668,6 +692,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenProject = null;
     AppNavigation.instance.onOpenP2P = null;
     AppNavigation.instance.onOpenSubmitReport = null;
+    AppNavigation.instance.onOpenNotifications = null;
+    AppNavigation.instance.onOpenProfile = null;
     AppNavigation.instance.onLogout = null;
     _stopNotifications();
     _notificationService.dispose();

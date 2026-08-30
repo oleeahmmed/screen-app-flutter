@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/api_service.dart';
+import '../../services/user_data_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/app_toast.dart';
 import 'vault_helpers.dart';
@@ -19,52 +20,141 @@ Future<void> showVaultEntryDetailSheet({
   required bool isAdmin,
   required bool canEdit,
   required VoidCallback onChanged,
+  int? currentUserId,
 }) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: AppTheme.surface2,
+    backgroundColor: Colors.transparent,
     barrierColor: AppTheme.modalBarrierColor,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    builder: (ctx) => _VaultEntryDetailSheet(
-      apiService: apiService,
-      projectId: projectId,
-      entry: entry,
-      isAdmin: isAdmin,
-      canEdit: canEdit,
-      onChanged: onChanged,
+    builder: (ctx) => Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+      child: DraggableScrollableSheet(
+        initialChildSize: 0.72,
+        minChildSize: 0.45,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (_, scrollCtrl) => Container(
+          decoration: BoxDecoration(
+            color: AppTheme.surface2,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+          ),
+          child: ListView(
+            controller: scrollCtrl,
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              VaultEntryDetailForm(
+                apiService: apiService,
+                projectId: projectId,
+                entry: entry,
+                isAdmin: isAdmin,
+                canEdit: canEdit,
+                currentUserId: currentUserId,
+                onChanged: onChanged,
+                embedded: false,
+              ),
+            ],
+          ),
+        ),
+      ),
     ),
   );
 }
 
-class _VaultEntryDetailSheet extends StatefulWidget {
+/// Profile-style credential form (sheet or full page).
+class VaultEntryDetailForm extends StatefulWidget {
   final ApiService apiService;
   final int projectId;
   final Map<String, dynamic> entry;
   final bool isAdmin;
   final bool canEdit;
+  final int? currentUserId;
   final VoidCallback onChanged;
+  final bool embedded;
 
-  const _VaultEntryDetailSheet({
+  const VaultEntryDetailForm({
+    super.key,
     required this.apiService,
     required this.projectId,
     required this.entry,
     required this.isAdmin,
     required this.canEdit,
     required this.onChanged,
+    this.currentUserId,
+    this.embedded = false,
   });
 
   @override
-  State<_VaultEntryDetailSheet> createState() => _VaultEntryDetailSheetState();
+  State<VaultEntryDetailForm> createState() => _VaultEntryDetailFormState();
 }
 
-class _VaultEntryDetailSheetState extends State<_VaultEntryDetailSheet> {
+class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
+  late Map<String, dynamic> _entry;
   String? _revealedPassword;
   Timer? _hideTimer;
+  int? _currentUserId;
+  bool _permissionsLoaded = false;
 
-  int get _entryId => widget.entry['id'] as int;
+  int get _entryId => _entry['id'] as int;
+
+  bool get _canManageEntry =>
+      _permissionsLoaded &&
+      vaultEntryCanEdit(
+        _entry,
+        isVaultAdmin: widget.isAdmin,
+        currentUserId: _currentUserId ?? widget.currentUserId,
+      );
+
+  bool get _canShareEntry => _permissionsLoaded && widget.isAdmin;
+
+  @override
+  void initState() {
+    super.initState();
+    _entry = Map<String, dynamic>.from(widget.entry);
+    _currentUserId = widget.currentUserId;
+    _bootstrapUserAndFlags();
+  }
+
+  Future<void> _bootstrapUserAndFlags() async {
+    final uidStr = await UserDataService.getUserId();
+    final uid = int.tryParse(uidStr);
+    if (!mounted) return;
+    if (uid != null) {
+      setState(() => _currentUserId = uid);
+    }
+    // Refresh can_edit from server so category-grant users never keep stale true.
+    final r = await widget.apiService.getVaultEntry(widget.projectId, _entryId);
+    if (!mounted) return;
+    if (r['success'] == true && r['data'] is Map) {
+      final fresh = Map<String, dynamic>.from(r['data'] as Map);
+      setState(() {
+        _entry = {
+          ..._entry,
+          ...fresh,
+          if ((_entry['url']?.toString() ?? '').isNotEmpty && (fresh['url']?.toString() ?? '').isEmpty)
+            'url': _entry['url'],
+          if ((_entry['username']?.toString() ?? '').isNotEmpty &&
+              (fresh['username']?.toString() ?? '').isEmpty)
+            'username': _entry['username'],
+        };
+        _permissionsLoaded = true;
+      });
+    } else {
+      setState(() => _permissionsLoaded = true);
+    }
+  }
 
   @override
   void dispose() {
@@ -126,26 +216,44 @@ class _VaultEntryDetailSheetState extends State<_VaultEntryDetailSheet> {
   }
 
   Future<void> _editEntry() async {
-    final e = widget.entry;
+    if (!_canManageEntry) {
+      _toast('You can view this entry but not edit it', error: true);
+      return;
+    }
+    final e = _entry;
     final nameCtrl = TextEditingController(text: e['name']?.toString() ?? '');
     final urlCtrl = TextEditingController(text: e['url']?.toString() ?? '');
     final userCtrl = TextEditingController(text: e['username']?.toString() ?? '');
     final passCtrl = TextEditingController();
     final notesCtrl = TextEditingController(text: e['notes']?.toString() ?? '');
 
-    InputDecoration deco(String label) => InputDecoration(
+    InputDecoration deco(String label, IconData icon) => InputDecoration(
           labelText: label,
-          labelStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9)),
+          labelStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13),
+          prefixIcon: Icon(icon, size: 20, color: AppTheme.textMuted.withValues(alpha: 0.85)),
           filled: true,
-          fillColor: Colors.white.withValues(alpha: 0.06),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+          fillColor: Colors.white.withValues(alpha: 0.04),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.6)),
+          ),
         );
 
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface2,
-        title: const Text('Edit entry', style: TextStyle(color: AppTheme.textPrimary)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text('Edit entry', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700)),
         content: SizedBox(
           width: 360,
           child: SingleChildScrollView(
@@ -154,34 +262,34 @@ class _VaultEntryDetailSheetState extends State<_VaultEntryDetailSheet> {
               children: [
                 TextField(
                   controller: nameCtrl,
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                  decoration: deco('Name'),
+                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                  decoration: deco('Name', Icons.badge_outlined),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: urlCtrl,
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                  decoration: deco('URL'),
+                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                  decoration: deco('URL', Icons.language_outlined),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: userCtrl,
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                  decoration: deco('Username'),
+                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                  decoration: deco('Username', Icons.person_outline_rounded),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: passCtrl,
                   obscureText: true,
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                  decoration: deco('Password (blank = keep)'),
+                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                  decoration: deco('Password (blank = keep)', Icons.lock_outline_rounded),
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: notesCtrl,
                   maxLines: 3,
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                  decoration: deco('Notes'),
+                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                  decoration: deco('Notes', Icons.notes_rounded),
                 ),
               ],
             ),
@@ -191,6 +299,7 @@ class _VaultEntryDetailSheetState extends State<_VaultEntryDetailSheet> {
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, nameCtrl.text.trim().isNotEmpty),
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.featureVault),
             child: const Text('Save'),
           ),
         ],
@@ -213,8 +322,17 @@ class _VaultEntryDetailSheetState extends State<_VaultEntryDetailSheet> {
     );
     if (!mounted) return;
     if (r['success'] == true) {
+      setState(() {
+        _entry = {
+          ..._entry,
+          'name': nameCtrl.text.trim(),
+          'url': urlCtrl.text.trim(),
+          'username': userCtrl.text.trim(),
+          'notes': notesCtrl.text.trim(),
+        };
+      });
       widget.onChanged();
-      Navigator.pop(context);
+      if (!widget.embedded) Navigator.pop(context);
       _toast('Saved');
     } else {
       _toast(r['error']?.toString() ?? 'Save failed', error: true);
@@ -222,13 +340,18 @@ class _VaultEntryDetailSheetState extends State<_VaultEntryDetailSheet> {
   }
 
   Future<void> _deleteEntry() async {
+    if (!_canManageEntry) {
+      _toast('You can view this entry but not delete it', error: true);
+      return;
+    }
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: const Text('Delete entry?', style: TextStyle(color: AppTheme.textPrimary)),
         content: Text(
-          'Remove "${widget.entry['name']}"?',
+          'Remove "${_entry['name']}"?',
           style: const TextStyle(color: AppTheme.textMuted),
         ),
         actions: [
@@ -252,161 +375,244 @@ class _VaultEntryDetailSheetState extends State<_VaultEntryDetailSheet> {
     }
   }
 
-  Widget _fieldRow({
+  Widget _formField({
     required String label,
+    required IconData icon,
     required String value,
     VoidCallback? onCopy,
     VoidCallback? onOpen,
     Widget? trailing,
   }) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 72,
-            child: Text(
-              label,
-              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(4, 10, 4, 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 8, top: 2, right: 10),
+              child: Icon(icon, size: 20, color: AppTheme.textMuted.withValues(alpha: 0.85)),
             ),
-          ),
-          Expanded(
-            child: SelectableText(
-              value,
-              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: AppTheme.textMuted.withValues(alpha: 0.9),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    value,
+                    style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 15,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          if (onOpen != null)
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.open_in_new, size: 16, color: AppTheme.textMuted),
-              onPressed: onOpen,
-            ),
-          if (onCopy != null)
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.copy, size: 16, color: AppTheme.textMuted),
-              onPressed: onCopy,
-            ),
-          if (trailing != null) trailing,
-        ],
+            if (onOpen != null)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Open',
+                icon: const Icon(Icons.open_in_new_rounded, size: 18, color: AppTheme.textMuted),
+                onPressed: onOpen,
+              ),
+            if (onCopy != null)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Copy',
+                icon: const Icon(Icons.copy_rounded, size: 18, color: AppTheme.textMuted),
+                onPressed: onCopy,
+              ),
+            if (trailing != null) trailing,
+          ],
+        ),
       ),
     );
   }
 
+  Widget _divider() => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
+      );
+
   @override
   Widget build(BuildContext context) {
-    final e = widget.entry;
-    final name = e['name']?.toString() ?? 'Entry';
-    final url = e['url']?.toString() ?? '';
-    final user = e['username']?.toString() ?? '';
-    final notes = e['notes']?.toString() ?? '';
-    final bottom = MediaQuery.of(context).viewInsets.bottom;
+    final name = _entry['name']?.toString() ?? 'Entry';
+    final url = _entry['url']?.toString() ?? '';
+    final user = _entry['username']?.toString() ?? '';
+    final notes = _entry['notes']?.toString() ?? '';
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Center(
-            child: Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (!widget.embedded) ...[
           Row(
             children: [
-              Icon(vaultEntryIcon(e), color: AppTheme.featureVault, size: 22),
-              const SizedBox(width: 10),
+              vaultIconBox(icon: vaultEntryIcon(_entry), color: AppTheme.featureVault),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   name,
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontWeight: FontWeight.w800,
-                    fontSize: 17,
+                    fontSize: 18,
+                    letterSpacing: -0.3,
                   ),
                 ),
               ),
-              if (widget.canEdit)
-                IconButton(
-                  tooltip: 'Edit',
-                  onPressed: _editEntry,
-                  icon: const Icon(Icons.edit_outlined, size: 20, color: AppTheme.textMuted),
-                ),
-              if (widget.isAdmin)
-                IconButton(
-                  tooltip: 'Share',
-                  onPressed: () {
-                    showVaultShareSheet(
-                      context: context,
-                      apiService: widget.apiService,
-                      projectId: widget.projectId,
-                      entryId: _entryId,
-                      entryName: name,
-                      onChanged: widget.onChanged,
-                    );
-                  },
-                  icon: const Icon(Icons.share_outlined, size: 20, color: AppTheme.textMuted),
-                ),
-              if (widget.canEdit)
-                IconButton(
-                  tooltip: 'Delete',
-                  onPressed: _deleteEntry,
-                  icon: const Icon(Icons.delete_outline, size: 20, color: AppTheme.danger),
-                ),
             ],
           ),
-          const SizedBox(height: 12),
-          if (url.isNotEmpty)
-            _fieldRow(
-              label: 'URL',
-              value: url,
-              onCopy: () => _copy('url'),
-              onOpen: () {
-                final u = Uri.tryParse(url);
-                if (u != null) launchUrl(u, mode: LaunchMode.externalApplication);
-              },
-            ),
-          if (user.isNotEmpty)
-            _fieldRow(label: 'Username', value: user, onCopy: () => _copy('username')),
-          _fieldRow(
-            label: 'Password',
-            value: _revealedPassword ?? '••••••••',
-            onCopy: () => _copy('password'),
-            trailing: TextButton(
-              onPressed: _revealPassword,
-              child: Text(
-                _revealedPassword != null ? 'Hide' : 'Show',
-                style: const TextStyle(fontSize: 12),
+          const SizedBox(height: 16),
+          vaultSectionLabel('Details'),
+          const SizedBox(height: 10),
+        ],
+        vaultSurfaceCard(
+          child: Column(
+            children: [
+              if (url.isNotEmpty) ...[
+                _formField(
+                  label: 'URL',
+                  icon: Icons.language_outlined,
+                  value: url,
+                  onCopy: () => _copy('url'),
+                  onOpen: () {
+                    final u = Uri.tryParse(url);
+                    if (u != null) launchUrl(u, mode: LaunchMode.externalApplication);
+                  },
+                ),
+                _divider(),
+              ],
+              if (user.isNotEmpty) ...[
+                _formField(
+                  label: 'Username',
+                  icon: Icons.person_outline_rounded,
+                  value: user,
+                  onCopy: () => _copy('username'),
+                ),
+                _divider(),
+              ],
+              _formField(
+                label: 'Password',
+                icon: Icons.lock_outline_rounded,
+                value: _revealedPassword ?? '••••••••••••',
+                onCopy: () => _copy('password'),
+                trailing: TextButton(
+                  onPressed: _revealPassword,
+                  child: Text(
+                    _revealedPassword != null ? 'Hide' : 'Show',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.primaryBright,
+                    ),
+                  ),
+                ),
               ),
+              if (notes.isNotEmpty) ...[
+                _divider(),
+                _formField(
+                  label: 'Notes',
+                  icon: Icons.notes_rounded,
+                  value: notes,
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (_revealedPassword != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Password hides automatically in 10 seconds',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7), fontSize: 11.5),
+          ),
+        ],
+        if (_canManageEntry || _canShareEntry) ...[
+          const SizedBox(height: 22),
+          vaultSectionLabel('Actions'),
+          const SizedBox(height: 10),
+          vaultSurfaceCard(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              children: [
+                if (_canManageEntry) ...[
+                  ListTile(
+                    leading: vaultIconBox(
+                      icon: Icons.edit_outlined,
+                      color: AppTheme.primaryBright,
+                      size: 40,
+                      iconSize: 20,
+                      radius: 12,
+                    ),
+                    title: const Text('Edit entry', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+                    subtitle: Text('Update name, URL, username or password', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
+                    onTap: _editEntry,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
+                  ),
+                  ListTile(
+                    leading: vaultIconBox(
+                      icon: Icons.delete_outline_rounded,
+                      color: AppTheme.danger,
+                      size: 40,
+                      iconSize: 20,
+                      radius: 12,
+                    ),
+                    title: const Text('Delete', style: TextStyle(color: AppTheme.danger, fontWeight: FontWeight.w600)),
+                    subtitle: Text('Remove this credential permanently', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
+                    onTap: _deleteEntry,
+                  ),
+                ],
+                if (_canShareEntry) ...[
+                  if (_canManageEntry)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
+                    ),
+                  ListTile(
+                    leading: vaultIconBox(
+                      icon: Icons.share_outlined,
+                      color: AppTheme.accent,
+                      size: 40,
+                      iconSize: 20,
+                      radius: 12,
+                    ),
+                    title: const Text('Share', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+                    subtitle: Text('Grant access to teammates', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
+                    onTap: () {
+                      showVaultShareSheet(
+                        context: context,
+                        apiService: widget.apiService,
+                        projectId: widget.projectId,
+                        entryId: _entryId,
+                        entryName: name,
+                        onChanged: widget.onChanged,
+                      );
+                    },
+                  ),
+                ],
+              ],
             ),
           ),
-          if (notes.isNotEmpty)
-            _fieldRow(label: 'Notes', value: notes),
-          if (_revealedPassword != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                'Password hides automatically in 10 seconds',
-                style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7), fontSize: 11),
-              ),
-            ),
         ],
-      ),
+      ],
     );
   }
 }

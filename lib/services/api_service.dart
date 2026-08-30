@@ -1461,13 +1461,16 @@ class ApiService {
       body['desc'] = body.remove('description');
     }
     if (body.containsKey('user')) {
-      body['assignee_ids'] = [body.remove('user')];
+      final v = body.remove('user');
+      body['assignee_ids'] = v == null ? <dynamic>[] : [v];
     }
     if (body.containsKey('user_id')) {
-      body['assignee_ids'] = [body.remove('user_id')];
+      final v = body.remove('user_id');
+      body['assignee_ids'] = v == null ? <dynamic>[] : [v];
     }
     if (body.containsKey('assignee_id')) {
-      body['assignee_ids'] = [body.remove('assignee_id')];
+      final v = body.remove('assignee_id');
+      body['assignee_ids'] = v == null ? <dynamic>[] : [v];
     }
     return body;
   }
@@ -3118,6 +3121,21 @@ class ApiService {
         return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? 'Create failed'};
       }
       return {'success': false, 'error': 'Create entry failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultEntry(int projectId, int entryId) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.vaultEntryUrl(projectId, entryId)));
+      if (response.statusCode == 200) {
+        final raw = jsonDecode(response.body);
+        if (raw is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+        }
+      }
+      return {'success': false, 'error': 'Failed to load entry (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }

@@ -33,6 +33,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   bool _loading = true;
   String? _error;
   bool _isAdmin = false;
+  int? _currentUserId;
   List<Map<String, dynamic>> _categories = [];
   List<Map<String, dynamic>> _entries = [];
   int? _categoryId;
@@ -51,7 +52,13 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   @override
   void initState() {
     super.initState();
+    _loadUser();
     _load();
+  }
+
+  Future<void> _loadUser() async {
+    final id = int.tryParse(await UserDataService.getUserId());
+    if (mounted) setState(() => _currentUserId = id);
   }
 
   Future<void> _load() async {
@@ -357,7 +364,12 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
       projectId: widget.projectId,
       entry: e,
       isAdmin: _isAdmin,
-      canEdit: _canEditCat(_selectedCat),
+      canEdit: vaultEntryCanEdit(
+        e,
+        isVaultAdmin: _isAdmin,
+        currentUserId: _currentUserId,
+      ),
+      currentUserId: _currentUserId,
       onChanged: () {
         if (_categoryId != null) _selectCategory(_categoryId!);
       },
@@ -413,7 +425,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
     final id = c['id'] as int;
     final selected = id == _categoryId;
     final permLabel = _isAdmin ? '' : vaultCategoryPermissionLabel(c);
-    final isEdit = permLabel == 'Edit' || permLabel == 'Admin';
+    final isEdit = permLabel == 'Can edit' || permLabel == 'Admin';
 
     return Material(
       color: selected
@@ -671,7 +683,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
                   const SizedBox(width: 8),
                   vaultPermissionChip(
                     vaultCategoryPermissionLabel(cat),
-                    edit: vaultCategoryPermissionLabel(cat) == 'Edit',
+                    edit: vaultCategoryPermissionLabel(cat) == 'Can edit',
                   ),
                 ],
               ],

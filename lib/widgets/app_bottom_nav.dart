@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
-import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 
-/// Bottom tab bar — Home / My Task / Chat / Alerts / Me.
+/// Bottom tab bar — Home / My Task / Chat / Vault / Project.
 class AppBottomNavBar extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onSelected;
@@ -20,8 +20,8 @@ class AppBottomNavBar extends StatelessWidget {
     (Icons.home_outlined, Icons.home_rounded, 'Home'),
     (Icons.assignment_outlined, Icons.assignment_rounded, 'My Task'),
     (Icons.chat_bubble_outline_rounded, Icons.chat_rounded, 'Chat'),
-    (Icons.notifications_outlined, Icons.notifications_rounded, 'Alerts'),
-    (Icons.person_outline_rounded, Icons.person_rounded, 'Me'),
+    (LucideIcons.shield, LucideIcons.shield, 'Vault'),
+    (Icons.folder_outlined, Icons.folder_rounded, 'Project'),
   ];
 
   @override
@@ -49,15 +49,10 @@ class AppBottomNavBar extends StatelessWidget {
             onDestinationSelected: onSelected,
             destinations: List.generate(_tabs.length, (i) {
               final (icon, iconSel, label) = _tabs[i];
-              Widget iconWidget = Icon(selectedIndex == i ? iconSel : icon, size: compact ? 21 : 23);
-              if (i == AppNavigation.tabAlerts && unreadNotifs > 0) {
-                iconWidget = Badge(
-                  isLabelVisible: true,
-                  label: Text(unreadNotifs > 9 ? '9+' : '$unreadNotifs'),
-                  child: iconWidget,
-                );
-              }
-              return NavigationDestination(icon: iconWidget, label: label);
+              return NavigationDestination(
+                icon: Icon(selectedIndex == i ? iconSel : icon, size: compact ? 21 : 23),
+                label: label,
+              );
             }),
           ),
         ),

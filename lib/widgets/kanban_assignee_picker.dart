@@ -8,7 +8,7 @@ Future<List<int>?> showKanbanAssigneePicker({
   required BuildContext context,
   required List<dynamic> employees,
   required List<int> selectedIds,
-  bool requireAtLeastOne = true,
+  bool requireAtLeastOne = false,
 }) async {
   final people = normalizeProjectEmployeesList(employees);
   return showModalBottomSheet<List<int>>(

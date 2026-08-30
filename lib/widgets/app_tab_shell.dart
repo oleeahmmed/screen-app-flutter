@@ -57,15 +57,9 @@ class AppTabShell extends StatelessWidget {
           : null,
     );
 
-    if (selectedIndex == AppNavigation.tabHome || homeStyleBackground) {
-      return AppTheme.loginDashboardBackground(
-        context: context,
-        child: shell,
-      );
-    }
-
-    return DecoratedBox(
-      decoration: AppTheme.shellBackgroundDecoration,
+    // One ambient background for every tab / pushed shell (Home + Submit look).
+    return AppTheme.loginDashboardBackground(
+      context: context,
       child: shell,
     );
   }

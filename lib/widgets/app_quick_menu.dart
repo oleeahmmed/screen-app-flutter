@@ -3,6 +3,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
+import '../utils/platform_capabilities.dart';
 import '../utils/responsive.dart';
 
 /// Log out with confirmation — shown as an icon beside the quick menu.
@@ -27,9 +28,11 @@ class AppLogoutButton extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface2,
         title: const Text('Log out?', style: TextStyle(color: AppTheme.textPrimary)),
-        content: const Text(
-          'You will stop screenshot capture and return to the login screen.',
-          style: TextStyle(color: AppTheme.textMuted, height: 1.4),
+        content: Text(
+          PlatformCapabilities.screenshotMonitoring
+              ? 'You will stop screenshot capture and return to the login screen.'
+              : 'You will return to the login screen.',
+          style: const TextStyle(color: AppTheme.textMuted, height: 1.4),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -99,8 +102,6 @@ class AppSubmitReportButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 380;
-
     return Tooltip(
       message: 'Submit report',
       child: Material(
@@ -109,31 +110,12 @@ class AppSubmitReportButton extends StatelessWidget {
           onTap: _open,
           borderRadius: BorderRadius.circular(20),
           child: Ink(
-            padding: EdgeInsets.symmetric(
-              horizontal: compact ? 8 : 10,
-              vertical: 6,
-            ),
+            padding: const EdgeInsets.all(8),
             decoration: AppTheme.loginInsetDecoration(borderRadius: 20),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  LucideIcons.clipboardCheck,
-                  size: 16,
-                  color: AppTheme.accent,
-                ),
-                if (!compact) ...[
-                  const SizedBox(width: 6),
-                  const Text(
-                    'Submit Report',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ],
+            child: const Icon(
+              LucideIcons.clipboardCheck,
+              size: 18,
+              color: AppTheme.accent,
             ),
           ),
         ),
@@ -142,27 +124,51 @@ class AppSubmitReportButton extends StatelessWidget {
   }
 }
 
-/// Quick menu + logout icon (logout sits on the right).
+/// Submit report · P2P · notifications · profile · logout.
 class AppHeaderMenuActions extends StatelessWidget {
   final VoidCallback? onLogout;
   final Color? iconColor;
   final double iconSize;
+  final int unreadNotifs;
 
   const AppHeaderMenuActions({
     super.key,
     this.onLogout,
     this.iconColor,
     this.iconSize = 22,
+    this.unreadNotifs = 0,
   });
 
   @override
   Widget build(BuildContext context) {
+    final muted = iconColor ?? AppTheme.textMuted;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         const AppSubmitReportButton(),
-        const SizedBox(width: 6),
-        AppQuickMenuButton(iconColor: iconColor, iconSize: iconSize),
+        if (PlatformCapabilities.peerToPeerFileTransfer)
+          IconButton(
+            onPressed: () => AppNavigation.instance.openP2P(),
+            tooltip: 'P2P transfer',
+            visualDensity: VisualDensity.compact,
+            icon: Icon(LucideIcons.arrowLeftRight, color: muted, size: iconSize),
+          ),
+        IconButton(
+          onPressed: () => AppNavigation.instance.openNotifications(),
+          tooltip: 'Notifications',
+          visualDensity: VisualDensity.compact,
+          icon: Badge(
+            isLabelVisible: unreadNotifs > 0,
+            label: Text(unreadNotifs > 9 ? '9+' : '$unreadNotifs'),
+            child: Icon(Icons.notifications_outlined, color: muted, size: iconSize),
+          ),
+        ),
+        IconButton(
+          onPressed: () => AppNavigation.instance.goProfile(),
+          tooltip: 'Profile',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(Icons.person_outline_rounded, color: muted, size: iconSize),
+        ),
         AppLogoutButton(
           onLogout: onLogout,
           iconColor: iconColor ?? AppTheme.danger,
@@ -229,16 +235,6 @@ class AppQuickMenuButton extends StatelessWidget {
                         ),
                         const SizedBox(height: 12),
                         ListTile(
-                          leading: _menuIcon(LucideIcons.shield, const Color(0xFFA78BFA)),
-                          title: const Text('Vault', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
-                          subtitle: Text('Project credentials', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            AppNavigation.instance.openVault();
-                          },
-                        ),
-                        ListTile(
                           leading: _menuIcon(LucideIcons.folderOpen, AppTheme.primaryBright),
                           title: const Text('Project', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
                           subtitle: Text('Browse & manage projects', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 11)),
@@ -293,15 +289,6 @@ class AppQuickMenuButton extends StatelessWidget {
           enabled: false,
           height: 28,
           child: Text('Shortcuts', style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w600)),
-        ),
-        PopupMenuItem<int>(
-          value: -4,
-          onTap: () => AppNavigation.instance.openVault(),
-          child: const Row(children: [
-            _MenuIconChip(icon: LucideIcons.shield, color: Color(0xFFA78BFA)),
-            SizedBox(width: 10),
-            Text('Vault', style: TextStyle(color: AppTheme.textPrimary)),
-          ]),
         ),
         PopupMenuItem<int>(
           value: -5,

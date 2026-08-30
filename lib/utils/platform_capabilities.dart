@@ -14,7 +14,19 @@ abstract final class PlatformCapabilities {
   /// Drag-and-drop file targets — skip on Linux (GTK drag + desktop_drop edge cases).
   static bool get fileDragDrop => Platform.isMacOS || Platform.isWindows;
 
-  /// Desktop-only — Android/iOS do not capture screenshots from this app.
+  /// Kanban task drag between stages — desktop only.
+  /// On Android/iOS, long-press drag fights scrolling and causes misfires.
+  static bool get kanbanTaskDragDrop =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+  /// Desktop-only screen monitoring.
+  ///
+  /// The `android` git branch also strips MediaProjection native code and
+  /// FOREGROUND_SERVICE_MEDIA_PROJECTION so installs never request screen capture.
   static bool get screenshotMonitoring =>
       Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+  /// Full-screen chat on phone — hide app top bar + bottom nav (back stays in chat UI).
+  static bool get immersiveChatChrome =>
+      Platform.isAndroid || Platform.isIOS;
 }

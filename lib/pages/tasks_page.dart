@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
+import '../utils/platform_capabilities.dart';
 import '../utils/responsive.dart';
 import '../utils/task_helpers.dart';
+import '../widgets/create_task_sheet.dart';
 import '../widgets/my_task_card.dart';
 
 class TasksPage extends StatefulWidget {
@@ -47,6 +49,8 @@ class _TasksPageState extends State<TasksPage> {
   int? _selectedStageId;
   bool _unstagedSelected = false;
   Timer? _refreshTimer;
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -58,6 +62,7 @@ class _TasksPageState extends State<TasksPage> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -157,7 +162,7 @@ class _TasksPageState extends State<TasksPage> {
     final ids = tasks.map(taskProjectIdFrom).whereType<int>().where((id) => id > 0).toSet();
     final missing = ids.where((id) {
       final cached = _projectMeta[id];
-      return cached == null || cached.employees.isEmpty;
+      return cached == null || cached.employees.isEmpty || cached.stages.isEmpty;
     }).toList();
     if (missing.isEmpty) return;
 
@@ -209,8 +214,25 @@ class _TasksPageState extends State<TasksPage> {
     return base;
   }
 
+  List<dynamic> get _searchScopedTasks {
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isEmpty) return _stageScopedTasks;
+    return _stageScopedTasks.where((t) {
+      final title = taskDisplayTitle(t).toLowerCase();
+      final project = taskProjectNameFrom(t).toLowerCase();
+      final stage = taskStageNameFrom(t).toLowerCase();
+      final assignees = taskAssigneeListFrom(t)
+          .map((p) => (p['name']?.toString() ?? '').toLowerCase())
+          .join(' ');
+      return title.contains(q) ||
+          project.contains(q) ||
+          stage.contains(q) ||
+          assignees.contains(q);
+    }).toList();
+  }
+
   List<dynamic> get _filteredTasks {
-    final base = _stageScopedTasks;
+    final base = _searchScopedTasks;
     if (_filter == 'pending') {
       return base.where((t) => !taskIsCompleted(t)).toList();
     }
@@ -220,8 +242,8 @@ class _TasksPageState extends State<TasksPage> {
     return base;
   }
 
-  int get _pendingCount => _stageScopedTasks.where((t) => !taskIsCompleted(t)).length;
-  int get _completedCount => _stageScopedTasks.where((t) => taskIsCompleted(t)).length;
+  int get _pendingCount => _searchScopedTasks.where((t) => !taskIsCompleted(t)).length;
+  int get _completedCount => _searchScopedTasks.where((t) => taskIsCompleted(t)).length;
 
   /// Stages where this user has assigned tasks in the selected project.
   List<Map<String, dynamic>> _stagesForSelectedProject() {
@@ -419,34 +441,19 @@ class _TasksPageState extends State<TasksPage> {
     }();
     final stages = _stagesForSelectedProject();
     final stageFilterActive = _unstagedSelected || _selectedStageId != null;
+    final mobile = PlatformCapabilities.immersiveChatChrome || Responsive.isMobile(context);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    final bottomSpace = Responsive.bottomNavInset(context) + 72;
+
+    return Stack(
       children: [
         Padding(
-          padding: EdgeInsets.fromLTRB(pad, 8, pad, 0),
+          padding: EdgeInsets.fromLTRB(pad, 6, pad, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'My Tasks',
-                      style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: Responsive.isDesktop(context) ? 22 : 18,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.3,
-                      ),
-                    ),
-                  ),
-                  _reloadButton(),
-                  const SizedBox(width: 6),
-                  _projectFilterButton(selectedProjectName),
-                ],
-              ),
-              const SizedBox(height: 10),
+              _buildSearchBox(),
+              const SizedBox(height: 6),
               _statusSegment(),
               if (selectedProjectName != null) ...[
                 const SizedBox(height: 8),
@@ -467,6 +474,8 @@ class _TasksPageState extends State<TasksPage> {
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                 ),
                 if (stages.isNotEmpty) ...[
@@ -475,71 +484,116 @@ class _TasksPageState extends State<TasksPage> {
                 ],
               ],
               const SizedBox(height: 8),
-              Text(
-                _filter == 'pending'
-                    ? '$_pendingCount to do'
-                    : (_filter == 'completed'
-                        ? '$_completedCount done'
-                        : '${_stageScopedTasks.length} tasks'),
-                style: TextStyle(
-                  color: AppTheme.textMuted.withValues(alpha: 0.9),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                ),
+              Expanded(
+                child: _loading
+                    ? const Center(
+                        child: CircularProgressIndicator(color: AppTheme.primaryBright),
+                      )
+                    : RefreshIndicator(
+                        color: AppTheme.primaryBright,
+                        backgroundColor: AppTheme.surface,
+                        onRefresh: () => _load(),
+                        child: displayTasks.isEmpty
+                            ? ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                padding: EdgeInsets.only(bottom: bottomSpace),
+                                children: [
+                                  SizedBox(height: MediaQuery.sizeOf(context).height * 0.12),
+                                  _buildEmptyState(stageFilterActive: stageFilterActive),
+                                ],
+                              )
+                            : LayoutBuilder(
+                                builder: (context, constraints) {
+                                  const gap = 10.0;
+                                  final available = constraints.maxWidth.clamp(0.0, double.infinity);
+                                  final cols = mobile ? 1 : Responsive.taskGridColumnsForWidth(available);
+                                  final itemWidth = cols == 1
+                                      ? available
+                                      : (((available - gap * (cols - 1)) / cols) - 0.5)
+                                          .clamp(120.0, available);
+                                  final compact = cols > 1;
+
+                                  if (mobile) {
+                                    return ListView.separated(
+                                      physics: const AlwaysScrollableScrollPhysics(),
+                                      padding: EdgeInsets.only(bottom: bottomSpace),
+                                      itemCount: displayTasks.length,
+                                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                                      itemBuilder: (_, i) => _buildTaskCard(
+                                        displayTasks[i],
+                                        width: itemWidth,
+                                        compact: false,
+                                      ),
+                                    );
+                                  }
+
+                                  return SingleChildScrollView(
+                                    physics: const AlwaysScrollableScrollPhysics(),
+                                    padding: EdgeInsets.only(bottom: bottomSpace),
+                                    child: Wrap(
+                                      spacing: gap,
+                                      runSpacing: gap,
+                                      children: [
+                                        for (final task in displayTasks)
+                                          _buildTaskCard(
+                                            task,
+                                            width: itemWidth,
+                                            compact: compact,
+                                          ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
               ),
             ],
           ),
         ),
-        Expanded(
-          child: _loading
-              ? const Center(
-                  child: CircularProgressIndicator(color: AppTheme.primaryBright),
-                )
-              : RefreshIndicator(
-                  color: AppTheme.primaryBright,
-                  backgroundColor: AppTheme.surface,
-                  onRefresh: () => _load(),
-                  child: displayTasks.isEmpty
-                      ? ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          children: [
-                            SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
-                            _buildEmptyState(stageFilterActive: stageFilterActive),
-                          ],
-                        )
-                      : LayoutBuilder(
-                          builder: (context, constraints) {
-                            const gap = 10.0;
-                            final available = (constraints.maxWidth - (pad * 2)).clamp(0.0, double.infinity);
-                            final cols = Responsive.taskGridColumnsForWidth(available);
-                            final itemWidth = cols == 1
-                                ? available
-                                : (((available - gap * (cols - 1)) / cols) - 0.5)
-                                    .clamp(120.0, available);
-                            final compact = cols > 1;
-
-                            return SingleChildScrollView(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              padding: EdgeInsets.fromLTRB(pad, 8, pad, 96),
-                              child: Wrap(
-                                spacing: gap,
-                                runSpacing: gap,
-                                children: [
-                                  for (final task in displayTasks)
-                                    _buildTaskCard(
-                                      task,
-                                      width: itemWidth,
-                                      compact: compact,
-                                    ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
+        Positioned(
+          right: pad,
+          bottom: Responsive.bottomNavInset(context) + 12,
+          child: Material(
+            color: Colors.transparent,
+            elevation: 0,
+            child: InkWell(
+              onTap: _openCreateTask,
+              borderRadius: BorderRadius.circular(16),
+              child: Ink(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF5B9CFF), Color(0xFF3B82F6)],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF3B82F6).withValues(alpha: 0.4),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
                 ),
+                child: const Icon(Icons.add_rounded, color: Colors.white, size: 28),
+              ),
+            ),
+          ),
         ),
       ],
     );
+  }
+
+  Future<void> _openCreateTask() async {
+    final ok = await showCreateTaskSheet(
+      context: context,
+      apiService: widget.apiService,
+      projects: _projects,
+      initialProjectId: _selectedProjectId,
+    );
+    if (ok == true && mounted) await _load();
   }
 
   Widget _stageChips(List<Map<String, dynamic>> stages) {
@@ -646,131 +700,170 @@ class _TasksPageState extends State<TasksPage> {
     );
   }
 
-  Widget _statusSegment() {
-    Widget seg(String label, String value, String count) {
-      final active = _filter == value;
-      return Expanded(
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => setState(() => _filter = value),
-            borderRadius: BorderRadius.circular(12),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 160),
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                color: active
-                    ? AppTheme.primary.withValues(alpha: 0.22)
-                    : Colors.transparent,
-                border: Border.all(
-                  color: active
-                      ? AppTheme.primaryBright.withValues(alpha: 0.35)
-                      : Colors.transparent,
-                ),
-              ),
-              child: Column(
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: active ? AppTheme.textPrimary : AppTheme.textMuted,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    count,
-                    style: TextStyle(
-                      color: active
-                          ? AppTheme.accent
-                          : AppTheme.textMuted.withValues(alpha: 0.75),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
+  Widget _buildSearchBox() {
+    final hasQuery = _searchQuery.trim().isNotEmpty;
     return Container(
-      padding: const EdgeInsets.all(4),
+      height: 42,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        color: Colors.white.withValues(alpha: 0.04),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        borderRadius: BorderRadius.circular(999),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: 0.07),
+            Colors.white.withValues(alpha: 0.03),
+          ],
+        ),
+        border: Border.all(
+          color: hasQuery
+              ? AppTheme.primaryBright.withValues(alpha: 0.45)
+              : AppTheme.primaryBright.withValues(alpha: 0.18),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.primary.withValues(alpha: hasQuery ? 0.18 : 0.08),
+            blurRadius: hasQuery ? 14 : 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Row(
         children: [
-          seg('To do', 'pending', '$_pendingCount'),
-          seg('Done', 'completed', '$_completedCount'),
-          seg('All', 'all', '${_stageScopedTasks.length}'),
+          const SizedBox(width: 14),
+          Container(
+            width: 26,
+            height: 26,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: (hasQuery ? AppTheme.primaryBright : AppTheme.primary)
+                  .withValues(alpha: 0.16),
+            ),
+            child: Icon(
+              Icons.search_rounded,
+              size: 15,
+              color: hasQuery ? AppTheme.primaryBright : AppTheme.textMuted,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              onChanged: (v) => setState(() => _searchQuery = v),
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 13.5,
+                fontWeight: FontWeight.w500,
+              ),
+              cursorColor: AppTheme.primaryBright,
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                hintText: 'Search tasks…',
+                hintStyle: TextStyle(
+                  color: AppTheme.textMuted.withValues(alpha: 0.62),
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w500,
+                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              textInputAction: TextInputAction.search,
+            ),
+          ),
+          if (hasQuery)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () {
+                    _searchCtrl.clear();
+                    setState(() => _searchQuery = '');
+                  },
+                  customBorder: const CircleBorder(),
+                  child: Ink(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.08),
+                    ),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 15,
+                      color: AppTheme.textMuted.withValues(alpha: 0.95),
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else
+            const SizedBox(width: 14),
         ],
       ),
     );
   }
 
-  Widget _reloadButton() {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: _loading ? null : () => _load(),
-        customBorder: const CircleBorder(),
-        child: Ink(
-          width: 34,
-          height: 34,
-          decoration: AppTheme.loginInsetDecoration(borderRadius: 17),
-          child: Icon(
-            Icons.refresh_rounded,
-            size: 18,
-            color: _loading
-                ? AppTheme.textMuted.withValues(alpha: 0.4)
-                : AppTheme.textMuted,
-          ),
-        ),
-      ),
-    );
-  }
+  Widget _statusSegment() {
+    final projectActive = _selectedProjectId != null;
 
-  Widget _projectFilterButton(String? selectedName) {
-    final active = _selectedProjectId != null;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: _openFiltersSheet,
-        borderRadius: BorderRadius.circular(12),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: AppTheme.loginInsetDecoration(
-            borderRadius: 12,
-            emphasized: active,
-          ),
-          child: Row(
+    Widget tab(String label, String value, int count) {
+      final active = _filter == value;
+      return Expanded(
+        child: InkWell(
+          onTap: () => setState(() => _filter = value),
+          borderRadius: BorderRadius.circular(8),
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.filter_list_rounded,
-                size: 18,
-                color: active ? AppTheme.accent : AppTheme.textPrimary,
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  '$label ($count)',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: active ? AppTheme.primaryBright : AppTheme.textMuted,
+                    fontSize: 13,
+                    fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+                  ),
+                ),
               ),
-              const SizedBox(width: 6),
-              Text(
-                'Project',
-                style: TextStyle(
-                  color: active ? AppTheme.accent : AppTheme.textMuted,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                height: 2.5,
+                margin: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: BoxDecoration(
+                  color: active ? AppTheme.primaryBright : Colors.transparent,
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
             ],
           ),
         ),
-      ),
+      );
+    }
+
+    return Row(
+      children: [
+        tab('To do', 'pending', _pendingCount),
+        tab('Done', 'completed', _completedCount),
+        tab('All', 'all', _searchScopedTasks.length),
+        const SizedBox(width: 4),
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _openFiltersSheet,
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 4, 8),
+              child: Icon(
+                Icons.folder_outlined,
+                size: 22,
+                color: projectActive ? AppTheme.accent : AppTheme.textMuted,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -883,6 +976,7 @@ class _TasksPageState extends State<TasksPage> {
   }
 
   Widget _buildEmptyState({required bool stageFilterActive}) {
+    final searching = _searchQuery.trim().isNotEmpty;
     final filteredAway = _tasks.isNotEmpty && _filteredTasks.isEmpty;
     return Center(
       child: Padding(
@@ -899,16 +993,20 @@ class _TasksPageState extends State<TasksPage> {
                 border: Border.all(color: AppTheme.accent.withValues(alpha: 0.25)),
               ),
               child: Icon(
-                filteredAway ? Icons.filter_alt_off_rounded : Icons.assignment_outlined,
+                searching
+                    ? Icons.search_off_rounded
+                    : (filteredAway ? Icons.filter_alt_off_rounded : Icons.assignment_outlined),
                 color: AppTheme.accent,
                 size: 30,
               ),
             ),
             const SizedBox(height: 14),
             Text(
-              filteredAway
-                  ? 'Nothing in this filter'
-                  : (_filter == 'pending' ? 'No tasks to do' : 'No tasks here'),
+              searching
+                  ? 'No matching tasks'
+                  : (filteredAway
+                      ? 'Nothing in this filter'
+                      : (_filter == 'pending' ? 'No tasks to do' : 'No tasks here')),
               style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 16,
@@ -917,25 +1015,32 @@ class _TasksPageState extends State<TasksPage> {
             ),
             const SizedBox(height: 6),
             Text(
-              filteredAway
-                  ? (stageFilterActive
-                      ? 'Try All stages, or clear the project filter.'
-                      : 'Try All, or clear the project filter.')
-                  : (_filter == 'pending'
-                      ? 'Assigned tasks will show up here.'
-                      : 'Switch to To do to see open work.'),
+              searching
+                  ? 'Try another keyword, or clear search.'
+                  : (filteredAway
+                      ? (stageFilterActive
+                          ? 'Try All stages, or clear the project filter.'
+                          : 'Try All, or clear the project filter.')
+                      : (_filter == 'pending'
+                          ? 'Assigned tasks will show up here.'
+                          : 'Switch to To do to see open work.')),
               textAlign: TextAlign.center,
               style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12),
             ),
-            if (filteredAway) ...[
+            if (searching || filteredAway) ...[
               const SizedBox(height: 14),
               TextButton(
                 onPressed: () => setState(() {
-                  _filter = 'pending';
-                  _selectedProjectId = null;
-                  _clearStageFilter();
+                  if (searching) {
+                    _searchCtrl.clear();
+                    _searchQuery = '';
+                  } else {
+                    _filter = 'pending';
+                    _selectedProjectId = null;
+                    _clearStageFilter();
+                  }
                 }),
-                child: const Text('Clear filters'),
+                child: Text(searching ? 'Clear search' : 'Clear filters'),
               ),
             ],
           ],

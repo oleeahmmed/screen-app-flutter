@@ -9,10 +9,8 @@ import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
-import '../widgets/app_primary_button.dart';
-import '../widgets/app_shell.dart';
+import '../utils/responsive.dart';
 import '../widgets/app_tab_shell.dart';
-import '../widgets/glass_card.dart';
 import 'data_privacy_notice_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -42,6 +40,23 @@ class _ProfilePageState extends State<ProfilePage> {
   bool _consent = false;
   bool _sound = true;
   bool _saving = false;
+
+  String get _displayName {
+    final n = '${_firstCtrl.text} ${_lastCtrl.text}'.trim();
+    if (n.isNotEmpty) return n;
+    if (_username.isNotEmpty) return _username;
+    return 'Your profile';
+  }
+
+  String get _initials {
+    final f = _firstCtrl.text.trim();
+    final l = _lastCtrl.text.trim();
+    if (f.isNotEmpty || l.isNotEmpty) {
+      return '${f.isNotEmpty ? f[0] : ''}${l.isNotEmpty ? l[0] : ''}'.toUpperCase();
+    }
+    if (_username.isNotEmpty) return _username[0].toUpperCase();
+    return '?';
+  }
 
   @override
   void initState() {
@@ -188,247 +203,494 @@ class _ProfilePageState extends State<ProfilePage> {
     await prefs.setBool('notification_sound_enabled', v);
   }
 
+  void _openPrivacy() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AppTabShell(
+          selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
+          unreadNotifs: AppNavigation.instance.unreadNotifs,
+          onLogout: widget.onLogout,
+          child: const DataPrivacyNoticePage(),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final bottomPad = Responsive.bottomNavInset(context) + 20;
+
     if (_loading) {
-      return AppShell(
-        wide: true,
-        child: const Center(
+      return const SafeArea(
+        child: Center(
           child: CircularProgressIndicator(color: AppTheme.primaryBright),
         ),
       );
     }
 
-    return AppShell(
-      scrollable: true,
-      wide: true,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Profile & settings', style: AppTheme.pageTitle),
-          const SizedBox(height: 4),
-          Text(
-            PlatformCapabilities.screenshotMonitoring
-                ? 'Account, photo, screenshot consent, and alerts'
-                : 'Account, photo, and alerts',
-            style: AppTheme.caption,
-          ),
-          const SizedBox(height: 16),
-          GlassCard(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => AppTabShell(
-                    selectedIndex: AppNavigation.tabProfile,
-                    unreadNotifs: AppNavigation.instance.unreadNotifs,
-                    onLogout: widget.onLogout,
-                    child: const DataPrivacyNoticePage(),
-                  ),
-                ),
-              );
-            },
-            child: Row(
-              children: [
-                Icon(Icons.description_outlined, color: AppTheme.primaryBright.withValues(alpha: 0.9)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Data & privacy', style: AppTheme.sectionTitle),
-                      const SizedBox(height: 2),
-                      Text('Screenshots & activity data notice', style: AppTheme.caption),
-                    ],
-                  ),
-                ),
-                Icon(Icons.chevron_right, color: AppTheme.textMuted.withValues(alpha: 0.7)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          GlassCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Center(
-                  child: Stack(
-                    children: [
-                      CircleAvatar(
-                        radius: 48,
-                        backgroundColor: AppTheme.surface2,
-                        backgroundImage: (_photoUrl != null && _photoUrl!.isNotEmpty)
-                            ? NetworkImage(_resolvePhotoUrl(_photoUrl!))
-                            : null,
-                        child: (_photoUrl == null || _photoUrl!.isEmpty)
-                            ? Icon(Icons.person, size: 48, color: AppTheme.textMuted)
-                            : null,
-                      ),
-                      Positioned(
-                        right: 0,
-                        bottom: 0,
-                        child: Material(
-                          color: AppTheme.primary,
-                          shape: const CircleBorder(),
-                          child: InkWell(
-                            onTap: _pickPhoto,
-                            customBorder: const CircleBorder(),
-                            child: const Padding(
-                              padding: EdgeInsets.all(8),
-                              child: Icon(Icons.camera_alt, color: Colors.white, size: 18),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Center(
-                  child: TextButton(onPressed: _pickPhoto, child: const Text('Change photo')),
-                ),
-                const SizedBox(height: 8),
-                Text('Username', style: AppTheme.caption),
-                const SizedBox(height: 4),
-                Text(
-                  _username.isEmpty ? '—' : _username,
-                  style: AppTheme.sectionTitle.copyWith(fontSize: 16),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _emailCtrl,
-                  decoration: AppTheme.taskLabeledInput('Email'),
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                  keyboardType: TextInputType.emailAddress,
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _firstCtrl,
-                        decoration: AppTheme.taskLabeledInput('First name'),
-                        style: const TextStyle(color: AppTheme.textPrimary),
+    return SafeArea(
+      bottom: false,
+      child: CustomScrollView(
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(child: _buildHero()),
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(
+                Responsive.pagePadding(context),
+                8,
+                Responsive.pagePadding(context),
+                bottomPad,
+              ),
+              sliver: SliverList(
+                delegate: SliverChildListDelegate([
+                  _sectionLabel('Account'),
+                  const SizedBox(height: 10),
+                  _buildAccountCard(),
+                  const SizedBox(height: 22),
+                  _sectionLabel('Preferences'),
+                  const SizedBox(height: 10),
+                  _buildPreferencesCard(),
+                  const SizedBox(height: 22),
+                  _sectionLabel('Privacy'),
+                  const SizedBox(height: 10),
+                  _buildPrivacyTile(),
+                  const SizedBox(height: 28),
+                  _buildSaveButton(),
+                  if (widget.onLogout != null) ...[
+                    const SizedBox(height: 12),
+                    _buildLogoutButton(),
+                  ],
+                  const SizedBox(height: 8),
+                  Center(
+                    child: Text(
+                      'AIMS',
+                      style: TextStyle(
+                        color: AppTheme.textMuted.withValues(alpha: 0.55),
+                        fontSize: 11,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: _lastCtrl,
-                        decoration: AppTheme.taskLabeledInput('Last name'),
-                        style: const TextStyle(color: AppTheme.textPrimary),
-                      ),
+                  ),
+                ]),
+              ),
+            ),
+          ],
+        ),
+    );
+  }
+
+  Widget _sectionLabel(String text) {
+    return Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        color: AppTheme.textMuted.withValues(alpha: 0.85),
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.2,
+      ),
+    );
+  }
+
+  Widget _buildHero() {
+    final hasPhoto = _photoUrl != null && _photoUrl!.isNotEmpty;
+    final subtitle = [
+      if (_desigCtrl.text.trim().isNotEmpty) _desigCtrl.text.trim(),
+      if (_deptCtrl.text.trim().isNotEmpty) _deptCtrl.text.trim(),
+    ].join(' · ');
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        Responsive.pagePadding(context),
+        8,
+        Responsive.pagePadding(context),
+        20,
+      ),
+      child: Column(
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 108,
+                height: 108,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      AppTheme.primary.withValues(alpha: 0.9),
+                      AppTheme.accent.withValues(alpha: 0.7),
+                    ],
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.primary.withValues(alpha: 0.35),
+                      blurRadius: 24,
+                      offset: const Offset(0, 10),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _phoneCtrl,
-                  decoration: AppTheme.taskLabeledInput('Phone'),
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                  keyboardType: TextInputType.phone,
+                padding: const EdgeInsets.all(3),
+                child: CircleAvatar(
+                  backgroundColor: AppTheme.bgDeep,
+                  backgroundImage: hasPhoto ? NetworkImage(_resolvePhotoUrl(_photoUrl!)) : null,
+                  child: hasPhoto
+                      ? null
+                      : Text(
+                          _initials,
+                          style: const TextStyle(
+                            color: AppTheme.textPrimary,
+                            fontSize: 34,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _desigCtrl,
-                  decoration: AppTheme.taskLabeledInput('Designation'),
-                  style: const TextStyle(color: AppTheme.textPrimary),
+              ),
+              Positioned(
+                right: -2,
+                bottom: 2,
+                child: Material(
+                  color: AppTheme.primaryBright,
+                  shape: const CircleBorder(),
+                  elevation: 4,
+                  child: InkWell(
+                    onTap: _pickPhoto,
+                    customBorder: const CircleBorder(),
+                    child: const Padding(
+                      padding: EdgeInsets.all(10),
+                      child: Icon(Icons.camera_alt_rounded, color: Colors.white, size: 18),
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _deptCtrl,
-                  decoration: AppTheme.taskLabeledInput('Department', hint: 'e.g. Engineering, Sales'),
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                ),
-              ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            _displayName,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.4,
             ),
           ),
-          const SizedBox(height: 14),
-          if (PlatformCapabilities.screenshotMonitoring)
-            GlassCard(
-              child: Column(
-                children: [
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('Screenshot monitoring', style: AppTheme.sectionTitle),
-                    subtitle: Text(
-                      'Allow screen captures while clocked in. Server will reject uploads if disabled.',
-                      style: AppTheme.caption,
-                    ),
-                    value: _consent,
-                    activeThumbColor: AppTheme.primaryBright,
-                    onChanged: (v) => setState(() {
-                      _consent = v;
-                      AppSession.setConsent(v);
-                    }),
-                  ),
-                  Divider(color: AppTheme.border, height: 1),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('Notification sound', style: AppTheme.sectionTitle),
-                    subtitle: Text(
-                      'Play a short sound when new alerts arrive',
-                      style: AppTheme.caption,
-                    ),
-                    value: _sound,
-                    activeThumbColor: AppTheme.primaryBright,
-                    onChanged: _toggleSound,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Capture interval: ${AppConfig.screenshotInterval}s (build flag SCREENSHOT_INTERVAL_SEC)',
-                    style: AppTheme.caption.copyWith(fontSize: 11),
-                  ),
-                ],
-              ),
-            )
-          else
-            GlassCard(
-              child: Column(
-                children: [
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('Notification sound', style: AppTheme.sectionTitle),
-                    subtitle: Text(
-                      'Play a short sound when new alerts arrive',
-                      style: AppTheme.caption,
-                    ),
-                    value: _sound,
-                    activeThumbColor: AppTheme.primaryBright,
-                    onChanged: _toggleSound,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Screenshot monitoring is available on Windows, Linux, and macOS desktop apps only.',
-                    style: AppTheme.caption.copyWith(fontSize: 11),
-                  ),
-                ],
+          if (subtitle.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppTheme.textMuted.withValues(alpha: 0.95),
+                fontSize: 14,
               ),
             ),
-          const SizedBox(height: 24),
-          AppPrimaryButton(
-            label: _saving ? 'Saving…' : 'Save changes',
-            icon: _saving ? null : Icons.save,
-            loading: _saving,
-            expanded: true,
-            onPressed: _saving ? null : _saveProfile,
-          ),
-          if (widget.onLogout != null) ...[
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => AppNavigation.instance.logout(),
-                icon: const Icon(Icons.logout, color: AppTheme.danger),
-                label: const Text('Log out'),
-                style: AppTheme.secondaryButton().copyWith(
-                  foregroundColor: WidgetStateProperty.all(AppTheme.danger),
-                  side: WidgetStateProperty.all(const BorderSide(color: AppTheme.danger)),
+          ],
+          if (_username.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+              ),
+              child: Text(
+                '@$_username',
+                style: TextStyle(
+                  color: AppTheme.primaryBright.withValues(alpha: 0.95),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
           ],
+          const SizedBox(height: 14),
+          TextButton.icon(
+            onPressed: _pickPhoto,
+            icon: const Icon(Icons.photo_camera_outlined, size: 18),
+            label: const Text('Update photo'),
+            style: TextButton.styleFrom(
+              foregroundColor: AppTheme.primaryBright,
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildAccountCard() {
+    return _SurfaceCard(
+      child: Column(
+        children: [
+          _field(_emailCtrl, 'Email', Icons.mail_outline_rounded, TextInputType.emailAddress),
+          _divider(),
+          Row(
+            children: [
+              Expanded(child: _field(_firstCtrl, 'First name', Icons.badge_outlined)),
+              const SizedBox(width: 12),
+              Expanded(child: _field(_lastCtrl, 'Last name', Icons.badge_outlined)),
+            ],
+          ),
+          _divider(),
+          _field(_phoneCtrl, 'Phone', Icons.phone_outlined, TextInputType.phone),
+          _divider(),
+          _field(_desigCtrl, 'Designation', Icons.work_outline_rounded),
+          _divider(),
+          _field(_deptCtrl, 'Department', Icons.apartment_rounded, null, 'e.g. Engineering'),
+        ],
+      ),
+    );
+  }
+
+  Widget _field(
+    TextEditingController ctrl,
+    String label,
+    IconData icon, [
+    TextInputType? keyboard,
+    String? hint,
+  ]) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: TextField(
+        controller: ctrl,
+        keyboardType: keyboard,
+        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          labelStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13),
+          hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.5)),
+          prefixIcon: Icon(icon, size: 20, color: AppTheme.textMuted.withValues(alpha: 0.85)),
+          filled: true,
+          fillColor: Colors.white.withValues(alpha: 0.04),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.6)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _divider() => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
+      );
+
+  Widget _buildPreferencesCard() {
+    return _SurfaceCard(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        children: [
+          if (PlatformCapabilities.screenshotMonitoring) ...[
+            _prefTile(
+              icon: Icons.screenshot_monitor_rounded,
+              iconColor: AppTheme.accent,
+              title: 'Screenshot monitoring',
+              subtitle: 'Allow captures while clocked in',
+              value: _consent,
+              onChanged: (v) => setState(() {
+                _consent = v;
+                AppSession.setConsent(v);
+              }),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
+            ),
+          ],
+          _prefTile(
+            icon: Icons.volume_up_rounded,
+            iconColor: AppTheme.primaryBright,
+            title: 'Notification sound',
+            subtitle: 'Play sound for new alerts',
+            value: _sound,
+            onChanged: _toggleSound,
+          ),
+          if (!PlatformCapabilities.screenshotMonitoring)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(
+                'Screenshot monitoring is available on desktop apps only.',
+                style: TextStyle(
+                  color: AppTheme.textMuted.withValues(alpha: 0.7),
+                  fontSize: 11,
+                ),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text(
+                'Capture interval: ${AppConfig.screenshotInterval}s',
+                style: TextStyle(
+                  color: AppTheme.textMuted.withValues(alpha: 0.65),
+                  fontSize: 11,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _prefTile({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return SwitchListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      secondary: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: iconColor.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(icon, color: iconColor, size: 20),
+      ),
+      title: Text(
+        title,
+        style: const TextStyle(
+          color: AppTheme.textPrimary,
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12),
+      ),
+      value: value,
+      activeThumbColor: AppTheme.primaryBright,
+      onChanged: onChanged,
+    );
+  }
+
+  Widget _buildPrivacyTile() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _openPrivacy,
+        borderRadius: BorderRadius.circular(18),
+        child: _SurfaceCard(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFA78BFA).withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.shield_outlined, color: Color(0xFFA78BFA), size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Data & privacy',
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Screenshots & activity notice',
+                      style: TextStyle(
+                        color: AppTheme.textMuted.withValues(alpha: 0.9),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted.withValues(alpha: 0.7)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSaveButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: FilledButton(
+        onPressed: _saving ? null : _saveProfile,
+        style: FilledButton.styleFrom(
+          backgroundColor: AppTheme.primary,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: AppTheme.primary.withValues(alpha: 0.45),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          elevation: 0,
+        ),
+        child: _saving
+            ? const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
+              )
+            : const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.check_circle_outline_rounded, size: 20),
+                  SizedBox(width: 10),
+                  Text(
+                    'Save changes',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildLogoutButton() {
+    return SizedBox(
+      width: double.infinity,
+      height: 52,
+      child: OutlinedButton(
+        onPressed: () => AppNavigation.instance.logout(),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: AppTheme.danger,
+          side: BorderSide(color: AppTheme.danger.withValues(alpha: 0.55)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.logout_rounded, size: 20),
+            SizedBox(width: 10),
+            Text(
+              'Log out',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -438,5 +700,36 @@ class _ProfilePageState extends State<ProfilePage> {
     final origin = AppConfig.apiBaseUrl.replaceAll(RegExp(r'/api/?$'), '');
     if (pathOrUrl.startsWith('/')) return '$origin$pathOrUrl';
     return '$origin/$pathOrUrl';
+  }
+}
+
+class _SurfaceCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  const _SurfaceCard({
+    required this.child,
+    this.padding = const EdgeInsets.all(14),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: padding,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.055),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: child,
+    );
   }
 }

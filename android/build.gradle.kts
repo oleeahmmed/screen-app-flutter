@@ -19,6 +19,15 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// file_picker (and other plugins) lintVitalAnalyzeRelease can fail on AGP 8.x.
+gradle.projectsEvaluated {
+    subprojects {
+        tasks.matching { it.name.contains("lintVital", ignoreCase = true) }.configureEach {
+            enabled = false
+        }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }
