@@ -47,6 +47,17 @@ class LocalNotificationService {
           showBadge: true,
         ),
       );
+      await androidImpl?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'aims_calls_v1',
+          'AIMS Calls',
+          description: 'Incoming voice and video calls',
+          importance: Importance.max,
+          playSound: true,
+          enableVibration: true,
+          showBadge: true,
+        ),
+      );
     }
 
     _initialized = true;
@@ -81,32 +92,38 @@ class LocalNotificationService {
     required String title,
     required String body,
     String? payload,
+    String channelId = 'aims_alerts_v2',
   }) async {
     if (!supported) return;
     await initialize();
 
-    const androidDetails = AndroidNotificationDetails(
-      'aims_alerts_v2',
-      'AIMS Alerts',
-      channelDescription: 'Tasks, chat, attendance and HR alerts',
+    final isCall = channelId == 'aims_calls_v1';
+    final androidDetails = AndroidNotificationDetails(
+      channelId,
+      isCall ? 'AIMS Calls' : 'AIMS Alerts',
+      channelDescription: isCall
+          ? 'Incoming voice and video calls'
+          : 'Tasks, chat, attendance and HR alerts',
       importance: Importance.max,
       priority: Priority.max,
       playSound: true,
       enableVibration: true,
-      category: AndroidNotificationCategory.message,
+      category: isCall ? AndroidNotificationCategory.call : AndroidNotificationCategory.message,
+      fullScreenIntent: isCall,
       icon: '@mipmap/ic_launcher',
     );
     const iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
+      interruptionLevel: InterruptionLevel.timeSensitive,
     );
 
     await _plugin.show(
       id,
       title,
       body,
-      const NotificationDetails(android: androidDetails, iOS: iosDetails),
+      NotificationDetails(android: androidDetails, iOS: iosDetails),
       payload: payload,
     );
   }

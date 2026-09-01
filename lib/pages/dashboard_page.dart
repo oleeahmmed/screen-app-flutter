@@ -5,7 +5,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:lucide_icons/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_session.dart';
@@ -21,7 +20,6 @@ import '../theme/app_theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/break_panel.dart';
 import '../widgets/animated_glow_border.dart';
-import '../widgets/home_status_illustration.dart';
 
 class DashboardPage extends StatefulWidget {
   final ApiService apiService;
@@ -350,12 +348,6 @@ class _DashboardPageState extends State<DashboardPage> {
                 child: _timeStat(
                   label: 'Work Time',
                   value: _formatDuration(todayTotal),
-                  icon: LucideIcons.timer,
-                  iconGradient: _onBreak
-                      ? const [Color(0xFFF59E0B), Color(0xFFD97706)]
-                      : _isClockedIn
-                          ? const [Color(0xFF34D399), Color(0xFF059669)]
-                          : const [Color(0xFF64748B), Color(0xFF475569)],
                   statusText: _workStatusLabel(),
                   statusColor: _workStatusColor(),
                   live: _isClockedIn && !_onBreak,
@@ -366,10 +358,6 @@ class _DashboardPageState extends State<DashboardPage> {
                 child: _timeStat(
                   label: 'Break Time',
                   value: _formatDuration(todayBreak),
-                  icon: LucideIcons.coffee,
-                  iconGradient: _onBreak
-                      ? const [Color(0xFFFBBF24), Color(0xFFD97706)]
-                      : const [Color(0xFFFCD34D), Color(0xFFB45309)],
                   statusText: _breakStatusLabel(),
                   statusColor: _onBreak ? AppTheme.warning : const Color(0xFFF59E0B),
                   live: _onBreak,
@@ -379,12 +367,6 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           const SizedBox(height: 18),
           _buildActionArea(),
-          HomeStatusIllustration(
-            isClockedIn: _isClockedIn,
-            onBreak: _onBreak,
-            workDayLabel: _workDayLabel(),
-            shiftInfo: _shiftInfoLabel(displayName),
-          ),
         ],
       ),
     );
@@ -413,81 +395,49 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _timeStat({
     required String label,
     required String value,
-    required IconData icon,
-    required List<Color> iconGradient,
     required String statusText,
     required Color statusColor,
     bool live = false,
   }) {
     final card = Container(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
       decoration: AppTheme.loginInsetDecoration(
         borderRadius: 12,
         emphasized: live,
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: iconGradient,
-              ),
-              boxShadow: live
-                  ? [
-                      BoxShadow(
-                        color: statusColor.withValues(alpha: 0.4),
-                        blurRadius: 10,
-                        offset: const Offset(0, 3),
-                      ),
-                    ]
-                  : null,
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: live
+                  ? AppTheme.accent
+                  : AppTheme.textMuted.withValues(alpha: 0.85),
+              letterSpacing: 1.1,
             ),
-            child: Icon(icon, size: 20, color: Colors.white),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label.toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                    color: live
-                        ? AppTheme.accent
-                        : AppTheme.textMuted.withValues(alpha: 0.85),
-                    letterSpacing: 1.1,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  statusText,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: statusColor,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.textPrimary,
-                    fontFeatures: [FontFeature.tabularFigures()],
-                    letterSpacing: 0.5,
-                    height: 1.1,
-                  ),
-                ),
-              ],
+          const SizedBox(height: 3),
+          Text(
+            statusText,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: statusColor,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.textPrimary,
+              fontFeatures: [FontFeature.tabularFigures()],
+              letterSpacing: 0.5,
+              height: 1.1,
             ),
           ),
         ],

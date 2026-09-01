@@ -2735,6 +2735,52 @@ class ApiService {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // 1:1 Call signaling (HTTP fallback when WebSocket misses delivery)
+  // ═══════════════════════════════════════════════════════════════
+
+  Future<Map<String, dynamic>> sendCallSignal(Map<String, dynamic> payload) async {
+    for (final url in [AppConfig.chatCallSignalUrl, AppConfig.p2pCallSignalUrl]) {
+      try {
+        final response = await http
+            .post(
+              Uri.parse(url),
+              headers: _getHeaders(),
+              body: jsonEncode(payload),
+            )
+            .timeout(const Duration(seconds: 12));
+        if (response.statusCode == 401 && await refreshAccessToken()) {
+          return sendCallSignal(payload);
+        }
+        if (response.statusCode == 200) {
+          return {'success': true, 'data': jsonDecode(response.body)};
+        }
+        if (response.statusCode == 403) {
+          try {
+            final body = jsonDecode(response.body);
+            if (body is Map) {
+              return {'success': false, 'error': body['message']?.toString() ?? 'Call failed', 'data': body};
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    return {'success': false, 'error': 'Call signal failed'};
+  }
+
+  Future<Map<String, dynamic>> pollCallSignals() async {
+    for (final url in [AppConfig.chatCallSignalsPendingUrl, AppConfig.p2pCallSignalsPendingUrl]) {
+      try {
+        final response = await _authorizedGet(Uri.parse(url));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          return {'success': true, 'data': data is Map ? data : {}};
+        }
+      } catch (_) {}
+    }
+    return {'success': false, 'error': 'Poll failed'};
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // Peer-to-Peer File Transfer APIs
   // ═══════════════════════════════════════════════════════════════
 
@@ -2748,6 +2794,43 @@ class ApiService {
       return {'success': false, 'error': 'Failed to load ICE servers'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> registerPushToken(String token, {String platform = 'android'}) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.pushDeviceRegisterUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({'token': token, 'platform': platform}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 401 && await refreshAccessToken()) {
+        return registerPushToken(token, platform: platform);
+      }
+      if (response.statusCode == 200) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Failed to register push token'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> unregisterPushToken(String token) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.pushDeviceUnregisterUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({'token': token}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) return {'success': true};
+      return {'success': false};
+    } catch (_) {
+      return {'success': false};
     }
   }
 

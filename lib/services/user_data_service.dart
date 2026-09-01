@@ -166,11 +166,23 @@ class UserDataService {
     return token != null && token.isNotEmpty && accessGranted;
   }
   
+  // Clear auth session only (logout) — keeps remembered username like WhatsApp.
+  static Future<void> clearAuthSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final remembered = prefs.getString('remembered_username');
+    await prefs.remove('auth_token');
+    await prefs.remove('refresh_token');
+    await prefs.remove('access_granted');
+    await prefs.remove('user_id');
+    if (remembered != null && remembered.isNotEmpty) {
+      await prefs.setString('remembered_username', remembered);
+    }
+  }
+
   // Clear all data (logout)
   static Future<void> clearAllData() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
-    print('🗑️ All user data cleared');
   }
   
   // Print user data for debugging

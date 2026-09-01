@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../generated/app_version.dart';
 import '../app_session.dart';
 import '../config.dart';
 import '../services/api_service.dart';
@@ -261,6 +262,16 @@ class _ProfilePageState extends State<ProfilePage> {
                     _buildLogoutButton(),
                   ],
                   const SizedBox(height: 8),
+                  Center(
+                    child: Text(
+                      AppVersion.display,
+                      style: TextStyle(
+                        color: AppTheme.textMuted.withValues(alpha: 0.55),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
                   Center(
                     child: Text(
                       'AIMS',

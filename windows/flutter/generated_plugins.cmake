@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_windows
   desktop_drop
   file_selector_windows
+  firebase_core
   flutter_webrtc
   permission_handler_windows
   record_windows

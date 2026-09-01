@@ -10,6 +10,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
+import '../services/call_service.dart';
+import '../services/call_navigation.dart';
 import '../services/user_data_service.dart';
 import '../services/voice_recorder_service.dart';
 import '../services/app_navigation.dart';
@@ -18,6 +20,7 @@ import '../widgets/app_logo.dart';
 import '../widgets/empty_state.dart';
 import '../utils/responsive.dart';
 import '../utils/platform_capabilities.dart';
+import 'call_page.dart';
 
 class ChatPage extends StatefulWidget {
   final ApiService apiService;
@@ -51,6 +54,7 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription<Map<String, dynamic>>? _presenceSub;
   StreamSubscription<Map<String, dynamic>>? _typingSub;
   StreamSubscription<Map<String, dynamic>>? _messagesReadSub;
+  StreamSubscription<CallPhase>? _callPhaseSub;
   bool _isRecording = false;
   int _recordSeconds = 0;
   Timer? _recordTimer;
@@ -62,9 +66,13 @@ class _ChatPageState extends State<ChatPage> {
   int? _myUserId;
   bool _iAmTyping = false;
   Map<String, dynamic>? _replyTo;
+  /// Keep quote visible even if API refresh omits `reply` (migration lag / race).
+  final Map<int, Map<String, dynamic>> _replyQuotesByMsgId = {};
   /// peerUserId / groupId → display name while typing
   final Map<String, String> _typingPeers = {};
   final _imagePicker = ImagePicker();
+  bool _emojiOpen = false;
+  double _emojiPanelHeight = 280;
 
   bool get _supportsNativeAudio => PlatformCapabilities.nativeAudio;
 
@@ -84,7 +92,12 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _msgFocus.addListener(() {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      if (_msgFocus.hasFocus && _emojiOpen) {
+        setState(() => _emojiOpen = false);
+      } else {
+        setState(() {});
+      }
     });
     _msgController.addListener(_onComposerChanged);
     _loadUsers();
@@ -93,11 +106,27 @@ class _ChatPageState extends State<ChatPage> {
     _presenceSub = widget.notificationService?.presenceStream.listen(_onPresenceUpdate);
     _typingSub = widget.notificationService?.typingStream.listen(_onTypingEvent);
     _messagesReadSub = widget.notificationService?.messagesReadStream.listen(_onMessagesRead);
+    _callPhaseSub = CallService.instance.phaseStream.listen((phase) {
+      if (phase == CallPhase.incoming && mounted) {
+        CallNavigation.openCallPageIfNeeded();
+      }
+    });
   }
 
   Future<void> _loadMyUserId() async {
     final id = int.tryParse(await UserDataService.getUserId());
     if (mounted) setState(() => _myUserId = id);
+    _bindCallIfReady();
+  }
+
+  void _bindCallIfReady() {
+    final id = _myUserId;
+    if (id == null || widget.notificationService == null) return;
+    CallService.instance.bind(
+      notificationService: widget.notificationService!,
+      apiService: widget.apiService,
+      myUserId: id,
+    );
   }
 
   @override
@@ -110,6 +139,7 @@ class _ChatPageState extends State<ChatPage> {
     _presenceSub?.cancel();
     _typingSub?.cancel();
     _messagesReadSub?.cancel();
+    _callPhaseSub?.cancel();
     _recordTimer?.cancel();
     _recProcess?.kill();
     _voiceRecorder?.dispose();
@@ -337,37 +367,39 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> _selectUser(dynamic user) async {
+  Future<void> _selectUser(dynamic user, {bool resetQuotes = true}) async {
     _stopTypingSignal();
     setState(() {
       _selectedUser = user;
       _selectedGroup = null;
       _messages = [];
       _replyTo = null;
+      if (resetQuotes) _replyQuotesByMsgId.clear();
       _typingPeers.removeWhere((k, _) => k.startsWith('g:'));
     });
     _startRefresh();
     final result = await widget.apiService.getConversation(user['id']);
     if (result['success']) {
-      setState(() => _messages = result['data'] ?? []);
+      setState(() => _messages = _hydrateMessages(result['data'] ?? []));
       _scrollToBottom();
       unawaited(widget.apiService.markMessagesRead(user['id']));
     }
   }
 
-  Future<void> _selectGroup(dynamic group) async {
+  Future<void> _selectGroup(dynamic group, {bool resetQuotes = true}) async {
     _stopTypingSignal();
     setState(() {
       _selectedGroup = group;
       _selectedUser = null;
       _messages = [];
       _replyTo = null;
+      if (resetQuotes) _replyQuotesByMsgId.clear();
       _typingPeers.removeWhere((k, _) => k.startsWith('u:'));
     });
     _startRefresh();
     final result = await widget.apiService.getGroupMessages(group['id']);
     if (result['success']) {
-      setState(() => _messages = result['data'] ?? []);
+      setState(() => _messages = _hydrateMessages(result['data'] ?? []));
       _scrollToBottom();
     }
   }
@@ -381,13 +413,89 @@ class _ChatPageState extends State<ChatPage> {
     if (_selectedUser != null) {
       final r = await widget.apiService.getConversation(_selectedUser['id']);
       if (r['success'] && mounted) {
-        setState(() => _messages = r['data'] ?? []);
+        setState(() => _messages = _hydrateMessages(r['data'] ?? []));
         unawaited(widget.apiService.markMessagesRead(_selectedUser['id']));
       }
     } else if (_selectedGroup != null) {
       final r = await widget.apiService.getGroupMessages(_selectedGroup['id']);
-      if (r['success'] && mounted) setState(() => _messages = r['data'] ?? []);
+      if (r['success'] && mounted) {
+        setState(() => _messages = _hydrateMessages(r['data'] ?? []));
+      }
     }
+  }
+
+  int? _asInt(dynamic v) {
+    if (v is int) return v;
+    return int.tryParse('${v ?? ''}');
+  }
+
+  Map<String, dynamic> _quoteFromParent(Map<String, dynamic> parent) {
+    return {
+      'id': parent['id'],
+      'sender_name': parent['is_own'] == true
+          ? 'You'
+          : (parent['sender_name'] ??
+              parent['sender_full_name'] ??
+              parent['sender_username'] ??
+              'User'),
+      'preview': _replyPreviewFromMessage(parent),
+      'message_type': parent['message_type'] ?? 'text',
+    };
+  }
+
+  void _cacheReplyQuote(dynamic messageId, Map<String, dynamic> quote) {
+    final id = _asInt(messageId);
+    if (id == null) return;
+    _replyQuotesByMsgId[id] = Map<String, dynamic>.from(quote);
+  }
+
+  List<dynamic> _hydrateMessages(List<dynamic> raw) {
+    final visible = raw.where((item) {
+      if (item is Map) {
+        return !CallService.isHiddenCallChatMessage(item['message']?.toString());
+      }
+      return true;
+    }).toList();
+
+    final byId = <int, Map<String, dynamic>>{};
+    for (final item in visible) {
+      if (item is! Map) continue;
+      final map = Map<String, dynamic>.from(item);
+      final id = _asInt(map['id']);
+      if (id != null) byId[id] = map;
+    }
+
+    return visible.map((item) {
+      if (item is! Map) return item;
+      final map = Map<String, dynamic>.from(item);
+      final mid = _asInt(map['id']);
+
+      Map<String, dynamic>? reply;
+      if (map['reply'] is Map) {
+        reply = Map<String, dynamic>.from(map['reply'] as Map);
+      } else if (mid != null && _replyQuotesByMsgId.containsKey(mid)) {
+        reply = Map<String, dynamic>.from(_replyQuotesByMsgId[mid]!);
+      } else {
+        final parentId = _asInt(map['reply_to'] ?? map['reply_to_id']);
+        if (parentId != null && byId.containsKey(parentId)) {
+          reply = _quoteFromParent(byId[parentId]!);
+        }
+      }
+
+      if (reply != null) {
+        // Normalize empty preview from API.
+        if ((reply['preview'] ?? '').toString().trim().isEmpty) {
+          final parentId = _asInt(reply['id'] ?? map['reply_to'] ?? map['reply_to_id']);
+          if (parentId != null && byId.containsKey(parentId)) {
+            reply = _quoteFromParent(byId[parentId]!);
+          }
+        }
+        map['reply'] = reply;
+        map['reply_to'] = map['reply_to'] ?? reply['id'];
+        if (mid != null) _cacheReplyQuote(mid, reply);
+      }
+      return map;
+    }).toList();
   }
 
   Future<void> _sendMessage() async {
@@ -396,11 +504,13 @@ class _ChatPageState extends State<ChatPage> {
     if (_selectedUser == null && _selectedGroup == null) return;
 
     _stopTypingSignal();
-    _msgController.clear();
+    final replySnapshot = _replyTo == null ? null : Map<String, dynamic>.from(_replyTo!);
     final replyId = _replyToId;
+    _msgController.clear();
     setState(() {
       _isSending = true;
       _replyTo = null;
+      _emojiOpen = false;
     });
 
     Map<String, dynamic> result;
@@ -414,25 +524,51 @@ class _ChatPageState extends State<ChatPage> {
     setState(() => _isSending = false);
     if (result['success'] == true) {
       final payload = result['data'];
-      setState(() {
-        _messages.add(payload is Map
-            ? {
-                ...Map<String, dynamic>.from(payload),
-                'is_own': true,
-                'is_read': payload['is_read'] == true,
-              }
-            : {
-                'message': text,
-                'is_own': true,
-                'is_read': false,
-                'timestamp': DateTime.now().toIso8601String(),
-              });
-      });
+      Map<String, dynamic> local;
+      if (payload is Map) {
+        local = Map<String, dynamic>.from(payload);
+        local['is_own'] = true;
+        local['is_read'] = payload['is_read'] == true;
+      } else {
+        local = {
+          'message': text,
+          'is_own': true,
+          'is_read': false,
+          'message_type': 'text',
+          'timestamp': DateTime.now().toIso8601String(),
+        };
+      }
+      // Always prefer a usable quote: API reply, else composer snapshot, else parent in thread.
+      Map<String, dynamic>? quote;
+      if (local['reply'] is Map) {
+        quote = Map<String, dynamic>.from(local['reply'] as Map);
+      } else if (replySnapshot != null) {
+        quote = {
+          'id': replySnapshot['id'],
+          'sender_name': replySnapshot['sender_name'],
+          'preview': replySnapshot['preview'],
+          'message_type': replySnapshot['message_type'],
+        };
+      } else if (replyId != null) {
+        for (final m in _messages) {
+          if (m is Map && _asInt(m['id']) == replyId) {
+            quote = _quoteFromParent(Map<String, dynamic>.from(m));
+            break;
+          }
+        }
+      }
+      if (quote != null) {
+        local['reply'] = quote;
+        local['reply_to'] = replyId ?? quote['id'];
+        _cacheReplyQuote(local['id'], quote);
+      }
+      setState(() => _messages = [..._messages, local]);
       _scrollToBottom();
       _msgFocus.requestFocus();
     } else {
       _msgController.text = text;
       _msgController.selection = TextSelection.collapsed(offset: text.length);
+      if (replySnapshot != null) setState(() => _replyTo = replySnapshot);
       _showError(result['error']?.toString() ?? 'Failed to send message');
     }
   }
@@ -448,19 +584,57 @@ class _ChatPageState extends State<ChatPage> {
   void _setReplyTo(dynamic msg) {
     if (msg == null) return;
     final map = Map<String, dynamic>.from(msg as Map);
+    final id = map['id'];
+    if (id == null) {
+      _showError('Cannot reply to this message');
+      return;
+    }
     final preview = _replyPreviewFromMessage(map);
     setState(() {
+      _emojiOpen = false;
       _replyTo = {
-        'id': map['id'],
-        'sender_name': map['sender_name'] ??
-            map['sender_full_name'] ??
-            map['sender_username'] ??
-            (map['is_own'] == true ? 'You' : 'User'),
+        'id': id,
+        'sender_name': map['is_own'] == true
+            ? 'You'
+            : (map['sender_name'] ??
+                map['sender_full_name'] ??
+                map['sender_username'] ??
+                'User'),
         'preview': preview,
         'message_type': map['message_type'] ?? 'text',
       };
     });
     _msgFocus.requestFocus();
+  }
+
+  void _toggleEmojiPanel() {
+    if (_isSending) return;
+    if (_emojiOpen) {
+      setState(() => _emojiOpen = false);
+      _msgFocus.requestFocus();
+      return;
+    }
+    // Remember keyboard height, then replace keyboard with emoji panel.
+    final inset = MediaQuery.viewInsetsOf(context).bottom;
+    if (inset > 120) _emojiPanelHeight = inset;
+    _msgFocus.unfocus();
+    Future.delayed(const Duration(milliseconds: 80), () {
+      if (!mounted) return;
+      setState(() => _emojiOpen = true);
+    });
+  }
+
+  void _insertEmoji(String emoji) {
+    final t = _msgController.text;
+    final sel = _msgController.selection;
+    final start = sel.isValid ? sel.start : t.length;
+    final end = sel.isValid ? sel.end : t.length;
+    final next = t.replaceRange(start, end, emoji);
+    _msgController.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+    );
+    setState(() {});
   }
 
   String _replyPreviewFromMessage(Map<String, dynamic> msg) {
@@ -475,6 +649,55 @@ class _ChatPageState extends State<ChatPage> {
     final text = (msg['message'] ?? '').toString().trim();
     if (text.isEmpty) return 'Message';
     return text.length > 100 ? '${text.substring(0, 100)}…' : text;
+  }
+
+  Future<void> _startCall(CallKind kind) async {
+    if (_selectedUser == null || !PlatformCapabilities.voiceVideoCall) return;
+    if (CallService.instance.isInCall) {
+      _showError('Already in a call');
+      return;
+    }
+    final peerId = _selectedUser['id'] is int
+        ? _selectedUser['id'] as int
+        : int.tryParse('${_selectedUser['id']}');
+    if (peerId == null) return;
+
+    final name = _selectedUser['full_name']?.toString().trim().isNotEmpty == true
+        ? _selectedUser['full_name'].toString()
+        : (_selectedUser['username']?.toString() ?? 'Contact');
+
+    if (widget.notificationService == null) {
+      _showError('Call service unavailable');
+      return;
+    }
+    if (_myUserId == null) await _loadMyUserId();
+    if (_myUserId == null) {
+      _showError('Could not start call');
+      return;
+    }
+    CallService.instance.bind(
+      notificationService: widget.notificationService!,
+      apiService: widget.apiService,
+      myUserId: _myUserId!,
+    );
+
+    final ok = await CallService.instance.startOutgoing(
+      peerId: peerId,
+      peerName: name,
+      kind: kind,
+    );
+    if (!ok) {
+      _showError('Could not start call');
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: '/call'),
+        builder: (_) => const CallPage(),
+        fullscreenDialog: true,
+      ),
+    );
   }
 
   // ─── Voice recording (Android/iOS: record package, Windows: PowerShell) ───
@@ -741,6 +964,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       _showError('Image must be under 10MB');
       return;
     }
+    final replySnapshot = _replyTo == null ? null : Map<String, dynamic>.from(_replyTo!);
     final replyId = _replyToId;
     setState(() {
       _isSending = true;
@@ -765,8 +989,18 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     if (!mounted) return;
     setState(() => _isSending = false);
     if (r['success'] == true) {
+      final payload = r['data'];
+      if (payload is Map && replySnapshot != null) {
+        _cacheReplyQuote(payload['id'], {
+          'id': replySnapshot['id'],
+          'sender_name': replySnapshot['sender_name'],
+          'preview': replySnapshot['preview'],
+          'message_type': replySnapshot['message_type'],
+        });
+      }
       _refreshMessages();
     } else {
+      if (replySnapshot != null) setState(() => _replyTo = replySnapshot);
       _showError(r['error']?.toString() ?? 'Failed to send image');
     }
   }
@@ -782,10 +1016,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       return;
     }
     final file = File(pf.path!);
-    setState(() => _isSending = true);
-    final bytes = await file.readAsBytes();
+    final replySnapshot = _replyTo == null ? null : Map<String, dynamic>.from(_replyTo!);
     final replyId = _replyToId;
-    setState(() => _replyTo = null);
+    setState(() {
+      _isSending = true;
+      _replyTo = null;
+    });
+    final bytes = await file.readAsBytes();
     Map<String, dynamic> r;
     if (_selectedUser != null) {
       r = await widget.apiService.sendFileMessage(
@@ -805,8 +1042,18 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     if (!mounted) return;
     setState(() => _isSending = false);
     if (r['success'] == true) {
+      final payload = r['data'];
+      if (payload is Map && replySnapshot != null) {
+        _cacheReplyQuote(payload['id'], {
+          'id': replySnapshot['id'],
+          'sender_name': replySnapshot['sender_name'],
+          'preview': replySnapshot['preview'],
+          'message_type': replySnapshot['message_type'],
+        });
+      }
       _refreshMessages();
     } else {
+      if (replySnapshot != null) setState(() => _replyTo = replySnapshot);
       _showError(r['error']?.toString() ?? 'Failed to send file');
     }
   }
@@ -831,8 +1078,11 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   }
 
   void _refreshMessages() {
-    if (_selectedUser != null) { _selectUser(_selectedUser); }
-    else if (_selectedGroup != null) { _selectGroup(_selectedGroup); }
+    if (_selectedUser != null) {
+      _selectUser(_selectedUser, resetQuotes: false);
+    } else if (_selectedGroup != null) {
+      _selectGroup(_selectedGroup, resetQuotes: false);
+    }
   }
 
   Future<void> _createGroup(String name, String desc, List<int> memberIds) async {
@@ -1391,6 +1641,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     setState(() {
                       _selectedUser = null;
                       _selectedGroup = null;
+                      _replyTo = null;
+                      _emojiOpen = false;
                       _refreshTimer?.cancel();
                     });
                   },
@@ -1468,6 +1720,20 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   ],
                 ),
               ),
+              if (!isGroup && PlatformCapabilities.voiceVideoCall) ...[
+                IconButton(
+                  tooltip: 'Video call',
+                  onPressed: _selectedUser == null ? null : () => _startCall(CallKind.video),
+                  icon: const Icon(Icons.videocam_rounded, color: Color(0xFFE9EDEF), size: 24),
+                  visualDensity: VisualDensity.compact,
+                ),
+                IconButton(
+                  tooltip: 'Voice call',
+                  onPressed: _selectedUser == null ? null : () => _startCall(CallKind.audio),
+                  icon: const Icon(Icons.call_rounded, color: Color(0xFFE9EDEF), size: 22),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
               if (isGroup)
                 IconButton(
                   tooltip: 'Group settings',
@@ -1521,180 +1787,206 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
-  Future<void> _showEmojiPicker() async {
-    const emojis = [
-      '😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '🤔', '😢',
-      '😭', '😡', '👍', '👎', '👏', '🙏', '🔥', '❤️', '💯', '✅',
-      '🎉', '🤝', '💪', '🙌', '😅', '😉', '😴', '🤗', '🫡', '🫶',
-    ];
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: const Color(0xFF1F2C34),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              GridView.builder(
-                shrinkWrap: true,
-                itemCount: emojis.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 8,
-                  mainAxisSpacing: 4,
-                  crossAxisSpacing: 4,
-                ),
-                itemBuilder: (_, i) {
-                  final e = emojis[i];
-                  return InkWell(
-                    borderRadius: BorderRadius.circular(8),
-                    onTap: () {
-                      final t = _msgController.text;
-                      final sel = _msgController.selection;
-                      final start = sel.start >= 0 ? sel.start : t.length;
-                      final end = sel.end >= 0 ? sel.end : t.length;
-                      final next = t.replaceRange(start, end, e);
-                      _msgController.value = TextEditingValue(
-                        text: next,
-                        selection: TextSelection.collapsed(offset: start + e.length),
-                      );
-                      setState(() {});
-                    },
-                    child: Center(child: Text(e, style: const TextStyle(fontSize: 24))),
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    _msgFocus.requestFocus();
-  }
+  static const _emojiList = [
+    '😀', '😁', '😂', '🤣', '😊', '😇', '🙂', '😉', '😍', '😘',
+    '😗', '😚', '😋', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫',
+    '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬',
+    '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮',
+    '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐',
+    '😕', '😟', '🙁', '😮', '😯', '😲', '😳', '🥺', '😦', '😧',
+    '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓',
+    '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀',
+    '👍', '👎', '👌', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉',
+    '👆', '👇', '☝️', '✋', '🤚', '🖐', '🖖', '👏', '🙌', '🤲',
+    '🤝', '🙏', '💪', '🦾', '🧠', '👀', '👁️', '👅', '👄', '💋',
+    '💘', '💝', '💖', '💗', '💓', '💞', '💕', '❣️', '💔', '❤️',
+    '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💯', '💢',
+    '💥', '💫', '💦', '💨', '🕳', '💣', '💬', '👁‍🗨', '🗨', '🗯',
+    '💭', '💤', '🔥', '⭐', '🌟', '✨', '⚡', '☀️', '🌈', '☁️',
+    '🎉', '🎊', '🎈', '🎁', '🏆', '🥇', '🎯', '⚽', '🏀', '🎮',
+    '✅', '❌', '❓', '❗', '💬', '📝', '📌', '📎', '🔗', '🔒',
+  ];
 
-  /// WhatsApp-style composer: [emoji | Message | 📎 📷]  (🎤/➤)
+  /// WhatsApp-style: input stays visible; emoji panel replaces the keyboard below.
   Widget _buildMessageComposer() {
     final mobile = Responsive.isMobile(context);
     final hasText = _hasDraft;
+    final keyboard = MediaQuery.viewInsetsOf(context).bottom;
+    if (keyboard > 120) {
+      _emojiPanelHeight = keyboard;
+    }
     const waGreen = Color(0xFF00A884);
     const inputBg = Color(0xFF2A3942);
     const iconGrey = Color(0xFF8696A0);
 
     return Container(
       color: const Color(0xFF0B141A),
-      padding: EdgeInsets.fromLTRB(mobile ? 6 : 12, 6, mobile ? 6 : 12, 6),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_replyTo != null) _buildReplyComposerBar(),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(mobile ? 6 : 12, 6, mobile ? 6 : 12, 6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Expanded(
-                  child: Container(
-                    constraints: const BoxConstraints(minHeight: 48, maxHeight: 140),
-                    decoration: BoxDecoration(
-                      color: inputBg,
-                      borderRadius: BorderRadius.circular(24),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        IconButton(
-                          tooltip: 'Emoji',
-                          onPressed: _isSending ? null : _showEmojiPicker,
-                          icon: const Icon(Icons.emoji_emotions_outlined, color: iconGrey, size: 26),
+                if (_replyTo != null) _buildReplyComposerBar(),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 48, maxHeight: 140),
+                        decoration: BoxDecoration(
+                          color: inputBg,
+                          borderRadius: BorderRadius.circular(24),
                         ),
-                        Expanded(
-                          child: CallbackShortcuts(
-                            bindings: {
-                              const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
-                              const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
-                            },
-                            child: TextField(
-                              controller: _msgController,
-                              focusNode: _msgFocus,
-                              enabled: !_isSending,
-                              minLines: 1,
-                              maxLines: 6,
-                              keyboardType: TextInputType.multiline,
-                              textInputAction: TextInputAction.newline,
-                              textCapitalization: TextCapitalization.sentences,
-                              style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 16, height: 1.35),
-                              cursorColor: waGreen,
-                              decoration: const InputDecoration(
-                                isDense: true,
-                                hintText: 'Message',
-                                hintStyle: TextStyle(color: iconGrey, fontSize: 16),
-                                border: InputBorder.none,
-                                contentPadding: EdgeInsets.symmetric(vertical: 12),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            IconButton(
+                              tooltip: _emojiOpen ? 'Keyboard' : 'Emoji',
+                              onPressed: _isSending ? null : _toggleEmojiPanel,
+                              icon: Icon(
+                                _emojiOpen ? Icons.keyboard_alt_outlined : Icons.emoji_emotions_outlined,
+                                color: iconGrey,
+                                size: 26,
                               ),
                             ),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Attach',
-                          onPressed: _isSending ? null : _showAttachSheet,
-                          icon: const Icon(Icons.attach_file_rounded, color: iconGrey, size: 24),
-                        ),
-                        if (!hasText)
-                          IconButton(
-                            tooltip: 'Camera',
-                            onPressed: _isSending ? null : () => unawaited(_takePhoto()),
-                            icon: const Icon(Icons.photo_camera_outlined, color: iconGrey, size: 24),
-                          ),
-                        const SizedBox(width: 2),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 1),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      customBorder: const CircleBorder(),
-                      onTap: _isSending ? null : (hasText ? _sendMessage : _toggleRecording),
-                      child: Ink(
-                        width: 48,
-                        height: 48,
-                        decoration: const BoxDecoration(
-                          color: waGreen,
-                          shape: BoxShape.circle,
-                        ),
-                        child: _isSending
-                            ? const Padding(
-                                padding: EdgeInsets.all(14),
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                              )
-                            : Icon(
-                                hasText ? Icons.send_rounded : Icons.mic_rounded,
-                                color: Colors.white,
-                                size: 22,
+                            Expanded(
+                              child: CallbackShortcuts(
+                                bindings: {
+                                  const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
+                                  const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
+                                },
+                                child: TextField(
+                                  controller: _msgController,
+                                  focusNode: _msgFocus,
+                                  enabled: !_isSending,
+                                  minLines: 1,
+                                  maxLines: 6,
+                                  keyboardType: TextInputType.multiline,
+                                  textInputAction: TextInputAction.newline,
+                                  textCapitalization: TextCapitalization.sentences,
+                                  style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 16, height: 1.35),
+                                  cursorColor: waGreen,
+                                  onTap: () {
+                                    if (_emojiOpen) setState(() => _emojiOpen = false);
+                                  },
+                                  decoration: const InputDecoration(
+                                    isDense: true,
+                                    hintText: 'Message',
+                                    hintStyle: TextStyle(color: iconGrey, fontSize: 16),
+                                    border: InputBorder.none,
+                                    contentPadding: EdgeInsets.symmetric(vertical: 12),
+                                  ),
+                                ),
                               ),
+                            ),
+                            IconButton(
+                              tooltip: 'Attach',
+                              onPressed: _isSending
+                                  ? null
+                                  : () {
+                                      if (_emojiOpen) setState(() => _emojiOpen = false);
+                                      unawaited(_showAttachSheet());
+                                    },
+                              icon: const Icon(Icons.attach_file_rounded, color: iconGrey, size: 24),
+                            ),
+                            if (!hasText)
+                              IconButton(
+                                tooltip: 'Camera',
+                                onPressed: _isSending
+                                    ? null
+                                    : () {
+                                        if (_emojiOpen) setState(() => _emojiOpen = false);
+                                        unawaited(_takePhoto());
+                                      },
+                                icon: const Icon(Icons.photo_camera_outlined, color: iconGrey, size: 24),
+                              ),
+                            const SizedBox(width: 2),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
+                    const SizedBox(width: 6),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 1),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: _isSending ? null : (hasText ? _sendMessage : _toggleRecording),
+                          child: Ink(
+                            width: 48,
+                            height: 48,
+                            decoration: const BoxDecoration(
+                              color: waGreen,
+                              shape: BoxShape.circle,
+                            ),
+                            child: _isSending
+                                ? const Padding(
+                                    padding: EdgeInsets.all(14),
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                  )
+                                : Icon(
+                                    hasText ? Icons.send_rounded : Icons.mic_rounded,
+                                    color: Colors.white,
+                                    size: 22,
+                                  ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+          if (_emojiOpen)
+            SizedBox(
+              height: _emojiPanelHeight.clamp(250, 360),
+              child: ColoredBox(
+                color: const Color(0xFF1F2C34),
+                child: Column(
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06))),
+                      ),
+                      child: const Text(
+                        'Emoji',
+                        style: TextStyle(color: Color(0xFF8696A0), fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Expanded(
+                      child: GridView.builder(
+                        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                        itemCount: _emojiList.length,
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 8,
+                          mainAxisSpacing: 2,
+                          crossAxisSpacing: 2,
+                        ),
+                        itemBuilder: (_, i) {
+                          final e = _emojiList[i];
+                          return InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: () => _insertEmoji(e),
+                            child: Center(child: Text(e, style: const TextStyle(fontSize: 26))),
+                          );
+                        },
+                      ),
+                    ),
+                    SizedBox(height: MediaQuery.paddingOf(context).bottom),
+                  ],
+                ),
+              ),
+            )
+          else
+            SizedBox(height: MediaQuery.paddingOf(context).bottom),
+        ],
       ),
     );
   }
@@ -1781,7 +2073,33 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final imageUrl = msg['image_url'];
     final fileUrl = msg['file_url'];
     final fileName = msg['file_name'] ?? 'file';
-    final reply = msg['reply'] is Map ? Map<String, dynamic>.from(msg['reply'] as Map) : null;
+    final replyRaw = msg['reply'];
+    Map<String, dynamic>? reply;
+    if (replyRaw is Map) {
+      reply = Map<String, dynamic>.from(replyRaw);
+    } else {
+      final mid = _asInt(msg['id']);
+      if (mid != null && _replyQuotesByMsgId.containsKey(mid)) {
+        reply = Map<String, dynamic>.from(_replyQuotesByMsgId[mid]!);
+      } else {
+        final parentId = _asInt(msg['reply_to'] ?? msg['reply_to_id']);
+        if (parentId != null) {
+          for (final m in _messages) {
+            if (m is Map && _asInt(m['id']) == parentId) {
+              reply = _quoteFromParent(Map<String, dynamic>.from(m));
+              if (mid != null) _cacheReplyQuote(mid, reply);
+              break;
+            }
+          }
+        }
+      }
+    }
+    // Skip empty quotes (looks like "only reply text, no parent").
+    if (reply != null &&
+        (reply['preview'] ?? '').toString().trim().isEmpty &&
+        (reply['sender_name'] ?? '').toString().trim().isEmpty) {
+      reply = null;
+    }
     const ownBubble = Color(0xFF005C4B);
     const otherBubble = Color(0xFF1F2C34);
 

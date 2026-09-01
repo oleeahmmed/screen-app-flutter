@@ -13,12 +13,17 @@ import 'services/api_service.dart';
 import 'services/user_data_service.dart';
 import 'services/screenshot_service.dart';
 import 'services/notification_service.dart';
+import 'services/call_service.dart';
+import 'services/call_navigation.dart';
+import 'services/call_tokens.dart';
+import 'services/push_service.dart';
 import 'services/local_notification_service.dart';
 import 'pages/login_page.dart';
 import 'pages/dashboard_page.dart';
 import 'pages/tasks_page.dart';
 import 'pages/work_hub_page.dart';
 import 'pages/chat_page.dart';
+import 'pages/call_page.dart';
 import 'pages/notifications_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/peer2peer_page.dart';
@@ -51,6 +56,7 @@ void main() async {
   }
   AppSession.screenshotIntervalSeconds = AppConfig.screenshotInterval;
   await LocalNotificationService.initialize();
+  await PushService.instance.initialize();
   runApp(const MyApp());
 }
 
@@ -171,6 +177,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    CallNavigation.navigatorKey = appNavigatorKey;
     WidgetsBinding.instance.addObserver(this);
     LocalNotificationService.onTap = (_) {
       if (_isLoggedIn && mounted) unawaited(_openNotifications());
@@ -187,6 +194,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenSubmitReport = _openSubmitReport;
     AppNavigation.instance.onOpenNotifications = _openNotifications;
     AppNavigation.instance.onOpenProfile = _openProfile;
+    AppNavigationBridge.openChatTab = () => _navigateToTab(2);
+    AppNavigationBridge.openNotifications = _openNotifications;
     _notificationService.onUnreadCountChanged = _onUnreadCountChanged;
     _initializeApp();
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
@@ -206,100 +215,124 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('auth_token');
+    final refresh = prefs.getString('refresh_token');
     final username = prefs.getString('username');
     final accessGranted = prefs.getBool('access_granted') ?? false;
 
-    if (token != null && username != null && token.isNotEmpty) {
+    final hasSession = (token != null && token.isNotEmpty) ||
+        (refresh != null && refresh.isNotEmpty);
+
+    if (!hasSession || username == null || username.isEmpty) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    if (token != null && token.isNotEmpty) {
       _apiService.setToken(token);
-      try {
-        final result = await _apiService.accessCheck();
-        if (result['success']) {
-          final data = result['data'];
-          if (data['access_granted'] == true) {
-            if (data['user'] != null) {
-              await prefs.setString('user_id', data['user']['id']?.toString() ?? '');
-              await prefs.setString('email', data['user']['email'] ?? '');
-              await prefs.setString('full_name', data['user']['full_name'] ?? username);
-            }
-            if (data['employee'] != null) {
-              final emp = data['employee'];
-              await UserDataService.saveEmployeeId(emp);
-              await prefs.setString('designation', emp['designation'] ?? '');
-              await UserDataService.saveEmployeeRoleFlags(
-                emp is Map ? Map<String, dynamic>.from(emp) : null,
-              );
-              final c = emp['screenshot_monitoring_consent'] == true;
-              await prefs.setBool('screenshot_monitoring_consent', c);
-              AppSession.setConsent(c);
-              await prefs.setInt(
-                'data_privacy_notice_accepted_version',
-                _intFromDynamic(emp['data_privacy_notice_accepted_version'], 0),
-              );
-            }
-            await prefs.setInt(
-              'data_privacy_notice_server_version',
-              _intFromDynamic(data['data_privacy_notice_version'], AppConfig.dataPrivacyNoticeVersion),
-            );
-            if (data['profile_photo'] != null) {
-              await prefs.setString('profile_photo_url', data['profile_photo'].toString());
-            }
-            if (data['company'] != null) {
-              await prefs.setString('company_id', data['company']['id']?.toString() ?? '');
-              await prefs.setString('company_name', data['company']['name'] ?? '');
-            }
-            if (data['subscription'] != null) {
-              await prefs.setString('subscription_plan', data['subscription']['plan'] ?? '');
-              await prefs.setString('subscription_status', data['subscription']['status'] ?? '');
-            }
-            await prefs.setBool('access_granted', true);
-            if (!mounted) return;
-            setState(() {
-              _isLoggedIn = true;
-              _username = username;
-              _isLoading = false;
-            });
-            _ensurePageBuilt(0);
-            _startNotifications();
-            if (data['employee'] != null) {
-              _schedulePrivacyNoticeDialog();
-              _scheduleClosingReportDialog();
-            } else {
-              final sv = _intFromDynamic(
-                data['data_privacy_notice_version'],
-                AppConfig.dataPrivacyNoticeVersion,
-              );
-              await prefs.setInt('data_privacy_notice_server_version', sv);
-              await prefs.setInt('data_privacy_notice_accepted_version', sv);
-            }
-            return;
-          }
-          await prefs.clear();
-          if (!mounted) return;
-          setState(() => _isLoading = false);
-          return;
-        }
-        await prefs.clear();
-        if (!mounted) return;
-        setState(() => _isLoading = false);
-      } catch (e) {
-        if (accessGranted) {
-          AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
+    }
+
+    // WhatsApp-style: refresh token proactively so session stays alive for months.
+    if (refresh != null && refresh.isNotEmpty) {
+      await _apiService.refreshAccessToken();
+    }
+
+    try {
+      final result = await _apiService.accessCheck();
+      if (result['success'] == true) {
+        final data = result['data'];
+        if (data['access_granted'] == true) {
+          await _applyAccessCheckPayload(data, prefs, username);
           if (!mounted) return;
           setState(() {
             _isLoggedIn = true;
             _username = username;
             _isLoading = false;
           });
+          _ensurePageBuilt(0);
           _startNotifications();
+          if (data['employee'] != null) {
+            _schedulePrivacyNoticeDialog();
+            _scheduleClosingReportDialog();
+          }
           return;
         }
-        await prefs.clear();
+        // Server explicitly denied access — clear auth only.
+        await UserDataService.clearAuthSession();
         if (!mounted) return;
         setState(() => _isLoading = false);
+        return;
       }
-    } else {
+    } catch (_) {
+      // Network/server unreachable — stay logged in if we had a valid session.
+    }
+
+    if (accessGranted) {
+      AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
       if (!mounted) return;
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoggedIn = true;
+        _username = username;
+        _isLoading = false;
+      });
+      _ensurePageBuilt(0);
+      _startNotifications();
+      return;
+    }
+
+    await UserDataService.clearAuthSession();
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _applyAccessCheckPayload(
+    Map<String, dynamic> data,
+    SharedPreferences prefs,
+    String username,
+  ) async {
+    if (data['user'] != null) {
+      await prefs.setString('user_id', data['user']['id']?.toString() ?? '');
+      await prefs.setString('email', data['user']['email'] ?? '');
+      await prefs.setString('full_name', data['user']['full_name'] ?? username);
+    }
+    if (data['employee'] != null) {
+      final emp = data['employee'];
+      await UserDataService.saveEmployeeId(emp);
+      await prefs.setString('designation', emp['designation'] ?? '');
+      await UserDataService.saveEmployeeRoleFlags(
+        emp is Map ? Map<String, dynamic>.from(emp) : null,
+      );
+      final c = emp['screenshot_monitoring_consent'] == true;
+      await prefs.setBool('screenshot_monitoring_consent', c);
+      AppSession.setConsent(c);
+      await prefs.setInt(
+        'data_privacy_notice_accepted_version',
+        _intFromDynamic(emp['data_privacy_notice_accepted_version'], 0),
+      );
+    }
+    await prefs.setInt(
+      'data_privacy_notice_server_version',
+      _intFromDynamic(data['data_privacy_notice_version'], AppConfig.dataPrivacyNoticeVersion),
+    );
+    if (data['profile_photo'] != null) {
+      await prefs.setString('profile_photo_url', data['profile_photo'].toString());
+    }
+    if (data['company'] != null) {
+      await prefs.setString('company_id', data['company']['id']?.toString() ?? '');
+      await prefs.setString('company_name', data['company']['name'] ?? '');
+    }
+    if (data['subscription'] != null) {
+      await prefs.setString('subscription_plan', data['subscription']['plan'] ?? '');
+      await prefs.setString('subscription_status', data['subscription']['status'] ?? '');
+    }
+    await prefs.setBool('access_granted', true);
+    if (data['employee'] == null) {
+      final sv = _intFromDynamic(
+        data['data_privacy_notice_version'],
+        AppConfig.dataPrivacyNoticeVersion,
+      );
+      await prefs.setInt('data_privacy_notice_server_version', sv);
+      await prefs.setInt('data_privacy_notice_accepted_version', sv);
     }
   }
 
@@ -309,6 +342,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       await p.setString('auth_token', token);
       await p.setString('username', username);
     });
+    final access = await _apiService.accessCheck();
+    if (access['success'] == true && access['data'] is Map) {
+      final prefs = await SharedPreferences.getInstance();
+      await _applyAccessCheckPayload(
+        Map<String, dynamic>.from(access['data'] as Map),
+        prefs,
+        username,
+      );
+    }
     if (!mounted) return;
     setState(() {
       _isLoggedIn = true;
@@ -390,15 +432,66 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   void _startNotifications() {
+    unawaited(_startNotificationsAsync());
+  }
+
+  Future<void> _startNotificationsAsync() async {
     _notifPushSub?.cancel();
-    _notificationService.start();
+    await _bindCallService();
+    await _notificationService.start();
     _notifPushSub = _notificationService.pushStream.listen(_onPushNotification);
     unawaited(_ensureMobileNotificationPermission());
+    unawaited(PushService.instance.bindApi(_apiService));
+  }
+
+  Future<void> _bindCallService() async {
+    var uid = int.tryParse(await UserDataService.getUserId());
+    if (uid == null) {
+      final r = await _apiService.accessCheck();
+      if (r['success'] == true) {
+        final user = r['data']?['user'];
+        if (user is Map) {
+          uid = int.tryParse('${user['id'] ?? ''}');
+          if (uid != null) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('user_id', uid.toString());
+          }
+        }
+      }
+    }
+    if (uid == null) return;
+    CallService.instance.bind(
+      notificationService: _notificationService,
+      apiService: _apiService,
+      myUserId: uid,
+    );
+    CallService.instance.onIncomingCall = (_) {
+      if (!mounted) return;
+      _openCallPage();
+    };
+  }
+
+  void _openCallPage() {
+    if (!mounted || !_isLoggedIn) return;
+    final nav = appNavigatorKey.currentState;
+    if (nav == null) return;
+    final top = ModalRoute.of(nav.context)?.settings.name;
+    if (top == '/call') return;
+    nav.push(
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: '/call'),
+        builder: (_) => const CallPage(),
+        fullscreenDialog: true,
+      ),
+    );
   }
 
   void _stopNotifications() {
     _notifPushSub?.cancel();
     _notifPushSub = null;
+    if (CallService.instance.isInCall) CallService.instance.hangUp();
+    CallService.instance.unbind();
+    unawaited(PushService.instance.unregister());
     _notificationService.stop();
     NotificationBanner.hide();
   }
@@ -413,6 +506,19 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final rawId = data['id'];
     final notifId = rawId is int ? rawId : int.tryParse('$rawId') ?? title.hashCode;
     final isChat = notifType == 'new_message' || notifType == 'new_group_message';
+
+    if (notifType == 'call_invite') {
+      final call = CallTokens.chatMessageToCallSignal({
+        'message': message,
+        'sender_id': data['sender_id'],
+        'sender_name': title.replaceFirst('Incoming call from ', ''),
+      });
+      if (call != null) {
+        unawaited(CallService.instance.handleRemoteSignal(call));
+        if (mounted) _openCallPage();
+      }
+      return;
+    }
 
     if (inForeground) {
       NotificationBanner.show(

@@ -20,5 +20,6 @@ class LocalNotificationService {
     required String title,
     required String body,
     String? payload,
+    String channelId = 'aims_alerts_v2',
   }) async {}
 }

@@ -14,6 +14,10 @@ abstract final class PlatformCapabilities {
   static bool get peerToPeerFileTransfer =>
       Platform.isAndroid || Platform.isIOS || Platform.isWindows;
 
+  /// 1:1 audio/video calls — same platforms as P2P (WebRTC).
+  static bool get voiceVideoCall =>
+      Platform.isAndroid || Platform.isIOS || Platform.isWindows;
+
   /// Drag-and-drop file targets — skip on Linux (GTK drag + desktop_drop edge cases).
   static bool get fileDragDrop => Platform.isMacOS || Platform.isWindows;
 
