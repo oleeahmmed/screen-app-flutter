@@ -13,6 +13,10 @@ import 'services/api_service.dart';
 import 'services/user_data_service.dart';
 import 'services/screenshot_service.dart';
 import 'services/notification_service.dart';
+import 'services/call_service.dart';
+import 'services/call_navigation.dart';
+import 'services/call_tokens.dart';
+import 'services/push_service.dart';
 import 'services/local_notification_service.dart';
 import 'services/push_keepalive_service.dart';
 import 'services/fcm_push_service.dart';
@@ -22,6 +26,7 @@ import 'pages/dashboard_page.dart';
 import 'pages/tasks_page.dart';
 import 'pages/work_hub_page.dart';
 import 'pages/chat_page.dart';
+import 'pages/call_page.dart';
 import 'pages/notifications_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/peer2peer_page.dart';
@@ -36,6 +41,7 @@ import 'widgets/tool_page_scaffold.dart';
 import 'widgets/notification_banner.dart';
 import 'widgets/app_tab_shell.dart';
 import 'services/app_navigation.dart';
+import 'utils/platform_capabilities.dart';
 
 /// Root navigator — used to close pushed routes on logout.
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
@@ -55,8 +61,7 @@ void main() async {
   }
   AppSession.screenshotIntervalSeconds = AppConfig.screenshotInterval;
   await LocalNotificationService.initialize();
-  await FcmPushService.initialize();
-  await PushKeepAlive.configure();
+  await PushService.instance.initialize();
   runApp(const MyApp());
 }
 
@@ -115,15 +120,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Widget? _dashboardPage;
   Widget? _tasksPage;
   Widget? _chatPage;
-  Widget? _notificationsPage;
-  Widget? _profilePage;
+  Widget? _vaultPage;
+  Widget? _projectPage;
 
   void _clearPageCache() {
     _dashboardPage = null;
     _tasksPage = null;
     _chatPage = null;
-    _notificationsPage = null;
-    _profilePage = null;
+    _vaultPage = null;
+    _projectPage = null;
   }
 
   void _ensurePageBuilt(int index) {
@@ -137,29 +142,30 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           onLogout: _handleLogout,
         );
       case 1:
-        _tasksPage ??= AppTheme.homeGlassBackground(
-          child: SafeArea(
-            bottom: false,
-            child: TasksPage(apiService: _apiService),
-          ),
+        _tasksPage ??= SafeArea(
+          top: false,
+          bottom: false,
+          child: TasksPage(apiService: _apiService),
         );
       case 2:
-        _chatPage ??= AppTheme.homeGlassBackground(
-          child: ChatPage(
-            apiService: _apiService,
-            notificationService: _notificationService,
-            callService: _callService,
-          ),
+        _chatPage ??= ChatPage(
+          apiService: _apiService,
+          notificationService: _notificationService,
         );
       case 3:
-        _notificationsPage ??= NotificationsPage(
-          apiService: _apiService,
-          refreshToken: _notifListRefreshToken,
-          onNotificationsChanged: () => _notificationService.syncUnreadCount(),
+        _vaultPage ??= SafeArea(
+          top: false,
+          bottom: false,
+          child: VaultHubPage(
+            apiService: _apiService,
+            onLogout: _handleLogout,
+            embeddedInTabs: true,
+          ),
         );
       case 4:
-        _profilePage ??= ProfilePage(
+        _projectPage ??= WorkHubPage(
           apiService: _apiService,
+          screenshotService: _screenshotService,
           onLogout: _handleLogout,
         );
     }
@@ -171,17 +177,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       _dashboardPage ?? const SizedBox.shrink(),
       _tasksPage ?? const SizedBox.shrink(),
       _chatPage ?? const SizedBox.shrink(),
-      _notificationsPage ?? const SizedBox.shrink(),
-      _profilePage ?? const SizedBox.shrink(),
+      _vaultPage ?? const SizedBox.shrink(),
+      _projectPage ?? const SizedBox.shrink(),
     ];
   }
 
   @override
   void initState() {
     super.initState();
+    CallNavigation.navigatorKey = appNavigatorKey;
     WidgetsBinding.instance.addObserver(this);
     LocalNotificationService.onTap = (_) {
-      if (_isLoggedIn && mounted) _onNavSelected(AppNavigation.tabAlerts);
+      if (_isLoggedIn && mounted) unawaited(_openNotifications());
     };
     AppNavigation.instance.onSelectTab = _onNavSelected;
     AppNavigation.instance.onNavigateToTab = _navigateToTab;
@@ -193,6 +200,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenProject = _openProjectTool;
     AppNavigation.instance.onOpenP2P = _openP2P;
     AppNavigation.instance.onOpenSubmitReport = _openSubmitReport;
+    AppNavigation.instance.onOpenNotifications = _openNotifications;
+    AppNavigation.instance.onOpenProfile = _openProfile;
+    AppNavigationBridge.openChatTab = () => _navigateToTab(2);
+    AppNavigationBridge.openNotifications = _openNotifications;
     _notificationService.onUnreadCountChanged = _onUnreadCountChanged;
     _initializeApp();
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
@@ -212,100 +223,124 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('auth_token');
+    final refresh = prefs.getString('refresh_token');
     final username = prefs.getString('username');
     final accessGranted = prefs.getBool('access_granted') ?? false;
 
-    if (token != null && username != null && token.isNotEmpty) {
+    final hasSession = (token != null && token.isNotEmpty) ||
+        (refresh != null && refresh.isNotEmpty);
+
+    if (!hasSession || username == null || username.isEmpty) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    if (token != null && token.isNotEmpty) {
       _apiService.setToken(token);
-      try {
-        final result = await _apiService.accessCheck();
-        if (result['success']) {
-          final data = result['data'];
-          if (data['access_granted'] == true) {
-            if (data['user'] != null) {
-              await prefs.setString('user_id', data['user']['id']?.toString() ?? '');
-              await prefs.setString('email', data['user']['email'] ?? '');
-              await prefs.setString('full_name', data['user']['full_name'] ?? username);
-            }
-            if (data['employee'] != null) {
-              final emp = data['employee'];
-              await UserDataService.saveEmployeeId(emp);
-              await prefs.setString('designation', emp['designation'] ?? '');
-              await UserDataService.saveEmployeeRoleFlags(
-                emp is Map ? Map<String, dynamic>.from(emp) : null,
-              );
-              final c = emp['screenshot_monitoring_consent'] == true;
-              await prefs.setBool('screenshot_monitoring_consent', c);
-              AppSession.setConsent(c);
-              await prefs.setInt(
-                'data_privacy_notice_accepted_version',
-                _intFromDynamic(emp['data_privacy_notice_accepted_version'], 0),
-              );
-            }
-            await prefs.setInt(
-              'data_privacy_notice_server_version',
-              _intFromDynamic(data['data_privacy_notice_version'], AppConfig.dataPrivacyNoticeVersion),
-            );
-            if (data['profile_photo'] != null) {
-              await prefs.setString('profile_photo_url', data['profile_photo'].toString());
-            }
-            if (data['company'] != null) {
-              await prefs.setString('company_id', data['company']['id']?.toString() ?? '');
-              await prefs.setString('company_name', data['company']['name'] ?? '');
-            }
-            if (data['subscription'] != null) {
-              await prefs.setString('subscription_plan', data['subscription']['plan'] ?? '');
-              await prefs.setString('subscription_status', data['subscription']['status'] ?? '');
-            }
-            await prefs.setBool('access_granted', true);
-            if (!mounted) return;
-            setState(() {
-              _isLoggedIn = true;
-              _username = username;
-              _isLoading = false;
-            });
-            _ensurePageBuilt(0);
-            _startNotifications();
-            if (data['employee'] != null) {
-              _schedulePrivacyNoticeDialog();
-              _scheduleClosingReportDialog();
-            } else {
-              final sv = _intFromDynamic(
-                data['data_privacy_notice_version'],
-                AppConfig.dataPrivacyNoticeVersion,
-              );
-              await prefs.setInt('data_privacy_notice_server_version', sv);
-              await prefs.setInt('data_privacy_notice_accepted_version', sv);
-            }
-            return;
-          }
-          await prefs.clear();
-          if (!mounted) return;
-          setState(() => _isLoading = false);
-          return;
-        }
-        await prefs.clear();
-        if (!mounted) return;
-        setState(() => _isLoading = false);
-      } catch (e) {
-        if (accessGranted) {
-          AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
+    }
+
+    // WhatsApp-style: refresh token proactively so session stays alive for months.
+    if (refresh != null && refresh.isNotEmpty) {
+      await _apiService.refreshAccessToken();
+    }
+
+    try {
+      final result = await _apiService.accessCheck();
+      if (result['success'] == true) {
+        final data = result['data'];
+        if (data['access_granted'] == true) {
+          await _applyAccessCheckPayload(data, prefs, username);
           if (!mounted) return;
           setState(() {
             _isLoggedIn = true;
             _username = username;
             _isLoading = false;
           });
+          _ensurePageBuilt(0);
           _startNotifications();
+          if (data['employee'] != null) {
+            _schedulePrivacyNoticeDialog();
+            _scheduleClosingReportDialog();
+          }
           return;
         }
-        await prefs.clear();
+        // Server explicitly denied access — clear auth only.
+        await UserDataService.clearAuthSession();
         if (!mounted) return;
         setState(() => _isLoading = false);
+        return;
       }
-    } else {
+    } catch (_) {
+      // Network/server unreachable — stay logged in if we had a valid session.
+    }
+
+    if (accessGranted) {
+      AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
       if (!mounted) return;
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoggedIn = true;
+        _username = username;
+        _isLoading = false;
+      });
+      _ensurePageBuilt(0);
+      _startNotifications();
+      return;
+    }
+
+    await UserDataService.clearAuthSession();
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+  }
+
+  Future<void> _applyAccessCheckPayload(
+    Map<String, dynamic> data,
+    SharedPreferences prefs,
+    String username,
+  ) async {
+    if (data['user'] != null) {
+      await prefs.setString('user_id', data['user']['id']?.toString() ?? '');
+      await prefs.setString('email', data['user']['email'] ?? '');
+      await prefs.setString('full_name', data['user']['full_name'] ?? username);
+    }
+    if (data['employee'] != null) {
+      final emp = data['employee'];
+      await UserDataService.saveEmployeeId(emp);
+      await prefs.setString('designation', emp['designation'] ?? '');
+      await UserDataService.saveEmployeeRoleFlags(
+        emp is Map ? Map<String, dynamic>.from(emp) : null,
+      );
+      final c = emp['screenshot_monitoring_consent'] == true;
+      await prefs.setBool('screenshot_monitoring_consent', c);
+      AppSession.setConsent(c);
+      await prefs.setInt(
+        'data_privacy_notice_accepted_version',
+        _intFromDynamic(emp['data_privacy_notice_accepted_version'], 0),
+      );
+    }
+    await prefs.setInt(
+      'data_privacy_notice_server_version',
+      _intFromDynamic(data['data_privacy_notice_version'], AppConfig.dataPrivacyNoticeVersion),
+    );
+    if (data['profile_photo'] != null) {
+      await prefs.setString('profile_photo_url', data['profile_photo'].toString());
+    }
+    if (data['company'] != null) {
+      await prefs.setString('company_id', data['company']['id']?.toString() ?? '');
+      await prefs.setString('company_name', data['company']['name'] ?? '');
+    }
+    if (data['subscription'] != null) {
+      await prefs.setString('subscription_plan', data['subscription']['plan'] ?? '');
+      await prefs.setString('subscription_status', data['subscription']['status'] ?? '');
+    }
+    await prefs.setBool('access_granted', true);
+    if (data['employee'] == null) {
+      final sv = _intFromDynamic(
+        data['data_privacy_notice_version'],
+        AppConfig.dataPrivacyNoticeVersion,
+      );
+      await prefs.setInt('data_privacy_notice_server_version', sv);
+      await prefs.setInt('data_privacy_notice_accepted_version', sv);
     }
   }
 
@@ -315,6 +350,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       await p.setString('auth_token', token);
       await p.setString('username', username);
     });
+    final access = await _apiService.accessCheck();
+    if (access['success'] == true && access['data'] is Map) {
+      final prefs = await SharedPreferences.getInstance();
+      await _applyAccessCheckPayload(
+        Map<String, dynamic>.from(access['data'] as Map),
+        prefs,
+        username,
+      );
+    }
     if (!mounted) return;
     setState(() {
       _isLoggedIn = true;
@@ -379,10 +423,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycle = state;
-    final foreground = state == AppLifecycleState.resumed;
-    PushKeepAlive.setUiForeground(foreground);
-    if (foreground && _isLoggedIn) {
+    if (!_isLoggedIn) return;
+    if (state == AppLifecycleState.resumed) {
+      _notificationService.setAppInBackground(false);
       unawaited(_notificationService.reconnect());
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _notificationService.setAppInBackground(true);
     }
   }
 
@@ -392,10 +440,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   void _startNotifications() {
+    unawaited(_startNotificationsAsync());
+  }
+
+  Future<void> _startNotificationsAsync() async {
     _notifPushSub?.cancel();
-    _incomingCallSub?.cancel();
-    _notificationService.start();
-    _callService.start();
+    await _bindCallService();
+    await _notificationService.start();
     _notifPushSub = _notificationService.pushStream.listen(_onPushNotification);
     _incomingCallSub = _callService.incomingStream.listen((invite) {
       if (!mounted) return;
@@ -410,8 +461,49 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       }
     });
     unawaited(_ensureMobileNotificationPermission());
-    unawaited(PushKeepAlive.start());
-    unawaited(FcmPushService.register(_apiService));
+    unawaited(PushService.instance.bindApi(_apiService));
+  }
+
+  Future<void> _bindCallService() async {
+    var uid = int.tryParse(await UserDataService.getUserId());
+    if (uid == null) {
+      final r = await _apiService.accessCheck();
+      if (r['success'] == true) {
+        final user = r['data']?['user'];
+        if (user is Map) {
+          uid = int.tryParse('${user['id'] ?? ''}');
+          if (uid != null) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('user_id', uid.toString());
+          }
+        }
+      }
+    }
+    if (uid == null) return;
+    CallService.instance.bind(
+      notificationService: _notificationService,
+      apiService: _apiService,
+      myUserId: uid,
+    );
+    CallService.instance.onIncomingCall = (_) {
+      if (!mounted) return;
+      _openCallPage();
+    };
+  }
+
+  void _openCallPage() {
+    if (!mounted || !_isLoggedIn) return;
+    final nav = appNavigatorKey.currentState;
+    if (nav == null) return;
+    final top = ModalRoute.of(nav.context)?.settings.name;
+    if (top == '/call') return;
+    nav.push(
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: '/call'),
+        builder: (_) => const CallPage(),
+        fullscreenDialog: true,
+      ),
+    );
   }
 
   void _stopNotifications() {
@@ -419,9 +511,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     unawaited(PushKeepAlive.stop());
     _notifPushSub?.cancel();
     _notifPushSub = null;
-    _incomingCallSub?.cancel();
-    _incomingCallSub = null;
-    _callService.stop();
+    if (CallService.instance.isInCall) CallService.instance.hangUp();
+    CallService.instance.unbind();
+    unawaited(PushService.instance.unregister());
     _notificationService.stop();
     NotificationBanner.hide();
     _incomingCall = null;
@@ -436,6 +528,20 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final inForeground = _lifecycle == AppLifecycleState.resumed;
     final rawId = data['id'];
     final notifId = rawId is int ? rawId : int.tryParse('$rawId') ?? title.hashCode;
+    final isChat = notifType == 'new_message' || notifType == 'new_group_message';
+
+    if (notifType == 'call_invite') {
+      final call = CallTokens.chatMessageToCallSignal({
+        'message': message,
+        'sender_id': data['sender_id'],
+        'sender_name': title.replaceFirst('Incoming call from ', ''),
+      });
+      if (call != null) {
+        unawaited(CallService.instance.handleRemoteSignal(call));
+        if (mounted) _openCallPage();
+      }
+      return;
+    }
 
     if (inForeground) {
       NotificationBanner.show(
@@ -443,18 +549,22 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         title: title,
         message: message,
         notificationType: notifType,
-        onTap: () => _onNavSelected(AppNavigation.tabAlerts),
+        onTap: () => unawaited(_openNotifications()),
       );
-    } else if (LocalNotificationService.supported) {
+    }
+
+    // Chat: always show system tray heads-up on Android/iOS (even in foreground),
+    // so desktop→phone alerts are visible when the app is open on another tab.
+    // Other types: tray only when backgrounded.
+    if (LocalNotificationService.supported && (!inForeground || isChat)) {
       await LocalNotificationService.show(
         id: notifId,
         title: title,
         body: message.isNotEmpty ? message : 'Tap to open AIMS',
-        payload: 'alerts',
+        payload: isChat ? 'chat' : 'alerts',
       );
     }
 
-    _notificationsPage = null;
     setState(() => _notifListRefreshToken++);
 
     if (notifType == 'closing_report_due') {
@@ -611,15 +721,24 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Future<void> _openProjectTool() async {
     if (!mounted) return;
+    _onNavSelected(AppNavigation.tabProject);
+  }
+
+  Future<void> _openVaultTool() async {
+    if (!mounted) return;
+    _onNavSelected(AppNavigation.tabVault);
+  }
+
+  Future<void> _openProfile() async {
+    if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => AppTabShell(
-          selectedIndex: AppNavigation.instance.selectedTabIndex,
+          selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
           unreadNotifs: _unreadNotifs,
           onLogout: _handleLogout,
-          child: WorkHubPage(
+          child: ProfilePage(
             apiService: _apiService,
-            screenshotService: _screenshotService,
             onLogout: _handleLogout,
           ),
         ),
@@ -627,7 +746,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _openVaultTool() async {
+  Future<void> _openNotifications() async {
+    if (!mounted) return;
+    setState(() => _notifListRefreshToken++);
+    await _refreshNotificationBadge();
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -635,13 +757,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           selectedIndex: AppNavigation.instance.selectedTabIndex,
           unreadNotifs: _unreadNotifs,
           onLogout: _handleLogout,
-          child: VaultHubPage(
+          child: NotificationsPage(
             apiService: _apiService,
-            onLogout: _handleLogout,
+            refreshToken: _notifListRefreshToken,
+            onNotificationsChanged: () => _notificationService.syncUnreadCount(),
           ),
         ),
       ),
     );
+    if (mounted) await _refreshNotificationBadge();
   }
 
   @override
@@ -666,46 +790,19 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     _syncNavState();
 
-    return Stack(
-      children: [
-        AppTabShell(
-          selectedIndex: _currentIndex,
-          unreadNotifs: _unreadNotifs,
-          onLogout: _handleLogout,
-          showTopBar: true,
-          child: IndexedStack(
-            index: _currentIndex,
-            children: _mainStackChildren(),
-          ),
-        ),
-        if (_incomingCall != null)
-          Positioned.fill(
-            child: IncomingCallOverlay(
-              invite: _incomingCall!,
-              onAccept: _acceptIncomingCall,
-              onReject: _rejectIncomingCall,
-            ),
-          ),
-      ],
-    );
-  }
+    final immersiveChat = PlatformCapabilities.immersiveChatChrome &&
+        _currentIndex == AppNavigation.tabChat;
 
-  Future<void> _acceptIncomingCall() async {
-    final invite = _incomingCall;
-    if (invite == null) return;
-    setState(() => _incomingCall = null);
-    _callService.clearIncoming();
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => CallPage(
-          apiService: _apiService,
-          callService: _callService,
-          peerId: invite.peerId,
-          peerName: invite.peerName,
-          callId: invite.callId,
-          isCaller: false,
-          video: invite.video,
-        ),
+    return AppTabShell(
+      selectedIndex: _currentIndex,
+      unreadNotifs: _unreadNotifs,
+      onLogout: _handleLogout,
+      showTopBar: !immersiveChat,
+      showBottomNav: !immersiveChat,
+      homeStyleBackground: immersiveChat,
+      child: IndexedStack(
+        index: _currentIndex,
+        children: _mainStackChildren(),
       ),
     );
   }
@@ -728,7 +825,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     });
     _syncNavState();
     _ensurePageBuilt(i);
-    if (i == AppNavigation.tabAlerts) _refreshNotificationBadge();
   }
 
   @override
@@ -743,6 +839,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenProject = null;
     AppNavigation.instance.onOpenP2P = null;
     AppNavigation.instance.onOpenSubmitReport = null;
+    AppNavigation.instance.onOpenNotifications = null;
+    AppNavigation.instance.onOpenProfile = null;
     AppNavigation.instance.onLogout = null;
     _stopNotifications();
     _notificationService.dispose();

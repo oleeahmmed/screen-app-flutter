@@ -37,7 +37,7 @@ class _LoginPageState extends State<LoginPage> {
   _LoginView _view = _LoginView.login;
   bool _isLoading = false;
   bool _showPassword = false;
-  bool _rememberMe = false;
+  bool _rememberMe = true;
   String? _errorMessage;
   bool _forgotSent = false;
 

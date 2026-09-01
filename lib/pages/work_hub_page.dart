@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
 import '../services/screenshot_service.dart';
-import '../theme/app_theme.dart';
 import 'projects_page.dart';
 
 /// Project hub — project list.
@@ -20,13 +19,12 @@ class WorkHubPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AppTheme.homeGlassBackground(
-      child: SafeArea(
-        bottom: false,
-        child: ProjectsPage(
-          apiService: apiService,
-          embeddedInParent: true,
-        ),
+    return SafeArea(
+      top: false,
+      bottom: false,
+      child: ProjectsPage(
+        apiService: apiService,
+        embeddedInParent: true,
       ),
     );
   }

@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -30,24 +28,28 @@ class NotificationSound {
     }
     _lastPlayedAt = now;
 
+    // Prefer asset/chime first — SystemSound.alert is often silent on Windows.
+    if (_useNativePlayer) {
+      try {
+        _player ??= AudioPlayer();
+        await _player!.stop();
+        await _player!.setReleaseMode(ReleaseMode.stop);
+        await _player!.setVolume(1.0);
+        await _player!.play(AssetSource('sounds/notification.mp3'));
+        return;
+      } catch (_) {
+        try {
+          await _player!.play(UrlSource(
+            'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3',
+          ));
+          return;
+        } catch (_) {}
+      }
+    }
+
     try {
       await SystemSound.play(SystemSoundType.alert);
     } catch (_) {}
-
-    if (!_useNativePlayer) return;
-
-    try {
-      _player ??= AudioPlayer();
-      await _player!.stop();
-      await _player!.setVolume(1.0);
-      await _player!.play(AssetSource('sounds/notification.mp3'));
-    } catch (_) {
-      try {
-        await _player!.play(UrlSource(
-          'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3',
-        ));
-      } catch (_) {}
-    }
   }
 
   @Deprecated('Use playNotification()')

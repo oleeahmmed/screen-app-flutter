@@ -139,12 +139,18 @@ void openTaskDetailPage(
 
   Navigator.of(context).push<void>(
     MaterialPageRoute(
-      builder: (_) => AppTabShell(
-        selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
-        unreadNotifs: AppNavigation.instance.unreadNotifs,
-        onLogout: onLogout,
-        child: page,
-      ),
+      builder: (_) {
+        final immersive = PlatformCapabilities.immersiveChatChrome;
+        return AppTabShell(
+          selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
+          unreadNotifs: AppNavigation.instance.unreadNotifs,
+          onLogout: onLogout,
+          showTopBar: !immersive,
+          showBottomNav: !immersive,
+          homeStyleBackground: true,
+          child: page,
+        );
+      },
     ),
   ).then((_) => onClosed?.call());
 }
@@ -779,9 +785,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           },
           child: Scaffold(
       backgroundColor: Colors.transparent,
-      body: AppTheme.loginDashboardBackground(
-        context: context,
-        child: SafeArea(
+      body: SafeArea(
         bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -879,7 +883,6 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           ],
         ),
       ),
-      ),
           ),
         ),
       ),
@@ -888,61 +891,193 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   Widget _buildTopBar() {
     final compact = MediaQuery.sizeOf(context).width < 700;
+    final immersive = PlatformCapabilities.immersiveChatChrome;
     final t = _task!;
+    final project = widget.projectName.trim();
+    final done = taskIsCompleted(t);
 
     return Padding(
-      padding: EdgeInsets.fromLTRB(compact ? 12 : 16, compact ? 6 : 8, compact ? 12 : 16, 0),
+      padding: EdgeInsets.fromLTRB(compact ? 12 : 16, compact ? 4 : 8, compact ? 12 : 16, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Big editable title — primary focus for the user.
-          Container(
-            decoration: AppTheme.loginInsetDecoration(borderRadius: 16),
-            padding: EdgeInsets.fromLTRB(compact ? 12 : 14, compact ? 12 : 14, compact ? 12 : 14, compact ? 12 : 14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'Title',
-                  style: TextStyle(
-                    color: AppTheme.textMuted.withValues(alpha: 0.85),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                TextField(
-                  controller: _titleCtrl,
-                  style: TextStyle(
+          if (immersive)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.arrow_back_rounded),
                     color: AppTheme.textPrimary,
-                    fontSize: compact ? 20 : 22,
-                    fontWeight: FontWeight.w800,
-                    height: 1.3,
-                    letterSpacing: -0.35,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Back',
                   ),
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    isDense: true,
-                    hintText: 'What needs to be done?',
-                    hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.4)),
-                    contentPadding: EdgeInsets.zero,
+                  Expanded(
+                    child: Text(
+                      project.isNotEmpty ? project : 'Task',
+                      style: TextStyle(
+                        color: AppTheme.textMuted.withValues(alpha: 0.95),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                  maxLines: 4,
-                  minLines: 2,
-                ),
-              ],
+                  if (_dirty)
+                    TextButton(
+                      onPressed: _saving ? null : _discard,
+                      child: const Text('Discard'),
+                    ),
+                  TaskCompleteButton(
+                    isCompleted: done,
+                    onPressed: _saving ? null : _toggleComplete,
+                    compact: true,
+                    dense: true,
+                    expand: false,
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 10),
-          // Title → Discard + Mark complete → (tabs below).
-          TaskDetailHeaderActions(
-            dirty: _dirty,
-            saving: _saving,
-            isCompleted: taskIsCompleted(t),
-            onDiscard: _dirty ? _discard : null,
-            onToggleComplete: _toggleComplete,
+          _buildPremiumTitle(immersive: immersive, compact: compact, done: done),
+          if (!immersive) ...[
+            const SizedBox(height: 10),
+            TaskDetailHeaderActions(
+              dirty: _dirty,
+              saving: _saving,
+              isCompleted: done,
+              onDiscard: _dirty ? _discard : null,
+              onToggleComplete: _toggleComplete,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPremiumTitle({
+    required bool immersive,
+    required bool compact,
+    required bool done,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: 0.07),
+            Colors.white.withValues(alpha: 0.025),
+          ],
+        ),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
           ),
         ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                width: 3.5,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: done
+                        ? const [Color(0xFF34D399), Color(0xFF059669)]
+                        : const [Color(0xFF60A5FA), Color(0xFF2563EB)],
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 12 : 16,
+                    compact ? 12 : 14,
+                    compact ? 12 : 16,
+                    compact ? 12 : 14,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'TASK TITLE',
+                            style: TextStyle(
+                              color: AppTheme.textMuted.withValues(alpha: 0.72),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.1,
+                            ),
+                          ),
+                          if (done) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF10B981).withValues(alpha: 0.18),
+                                borderRadius: BorderRadius.circular(99),
+                                border: Border.all(
+                                  color: const Color(0xFF10B981).withValues(alpha: 0.35),
+                                ),
+                              ),
+                              child: const Text(
+                                'Done',
+                                style: TextStyle(
+                                  color: Color(0xFF6EE7B7),
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: _titleCtrl,
+                        style: TextStyle(
+                          color: done
+                              ? AppTheme.textPrimary.withValues(alpha: 0.72)
+                              : AppTheme.textPrimary,
+                          fontSize: immersive ? 19 : (compact ? 20 : 22),
+                          fontWeight: FontWeight.w800,
+                          height: 1.28,
+                          letterSpacing: -0.4,
+                          decoration: done ? TextDecoration.lineThrough : null,
+                          decorationColor: AppTheme.textMuted.withValues(alpha: 0.55),
+                        ),
+                        decoration: InputDecoration(
+                          border: InputBorder.none,
+                          isDense: true,
+                          hintText: 'What needs to be done?',
+                          hintStyle: TextStyle(
+                            color: AppTheme.textMuted.withValues(alpha: 0.4),
+                            fontWeight: FontWeight.w600,
+                          ),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                        maxLines: immersive ? 3 : 4,
+                        minLines: 1,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -981,10 +1116,11 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   Widget _buildTabBar() {
     final compact = MediaQuery.sizeOf(context).width < 700;
+    final immersive = PlatformCapabilities.immersiveChatChrome;
     final subCount = _subtasks.length;
     final fileCount = _attachments.length;
     return Padding(
-      padding: EdgeInsets.fromLTRB(compact ? 10 : 16, 8, compact ? 10 : 16, 0),
+      padding: EdgeInsets.fromLTRB(compact ? 10 : 16, immersive ? 6 : 8, compact ? 10 : 16, 0),
       child: Container(
         padding: const EdgeInsets.all(3),
         decoration: BoxDecoration(
@@ -1005,14 +1141,14 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           ),
           labelColor: AppTheme.textPrimary,
           unselectedLabelColor: AppTheme.textMuted,
-          labelPadding: const EdgeInsets.symmetric(horizontal: 12),
-          labelStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
-          unselectedLabelStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+          labelPadding: EdgeInsets.symmetric(horizontal: immersive ? 10 : 12),
+          labelStyle: TextStyle(fontSize: immersive ? 12 : 12.5, fontWeight: FontWeight.w700),
+          unselectedLabelStyle: TextStyle(fontSize: immersive ? 12 : 12.5, fontWeight: FontWeight.w600),
           tabs: [
-            const Tab(height: 34, text: 'Description'),
-            Tab(height: 34, text: subCount > 0 ? 'Subtasks ($subCount)' : 'Subtasks'),
+            Tab(height: 34, text: immersive ? 'Details' : 'Description'),
+            Tab(height: 34, text: subCount > 0 ? 'Subtask ($subCount)' : 'Subtask'),
             Tab(height: 34, text: fileCount > 0 ? 'Files ($fileCount)' : 'Files'),
-            const Tab(height: 34, text: 'More'),
+            Tab(height: 34, text: immersive ? 'Info' : 'More'),
             const Tab(height: 34, text: 'Activity'),
           ],
         ),

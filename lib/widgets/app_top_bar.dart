@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
-import '../utils/platform_capabilities.dart';
+import 'app_logo.dart';
 import 'app_quick_menu.dart';
 
-/// Persistent top bar: branding, section tabs (wide screens), quick menu.
+/// Persistent top bar: logo → home, report / P2P / alerts / profile / logout.
 class AppTopBar extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onSelected;
@@ -19,14 +19,6 @@ class AppTopBar extends StatelessWidget {
     this.unreadNotifs = 0,
     this.onLogout,
   });
-
-  static const _tabs = <(IconData, IconData, String)>[
-    (Icons.home_outlined, Icons.home_rounded, 'Home'),
-    (Icons.assignment_outlined, Icons.assignment_rounded, 'My Task'),
-    (Icons.chat_bubble_outline_rounded, Icons.chat_rounded, 'Chat'),
-    (Icons.notifications_outlined, Icons.notifications_rounded, 'Alerts'),
-    (Icons.person_outline_rounded, Icons.person_rounded, 'Me'),
-  ];
 
   @override
   Widget build(BuildContext context) {
@@ -56,23 +48,12 @@ class AppTopBar extends StatelessWidget {
                 const AppBackButton(color: AppTheme.textMuted),
                 const SizedBox(width: 2),
               ],
-              _brandMark(),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  _tabs[selectedIndex.clamp(0, _tabs.length - 1)].$3,
-                  style: AppTheme.pageTitle.copyWith(fontSize: 18),
-                  overflow: TextOverflow.ellipsis,
-                ),
+              _logoHomeButton(),
+              const Spacer(),
+              AppHeaderMenuActions(
+                onLogout: onLogout,
+                unreadNotifs: unreadNotifs,
               ),
-              if (selectedIndex == AppNavigation.tabAlerts &&
-                  PlatformCapabilities.peerToPeerFileTransfer)
-                IconButton(
-                  onPressed: () => AppNavigation.instance.openP2P(),
-                  tooltip: 'Peer-to-peer file transfer',
-                  icon: const Icon(Icons.swap_horiz_rounded, color: AppTheme.accent, size: 24),
-                ),
-              AppHeaderMenuActions(onLogout: onLogout),
             ],
           ),
         ),
@@ -80,47 +61,20 @@ class AppTopBar extends StatelessWidget {
     );
   }
 
-  Widget _brandMark() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                AppTheme.primary.withValues(alpha: 0.95),
-                AppTheme.accent.withValues(alpha: 0.75),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-          ),
-          alignment: Alignment.center,
-          child: const Text(
-            'A',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 15,
-            ),
+  Widget _logoHomeButton() {
+    return Tooltip(
+      message: 'Home',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => AppNavigation.instance.goHome(),
+          borderRadius: BorderRadius.circular(10),
+          child: const Padding(
+            padding: EdgeInsets.all(2),
+            child: AppLogo(size: 32, showBorder: false),
           ),
         ),
-        const SizedBox(width: 8),
-        ShaderMask(
-          shaderCallback: (b) => AppTheme.titleGradient().createShader(b),
-          child: const Text(
-            'AIMS',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-              fontSize: 16,
-              letterSpacing: 0.6,
-            ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

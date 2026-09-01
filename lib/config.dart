@@ -90,8 +90,14 @@ class AppConfig {
   static String get chatUnreadUrl => '$apiBaseUrl/chat/unread-count/';
   static String get chatMarkReadUrl => '$apiBaseUrl/chat/mark-read/';
   static String get chatOnlineUrl => '$apiBaseUrl/chat/online-users/';
+  static String get chatCallSignalUrl => '$apiBaseUrl/chat/call-signal/';
+  static String get chatCallSignalsPendingUrl => '$apiBaseUrl/chat/call-signals/pending/';
+  static String get p2pCallSignalUrl => '$apiBaseUrl/p2p/call-signal/';
+  static String get p2pCallSignalsPendingUrl => '$apiBaseUrl/p2p/call-signals/pending/';
   static String get chatMessageDetailUrl => '$apiBaseUrl/chat/messages/';
   static String get chatGroupsUrl => '$apiBaseUrl/chat/groups/';
+  static String get pushDeviceRegisterUrl => '$apiBaseUrl/devices/push/register/';
+  static String get pushDeviceUnregisterUrl => '$apiBaseUrl/devices/push/unregister/';
   static String get profileUrl => '$apiBaseUrl/user/profile/';
   static String get uploadPhotoUrl => '$apiBaseUrl/user/upload-photo/';
   /// Primary access-check path; legacy alias at [/access-check/](accessCheckLegacyUrl).

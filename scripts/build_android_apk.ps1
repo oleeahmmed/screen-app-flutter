@@ -18,6 +18,9 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
+Write-Host '==> bump version (auto increment build number)'
+& (Join-Path $Root 'scripts\bump_version.ps1')
+
 function Get-AppVersion {
     $line = Select-String -Path 'pubspec.yaml' -Pattern '^version:\s*' | Select-Object -First 1
     if ($line -match 'version:\s*([0-9.]+)\+([0-9]+)') {

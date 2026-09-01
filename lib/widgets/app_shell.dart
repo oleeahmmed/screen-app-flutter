@@ -85,7 +85,7 @@ class AppShell extends StatelessWidget {
     );
 
     return useBackground
-        ? AppTheme.homeGlassBackground(child: body)
+        ? AppTheme.loginDashboardBackground(context: context, child: body)
         : body;
   }
 

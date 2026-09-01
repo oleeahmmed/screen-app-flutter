@@ -1040,17 +1040,19 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> sendMessage(int userId, String message) async {
+  Future<Map<String, dynamic>> sendMessage(int userId, String message, {int? replyToId}) async {
     try {
       print('💬 Sending message to user $userId: $message');
+      final body = <String, dynamic>{
+        'receiver_id': userId,
+        'message': message,
+      };
+      if (replyToId != null) body['reply_to_id'] = replyToId;
       final response = await http
           .post(
             Uri.parse(AppConfig.chatSendUrl),
             headers: _getHeaders(),
-            body: jsonEncode({
-              'receiver_id': userId,
-              'message': message,
-            }),
+            body: jsonEncode(body),
           )
           .timeout(Duration(seconds: 10));
 
@@ -1068,13 +1070,14 @@ class ApiService {
   }
 
   // ─── Mark Messages Read ───
-  Future<Map<String, dynamic>> sendVoiceMessage(int userId, List<int> audioBytes, String filename) async {
+  Future<Map<String, dynamic>> sendVoiceMessage(int userId, List<int> audioBytes, String filename, {int? replyToId}) async {
     try {
       var request = http.MultipartRequest('POST', Uri.parse(AppConfig.chatSendUrl));
       final headers = _getHeaders(); headers.remove('Content-Type');
       request.headers.addAll(headers);
       request.fields['receiver_id'] = userId.toString();
       request.fields['message'] = '';
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
       request.files.add(http.MultipartFile.fromBytes('voice_message', audioBytes, filename: filename));
       var response = await request.send().timeout(Duration(seconds: 30));
       final body = await response.stream.bytesToString();
@@ -1083,13 +1086,14 @@ class ApiService {
     } catch (e) { return {'success': false, 'error': '$e'}; }
   }
 
-  Future<Map<String, dynamic>> sendImageMessage(int userId, List<int> imageBytes, String filename, {String message = ''}) async {
+  Future<Map<String, dynamic>> sendImageMessage(int userId, List<int> imageBytes, String filename, {String message = '', int? replyToId}) async {
     try {
       var request = http.MultipartRequest('POST', Uri.parse(AppConfig.chatSendUrl));
       final headers = _getHeaders(); headers.remove('Content-Type');
       request.headers.addAll(headers);
       request.fields['receiver_id'] = userId.toString();
       request.fields['message'] = message;
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
       request.files.add(http.MultipartFile.fromBytes('image', imageBytes, filename: filename, contentType: MediaType('image', filename.endsWith('.png') ? 'png' : 'jpeg')));
       var response = await request.send().timeout(Duration(seconds: 30));
       final body = await response.stream.bytesToString();
@@ -1098,13 +1102,14 @@ class ApiService {
     } catch (e) { return {'success': false, 'error': '$e'}; }
   }
 
-  Future<Map<String, dynamic>> sendFileMessage(int userId, List<int> fileBytes, String filename, {String message = ''}) async {
+  Future<Map<String, dynamic>> sendFileMessage(int userId, List<int> fileBytes, String filename, {String message = '', int? replyToId}) async {
     try {
       var request = http.MultipartRequest('POST', Uri.parse(AppConfig.chatSendUrl));
       final headers = _getHeaders(); headers.remove('Content-Type');
       request.headers.addAll(headers);
       request.fields['receiver_id'] = userId.toString();
       request.fields['message'] = message;
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
       // Detect content type from filename extension
       final ext = filename.split('.').last.toLowerCase();
       final mimeTypes = {
@@ -1284,19 +1289,82 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> sendGroupMessage(int groupId, String message) async {
+  Future<Map<String, dynamic>> sendGroupMessage(int groupId, String message, {int? replyToId}) async {
     try {
+      final body = <String, dynamic>{'message': message};
+      if (replyToId != null) body['reply_to_id'] = replyToId;
       final response = await http
           .post(
             Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
             headers: _getHeaders(),
-            body: jsonEncode({'message': message}),
+            body: jsonEncode(body),
           )
           .timeout(Duration(seconds: 10));
       if (response.statusCode == 200 || response.statusCode == 201) {
         return {'success': true, 'data': jsonDecode(response.body)};
       }
       return {'success': false, 'error': 'Failed to send group message'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> sendGroupImageMessage(
+    int groupId,
+    List<int> imageBytes,
+    String filename, {
+    int? replyToId,
+  }) async {
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
+      );
+      final headers = _getHeaders();
+      headers.remove('Content-Type');
+      request.headers.addAll(headers);
+      request.fields['message'] = '';
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
+      request.files.add(http.MultipartFile.fromBytes(
+        'image',
+        imageBytes,
+        filename: filename,
+        contentType: MediaType('image', filename.endsWith('.png') ? 'png' : 'jpeg'),
+      ));
+      final response = await request.send().timeout(const Duration(seconds: 30));
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(body)};
+      }
+      return {'success': false, 'error': 'Failed: ${response.statusCode}'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> sendGroupFileMessage(
+    int groupId,
+    List<int> fileBytes,
+    String filename, {
+    int? replyToId,
+  }) async {
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
+      );
+      final headers = _getHeaders();
+      headers.remove('Content-Type');
+      request.headers.addAll(headers);
+      request.fields['message'] = '';
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
+      request.files.add(http.MultipartFile.fromBytes('file', fileBytes, filename: filename));
+      final response = await request.send().timeout(const Duration(seconds: 60));
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(body)};
+      }
+      return {'success': false, 'error': 'Failed: ${response.statusCode} - $body'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -2667,6 +2735,52 @@ class ApiService {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // 1:1 Call signaling (HTTP fallback when WebSocket misses delivery)
+  // ═══════════════════════════════════════════════════════════════
+
+  Future<Map<String, dynamic>> sendCallSignal(Map<String, dynamic> payload) async {
+    for (final url in [AppConfig.chatCallSignalUrl, AppConfig.p2pCallSignalUrl]) {
+      try {
+        final response = await http
+            .post(
+              Uri.parse(url),
+              headers: _getHeaders(),
+              body: jsonEncode(payload),
+            )
+            .timeout(const Duration(seconds: 12));
+        if (response.statusCode == 401 && await refreshAccessToken()) {
+          return sendCallSignal(payload);
+        }
+        if (response.statusCode == 200) {
+          return {'success': true, 'data': jsonDecode(response.body)};
+        }
+        if (response.statusCode == 403) {
+          try {
+            final body = jsonDecode(response.body);
+            if (body is Map) {
+              return {'success': false, 'error': body['message']?.toString() ?? 'Call failed', 'data': body};
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    return {'success': false, 'error': 'Call signal failed'};
+  }
+
+  Future<Map<String, dynamic>> pollCallSignals() async {
+    for (final url in [AppConfig.chatCallSignalsPendingUrl, AppConfig.p2pCallSignalsPendingUrl]) {
+      try {
+        final response = await _authorizedGet(Uri.parse(url));
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          return {'success': true, 'data': data is Map ? data : {}};
+        }
+      } catch (_) {}
+    }
+    return {'success': false, 'error': 'Poll failed'};
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // Peer-to-Peer File Transfer APIs
   // ═══════════════════════════════════════════════════════════════
 
@@ -2683,78 +2797,40 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> sendCallSignal(Map<String, dynamic> payload) async {
+  Future<Map<String, dynamic>> registerPushToken(String token, {String platform = 'android'}) async {
     try {
       final response = await http
           .post(
-            Uri.parse(AppConfig.p2pCallSignalUrl),
-            headers: _getHeaders(),
-            body: jsonEncode(payload),
-          )
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        if (response.body.isEmpty) return {'success': true};
-        try {
-          return {'success': true, 'data': jsonDecode(response.body)};
-        } catch (_) {
-          return {'success': true};
-        }
-      }
-      return {'success': false, 'error': 'Call signal failed (${response.statusCode})'};
-    } catch (e) {
-      return {'success': false, 'error': '$e'};
-    }
-  }
-
-  Future<Map<String, dynamic>> pollCallSignals() async {
-    try {
-      final response = await _authorizedGet(Uri.parse(AppConfig.p2pCallSignalsPendingUrl));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final signals = data is Map ? (data['signals'] as List? ?? []) : <dynamic>[];
-        return {'success': true, 'signals': signals};
-      }
-      return {'success': false, 'error': 'Failed to poll call signals'};
-    } catch (e) {
-      return {'success': false, 'error': '$e'};
-    }
-  }
-
-  Future<Map<String, dynamic>> registerPushDevice(String token, {String platform = 'android'}) async {
-    try {
-      await ensureAuth();
-      final response = await http
-          .post(
-            Uri.parse(AppConfig.pushRegisterUrl),
+            Uri.parse(AppConfig.pushDeviceRegisterUrl),
             headers: _getHeaders(),
             body: jsonEncode({'token': token, 'platform': platform}),
           )
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode >= 200 && response.statusCode < 300) {
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 401 && await refreshAccessToken()) {
+        return registerPushToken(token, platform: platform);
+      }
+      if (response.statusCode == 200) {
         return {'success': true};
       }
-      return {'success': false, 'error': 'Push register failed (${response.statusCode})'};
+      return {'success': false, 'error': 'Failed to register push token'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
   }
 
-  Future<Map<String, dynamic>> unregisterPushDevice({String? token}) async {
+  Future<Map<String, dynamic>> unregisterPushToken(String token) async {
     try {
-      await ensureAuth();
       final response = await http
           .post(
-            Uri.parse(AppConfig.pushUnregisterUrl),
+            Uri.parse(AppConfig.pushDeviceUnregisterUrl),
             headers: _getHeaders(),
-            body: jsonEncode({if (token != null && token.isNotEmpty) 'token': token}),
+            body: jsonEncode({'token': token}),
           )
-          .timeout(const Duration(seconds: 10));
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        return {'success': true};
-      }
-      return {'success': false, 'error': 'Push unregister failed (${response.statusCode})'};
-    } catch (e) {
-      return {'success': false, 'error': '$e'};
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) return {'success': true};
+      return {'success': false};
+    } catch (_) {
+      return {'success': false};
     }
   }
 
@@ -3196,6 +3272,21 @@ class ApiService {
         return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? 'Create failed'};
       }
       return {'success': false, 'error': 'Create entry failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getVaultEntry(int projectId, int entryId) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.vaultEntryUrl(projectId, entryId)));
+      if (response.statusCode == 200) {
+        final raw = jsonDecode(response.body);
+        if (raw is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+        }
+      }
+      return {'success': false, 'error': 'Failed to load entry (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }

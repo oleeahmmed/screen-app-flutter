@@ -2,630 +2,385 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:permission_handler/permission_handler.dart';
 
-import '../services/api_service.dart';
 import '../services/call_service.dart';
-import '../theme/app_theme.dart';
 
+/// WhatsApp-style call UI — audio shows avatar; video opens camera preview immediately.
 class CallPage extends StatefulWidget {
-  const CallPage({
-    super.key,
-    required this.apiService,
-    required this.callService,
-    required this.peerId,
-    required this.peerName,
-    required this.callId,
-    required this.isCaller,
-    required this.video,
-  });
-
-  final ApiService apiService;
-  final CallService callService;
-  final int peerId;
-  final String peerName;
-  final String callId;
-  final bool isCaller;
-  final bool video;
+  const CallPage({super.key});
 
   @override
   State<CallPage> createState() => _CallPageState();
 }
 
 class _CallPageState extends State<CallPage> {
+  final _call = CallService.instance;
   final _localRenderer = RTCVideoRenderer();
   final _remoteRenderer = RTCVideoRenderer();
-
-  RTCPeerConnection? _pc;
-  MediaStream? _localStream;
-  StreamSubscription<Map<String, dynamic>>? _sigSub;
-
-  bool _micOn = true;
-  bool _camOn = true;
-  bool _speakerOn = true;
-  bool _ending = false;
-  bool _remoteDescSet = false;
-  bool _peerAccepted = false;
-  bool _offerSent = false;
-  String _status = 'Connecting…';
-
-  final List<RTCIceCandidate> _pendingIce = [];
-  Map<String, dynamic>? _pendingOffer;
-  List<Map<String, dynamic>> _iceServers = [
-    {'urls': 'stun:stun.l.google.com:19302'},
-  ];
+  bool _muted = false;
+  bool _cameraOff = false;
+  StreamSubscription<CallPhase>? _phaseSub;
+  StreamSubscription<MediaStream?>? _localSub;
+  StreamSubscription<MediaStream?>? _remoteSub;
+  StreamSubscription<String>? _endedSub;
 
   @override
   void initState() {
     super.initState();
-    widget.callService.inCall = true;
-    widget.callService.clearIncoming();
-    _sigSub = widget.callService.signalStream.listen(_onSignal);
-    unawaited(_boot());
-  }
-
-  Future<void> _boot() async {
-    try {
-      await _localRenderer.initialize();
-      await _remoteRenderer.initialize();
-
-      final mic = await Permission.microphone.request();
-      if (!mic.isGranted) {
-        _fail('Microphone permission is required');
-        return;
-      }
-      if (widget.video) {
-        final cam = await Permission.camera.request();
-        if (!cam.isGranted) {
-          _fail('Camera permission is required for video call');
-          return;
-        }
-      }
-
-      await _loadIce();
-      await _createPeer();
-
-      if (widget.isCaller) {
-        setState(() => _status = 'Calling ${widget.peerName}…');
-        await widget.callService.invite(
-          calleeId: widget.peerId,
-          callId: widget.callId,
-          video: widget.video,
-        );
-        if (_peerAccepted) await _createOffer();
-      } else {
-        setState(() => _status = 'Connecting…');
-        await widget.callService.accept(
-          callerId: widget.peerId,
-          callId: widget.callId,
-        );
-        if (_pendingOffer != null) {
-          final offer = _pendingOffer!;
-          _pendingOffer = null;
-          await _handleOffer(offer);
-        }
-      }
-    } catch (e) {
-      _fail('$e');
-    }
-  }
-
-  Future<void> _loadIce() async {
-    final r = await widget.apiService.p2pGetIceServers();
-    if (r['success'] != true) return;
-    final data = r['data'] as Map<String, dynamic>? ?? {};
-    final servers = data['ice_servers'] as List? ?? [];
-    if (servers.isEmpty) return;
-    final out = <Map<String, dynamic>>[];
-    for (final s in servers.whereType<Map>()) {
-      final m = Map<String, dynamic>.from(s);
-      if (m['urls'] == null) continue;
-      out.add(m);
-    }
-    if (out.isNotEmpty) _iceServers = out;
-  }
-
-  Future<void> _createPeer() async {
-    _pc = await createPeerConnection({
-      'iceServers': _iceServers,
-      'sdpSemantics': 'unified-plan',
+    unawaited(_initRenderers());
+    _phaseSub = _call.phaseStream.listen((_) {
+      if (mounted) setState(() {});
     });
-
-    _pc!.onIceCandidate = (candidate) {
-      if (candidate.candidate == null || candidate.candidate!.isEmpty) return;
-      unawaited(widget.callService.send({
-        'type': 'call_ice',
-        'peer_id': widget.peerId,
-        'call_id': widget.callId,
-        'candidate': {
-          'candidate': candidate.candidate,
-          'sdpMid': candidate.sdpMid,
-          'sdpMLineIndex': candidate.sdpMLineIndex,
-        },
-      }));
-    };
-
-    _pc!.onTrack = (event) {
-      if (event.streams.isEmpty) return;
-      _remoteRenderer.srcObject = event.streams.first;
-      if (mounted) setState(() => _status = '');
-    };
-
-    _pc!.onConnectionState = (state) {
-      if (!mounted) return;
-      if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-        setState(() => _status = '');
-      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-        _fail('Call connection failed');
-      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-        setState(() => _status = 'Reconnecting…');
-      }
-    };
-
-    _localStream = await navigator.mediaDevices.getUserMedia({
-      'audio': true,
-      'video': widget.video
-          ? {
-              'facingMode': 'user',
-              'width': {'ideal': 640},
-              'height': {'ideal': 480},
-            }
-          : false,
+    _localSub = _call.localStreamStream.listen((s) {
+      _localRenderer.srcObject = s;
+      if (mounted) setState(() {});
     });
-    _localRenderer.srcObject = _localStream;
-    for (final track in _localStream!.getTracks()) {
-      await _pc!.addTrack(track, _localStream!);
-    }
-    _camOn = widget.video;
-    try {
-      await Helper.setSpeakerphoneOn(_speakerOn);
-    } catch (_) {}
+    _remoteSub = _call.remoteStreamStream.listen((s) {
+      _remoteRenderer.srcObject = s;
+      if (mounted) setState(() {});
+    });
+    _endedSub = _call.endedReasonStream.listen((_) {
+      if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+    });
+  }
+
+  Future<void> _initRenderers() async {
+    await _localRenderer.initialize();
+    await _remoteRenderer.initialize();
+    _localRenderer.srcObject = _call.localStream;
+    _remoteRenderer.srcObject = _call.remoteStream;
     if (mounted) setState(() {});
-  }
-
-  Future<void> _createOffer() async {
-    final pc = _pc;
-    if (pc == null || _offerSent) return;
-    _offerSent = true;
-    final offer = await pc.createOffer({
-      'offerToReceiveAudio': 1,
-      'offerToReceiveVideo': widget.video ? 1 : 0,
-    });
-    await pc.setLocalDescription(offer);
-    await widget.callService.send({
-      'type': 'call_offer',
-      'peer_id': widget.peerId,
-      'call_id': widget.callId,
-      'sdp': {'type': offer.type, 'sdp': offer.sdp},
-    });
-    if (mounted) setState(() => _status = 'Ringing…');
-  }
-
-  Future<void> _handleOffer(Map<String, dynamic> data) async {
-    final pc = _pc;
-    if (pc == null) {
-      _pendingOffer = data;
-      return;
-    }
-    final desc = _parseSdp(data);
-    if (desc == null) return;
-    await pc.setRemoteDescription(desc);
-    _remoteDescSet = true;
-    await _flushIce();
-    final answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    await widget.callService.send({
-      'type': 'call_answer',
-      'peer_id': widget.peerId,
-      'call_id': widget.callId,
-      'sdp': {'type': answer.type, 'sdp': answer.sdp},
-    });
-    if (mounted) setState(() => _status = 'Connecting…');
-  }
-
-  Future<void> _handleAnswer(Map<String, dynamic> data) async {
-    final pc = _pc;
-    if (pc == null) return;
-    final desc = _parseSdp(data);
-    if (desc == null) return;
-    await pc.setRemoteDescription(desc);
-    _remoteDescSet = true;
-    await _flushIce();
-  }
-
-  Future<void> _handleIce(Map<String, dynamic> data) async {
-    final raw = data['candidate'];
-    Map<String, dynamic>? cand;
-    if (raw is Map) {
-      cand = Map<String, dynamic>.from(raw);
-    }
-    if (cand == null) return;
-    final ice = RTCIceCandidate(
-      cand['candidate']?.toString(),
-      cand['sdpMid']?.toString(),
-      CallService.asInt(cand['sdpMLineIndex']),
-    );
-    if (!_remoteDescSet || _pc == null) {
-      _pendingIce.add(ice);
-      return;
-    }
-    try {
-      await _pc!.addCandidate(ice);
-    } catch (_) {}
-  }
-
-  Future<void> _flushIce() async {
-    final pc = _pc;
-    if (pc == null) return;
-    final pending = List<RTCIceCandidate>.from(_pendingIce);
-    _pendingIce.clear();
-    for (final ice in pending) {
-      try {
-        await pc.addCandidate(ice);
-      } catch (_) {}
-    }
-  }
-
-  RTCSessionDescription? _parseSdp(Map<String, dynamic> data) {
-    final raw = data['sdp'];
-    if (raw is Map) {
-      final m = Map<String, dynamic>.from(raw);
-      final sdp = m['sdp']?.toString();
-      final type = m['type']?.toString();
-      if (sdp == null || type == null) return null;
-      return RTCSessionDescription(sdp, type);
-    }
-    if (raw is String && raw.isNotEmpty) {
-      final type = data['sdp_type']?.toString() ??
-          (data['type'] == 'call_answer' ? 'answer' : 'offer');
-      return RTCSessionDescription(raw, type);
-    }
-    return null;
-  }
-
-  void _onSignal(Map<String, dynamic> data) {
-    final type = data['type']?.toString() ?? '';
-    final callId = data['call_id']?.toString() ?? '';
-    if (callId.isNotEmpty && callId != widget.callId) return;
-
-    switch (type) {
-      case 'call_accept':
-        _peerAccepted = true;
-        if (widget.isCaller) unawaited(_createOffer());
-      case 'call_reject':
-        _fail('${widget.peerName} declined');
-      case 'call_hangup':
-        _leave(sendHangup: false, message: 'Call ended');
-      case 'call_offer':
-        unawaited(_handleOffer(data));
-      case 'call_answer':
-        unawaited(_handleAnswer(data));
-      case 'call_ice':
-        unawaited(_handleIce(data));
-      case 'call_error':
-        _fail(data['message']?.toString() ?? 'Call failed');
-    }
-  }
-
-  Future<void> _toggleMic() async {
-    _micOn = !_micOn;
-    for (final track in _localStream?.getAudioTracks() ?? []) {
-      track.enabled = _micOn;
-    }
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _toggleCam() async {
-    if (!widget.video) return;
-    _camOn = !_camOn;
-    for (final track in _localStream?.getVideoTracks() ?? []) {
-      track.enabled = _camOn;
-    }
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _toggleSpeaker() async {
-    _speakerOn = !_speakerOn;
-    try {
-      await Helper.setSpeakerphoneOn(_speakerOn);
-    } catch (_) {}
-    if (mounted) setState(() {});
-  }
-
-  void _fail(String message) {
-    if (_ending) return;
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message), backgroundColor: AppTheme.danger),
-      );
-    }
-    _leave(sendHangup: true);
-  }
-
-  Future<void> _leave({required bool sendHangup, String? message}) async {
-    if (_ending) return;
-    _ending = true;
-    if (sendHangup) {
-      try {
-        await widget.callService.hangup(
-          peerId: widget.peerId,
-          callId: widget.callId,
-        );
-      } catch (_) {}
-    }
-    widget.callService.inCall = false;
-    if (!mounted) return;
-    Navigator.of(context).pop(message);
-  }
-
-  Future<void> _cleanup() async {
-    _sigSub?.cancel();
-    _sigSub = null;
-    try {
-      await _localStream?.dispose();
-    } catch (_) {}
-    try {
-      await _pc?.close();
-    } catch (_) {}
-    try {
-      await _localRenderer.dispose();
-    } catch (_) {}
-    try {
-      await _remoteRenderer.dispose();
-    } catch (_) {}
-    _localStream = null;
-    _pc = null;
-    widget.callService.inCall = false;
   }
 
   @override
   void dispose() {
-    unawaited(_cleanup());
+    _phaseSub?.cancel();
+    _localSub?.cancel();
+    _remoteSub?.cancel();
+    _endedSub?.cancel();
+    _durationTimer?.cancel();
+    _localRenderer.dispose();
+    _remoteRenderer.dispose();
     super.dispose();
+  }
+
+  CallSession? get _session => _call.session;
+  CallPhase get _phase => _call.phase;
+  bool get _isVideo => _session?.kind == CallKind.video;
+  bool get _hasLocalVideo => _isVideo && _call.localStream != null && !_cameraOff;
+  bool get _hasRemoteVideo =>
+      _isVideo && _phase == CallPhase.active && _call.remoteStream != null;
+
+  String get _statusText {
+    switch (_phase) {
+      case CallPhase.outgoing:
+        return _isVideo ? 'Video calling…' : 'Calling…';
+      case CallPhase.incoming:
+        return _isVideo ? 'Incoming video call' : 'Incoming voice call';
+      case CallPhase.connecting:
+        return 'Connecting…';
+      case CallPhase.active:
+        return _formatDuration(_activeSeconds);
+      default:
+        return '';
+    }
+  }
+
+  int _activeSeconds = 0;
+  Timer? _durationTimer;
+
+  void _startDurationTimer() {
+    _durationTimer?.cancel();
+    _activeSeconds = 0;
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_call.phase == CallPhase.active && mounted) {
+        setState(() => _activeSeconds++);
+      }
+    });
+  }
+
+  String _formatDuration(int sec) {
+    final m = sec ~/ 60;
+    final s = sec % 60;
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _leave(sendHangup: true);
-      },
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        body: SafeArea(
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: widget.video
-                    ? RTCVideoView(
-                        _remoteRenderer,
-                        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                      )
-                    : Container(
-                        color: AppTheme.bgDeep,
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              CircleAvatar(
-                                radius: 48,
-                                backgroundColor: AppTheme.primary,
-                                child: Text(
-                                  _initials(widget.peerName),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 28,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                widget.peerName,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              if (_status.isNotEmpty) ...[
-                                const SizedBox(height: 8),
-                                Text(
-                                  _status,
-                                  style: const TextStyle(color: AppTheme.textMuted),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
+    if (_phase == CallPhase.active && _durationTimer == null) {
+      _startDurationTimer();
+    }
+    if (_phase != CallPhase.active) {
+      _durationTimer?.cancel();
+      _durationTimer = null;
+    }
+
+    final session = _session;
+    if (session == null) {
+      return const Scaffold(backgroundColor: Color(0xFF0B141A), body: SizedBox.shrink());
+    }
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0B141A),
+      body: _isVideo ? _buildVideoBody(session) : _buildAudioBody(session),
+    );
+  }
+
+  // ─── Video call (WhatsApp): camera preview while ringing + remote when connected ───
+  Widget _buildVideoBody(CallSession session) {
+    return SafeArea(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Background: remote when active, else local preview (self while ringing)
+          if (_hasRemoteVideo)
+            RTCVideoView(
+              _remoteRenderer,
+              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+            )
+          else if (_hasLocalVideo)
+            RTCVideoView(
+              _localRenderer,
+              mirror: true,
+              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+            )
+          else
+            Container(
+              color: const Color(0xFF0B141A),
+              child: Center(
+                child: Icon(Icons.videocam_off_rounded, size: 64, color: Colors.white.withValues(alpha: 0.35)),
               ),
-              if (widget.video)
-                Positioned(
-                  top: 16,
-                  left: 16,
-                  right: 16,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.peerName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (_status.isNotEmpty)
-                        Text(_status, style: const TextStyle(color: Colors.white70)),
+            ),
+
+          // Dim overlay while not yet connected (easier to read name/status)
+          if (_phase != CallPhase.active)
+            Container(color: Colors.black.withValues(alpha: 0.35)),
+
+          // Local PiP once remote video is showing
+          if (_hasRemoteVideo && _hasLocalVideo)
+            Positioned(
+              top: 12,
+              right: 12,
+              width: 108,
+              height: 152,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white38, width: 1.5),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withValues(alpha: 0.45), blurRadius: 8),
                     ],
                   ),
-                ),
-              if (widget.video)
-                Positioned(
-                  top: 16,
-                  right: 16,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: SizedBox(
-                      width: 110,
-                      height: 150,
-                      child: RTCVideoView(
-                        _localRenderer,
-                        mirror: true,
-                        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                      ),
-                    ),
+                  child: RTCVideoView(
+                    _localRenderer,
+                    mirror: true,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                   ),
                 ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 28,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _roundBtn(
-                      icon: _micOn ? Icons.mic : Icons.mic_off,
-                      on: _micOn,
-                      onTap: _toggleMic,
-                    ),
-                    if (widget.video)
-                      _roundBtn(
-                        icon: _camOn ? Icons.videocam : Icons.videocam_off,
-                        on: _camOn,
-                        onTap: _toggleCam,
-                      ),
-                    _roundBtn(
-                      icon: _speakerOn ? Icons.volume_up : Icons.volume_off,
-                      on: _speakerOn,
-                      onTap: _toggleSpeaker,
-                    ),
-                    _roundBtn(
-                      icon: Icons.call_end,
-                      on: false,
-                      color: AppTheme.danger,
-                      onTap: () => _leave(sendHangup: true),
-                    ),
-                  ],
-                ),
               ),
-            ],
+            ),
+
+          // Top info bar
+          Positioned(
+            top: 8,
+            left: 16,
+            right: _hasRemoteVideo && _hasLocalVideo ? 130 : 16,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  session.peerName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    shadows: [Shadow(color: Colors.black54, blurRadius: 6)],
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _statusText,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    fontSize: 14,
+                    shadows: const [Shadow(color: Colors.black54, blurRadius: 6)],
+                  ),
+                ),
+              ],
+            ),
           ),
+
+          // Bottom controls
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 28,
+            child: _phase == CallPhase.incoming ? _incomingActions(video: true) : _inCallControls(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Voice call: avatar + dark gradient (no camera) ───
+  Widget _buildAudioBody(CallSession session) {
+    return SafeArea(
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF1F2C34), Color(0xFF0B141A)],
+          ),
+        ),
+        child: Column(
+          children: [
+            const SizedBox(height: 56),
+            CircleAvatar(
+              radius: 56,
+              backgroundColor: const Color(0xFF005C4B),
+              child: Text(
+                _initials(session.peerName),
+                style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                session.peerName,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _statusText,
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.72), fontSize: 16),
+            ),
+            const Spacer(),
+            if (_phase == CallPhase.incoming) _incomingActions(video: false) else _inCallControls(),
+            const SizedBox(height: 36),
+          ],
         ),
       ),
     );
   }
 
-  Widget _roundBtn({
-    required IconData icon,
-    required bool on,
-    required VoidCallback onTap,
-    Color? color,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: CircleAvatar(
-        radius: 28,
-        backgroundColor: color ?? (on ? const Color(0x33FFFFFF) : Colors.white24),
-        child: Icon(icon, color: Colors.white, size: 26),
+  Widget _incomingActions({required bool video}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 40),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _roundAction(
+            icon: Icons.call_end_rounded,
+            label: 'Decline',
+            color: const Color(0xFFE53935),
+            size: 64,
+            onTap: () {
+              _call.rejectIncoming();
+              Navigator.pop(context);
+            },
+          ),
+          _roundAction(
+            icon: video ? Icons.videocam_rounded : Icons.call_rounded,
+            label: 'Accept',
+            color: const Color(0xFF25D366),
+            size: 64,
+            onTap: () async {
+              await _call.acceptIncoming();
+            },
+          ),
+        ],
       ),
+    );
+  }
+
+  Widget _inCallControls() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _roundAction(
+            icon: _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+            label: _muted ? 'Unmute' : 'Mute',
+            color: Colors.white.withValues(alpha: 0.18),
+            iconColor: Colors.white,
+            onTap: () async {
+              setState(() => _muted = !_muted);
+              await _call.toggleMute(_muted);
+            },
+          ),
+          if (_isVideo) ...[
+            _roundAction(
+              icon: _cameraOff ? Icons.videocam_off_rounded : Icons.videocam_rounded,
+              label: _cameraOff ? 'Camera off' : 'Camera',
+              color: Colors.white.withValues(alpha: 0.18),
+              iconColor: Colors.white,
+              onTap: () async {
+                setState(() => _cameraOff = !_cameraOff);
+                await _call.toggleCamera(!_cameraOff);
+              },
+            ),
+            _roundAction(
+              icon: Icons.cameraswitch_rounded,
+              label: 'Flip',
+              color: Colors.white.withValues(alpha: 0.18),
+              iconColor: Colors.white,
+              onTap: () => _call.switchCamera(),
+            ),
+          ],
+          _roundAction(
+            icon: Icons.call_end_rounded,
+            label: 'End',
+            color: const Color(0xFFE53935),
+            onTap: () {
+              _call.hangUp();
+              Navigator.pop(context);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _roundAction({
+    required IconData icon,
+    required String label,
+    required Color color,
+    Color iconColor = Colors.white,
+    double size = 58,
+    required VoidCallback onTap,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Material(
+          color: color,
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onTap,
+            child: SizedBox(
+              width: size,
+              height: size,
+              child: Icon(icon, color: iconColor, size: size * 0.45),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 12)),
+      ],
     );
   }
 
   String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
     if (parts.isEmpty) return '?';
     if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
-    return (parts.first[0] + parts.last[0]).toUpperCase();
-  }
-}
-
-class IncomingCallOverlay extends StatelessWidget {
-  const IncomingCallOverlay({
-    super.key,
-    required this.invite,
-    required this.onAccept,
-    required this.onReject,
-  });
-
-  final CallInvite invite;
-  final VoidCallback onAccept;
-  final VoidCallback onReject;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.black.withValues(alpha: 0.72),
-      child: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 28),
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
-              decoration: BoxDecoration(
-                color: AppTheme.surface,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    invite.video ? Icons.videocam : Icons.call,
-                    color: AppTheme.primaryBright,
-                    size: 36,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    invite.video ? 'Incoming video call' : 'Incoming audio call',
-                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    invite.peerName,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: onReject,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.danger,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                          child: const Text('Decline'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: onAccept,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.success,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                          child: const Text('Accept'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+    return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
   }
 }

@@ -8,6 +8,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config.dart';
 import '../utils/ws_connect.dart';
 import 'api_service.dart';
+import 'call_tokens.dart';
 import 'notification_sound.dart';
 
 /// Real-time notifications via WebSocket (`/ws/chat/`) with polling fallback.
@@ -33,16 +34,96 @@ class NotificationService {
   final _presenceController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get presenceStream => _presenceController.stream;
 
-  final _callSignalController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get callSignalStream => _callSignalController.stream;
+  final _typingController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get typingStream => _typingController.stream;
 
-  void sendJson(Map<String, dynamic> payload) {
-    try {
-      _channel?.sink.add(jsonEncode(payload));
-    } catch (_) {}
-  }
+  final _messagesReadController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get messagesReadStream => _messagesReadController.stream;
+
+  final _callController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get callStream => _callController.stream;
+
+  static const _callTypes = {
+    'call_invite',
+    'call_accept',
+    'call_reject',
+    'call_hangup',
+    'call_offer',
+    'call_answer',
+    'call_ice',
+    'call_error',
+  };
+
+  final List<Map<String, dynamic>> _pendingCallSignals = [];
 
   void Function(int count)? onUnreadCountChanged;
+
+  bool get isWsConnected => _channel != null;
+
+  /// Wait until the shared chat WebSocket is up (needed before call signaling).
+  Future<bool> waitForConnection({
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    if (_channel != null) return true;
+    if (!_running) await start();
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      if (_channel != null) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+    }
+    return _channel != null;
+  }
+
+  /// Subscribe to call signaling; replays signals received before bind.
+  StreamSubscription<Map<String, dynamic>> listenCalls(
+    void Function(Map<String, dynamic> event) onData,
+  ) {
+    for (final event in _pendingCallSignals) {
+      onData(event);
+    }
+    _pendingCallSignals.clear();
+    return callStream.listen(onData);
+  }
+
+  void _emitCallSignal(Map<String, dynamic> data) {
+    if (!_callController.hasListener) {
+      _pendingCallSignals.add(data);
+      if (_pendingCallSignals.length > 8) {
+        _pendingCallSignals.removeAt(0);
+      }
+      return;
+    }
+    _callController.add(data);
+  }
+
+  /// Send a chat signaling payload on the shared `/ws/chat/` socket.
+  bool sendChatPayload(Map<String, dynamic> payload) {
+    final ch = _channel;
+    if (ch == null) return false;
+    try {
+      ch.sink.add(jsonEncode(payload));
+      return true;
+    } catch (e) {
+      if (kDebugMode) debugPrint('[NotificationService] sendChatPayload: $e');
+      return false;
+    }
+  }
+
+  void sendTyping({required int receiverId, required bool isTyping}) {
+    sendChatPayload({
+      'type': 'typing',
+      'receiver_id': receiverId,
+      'is_typing': isTyping,
+    });
+  }
+
+  void sendGroupTyping({required int groupId, required bool isTyping}) {
+    sendChatPayload({
+      'type': 'group_typing',
+      'group_id': groupId,
+      'is_typing': isTyping,
+    });
+  }
 
   Duration get _pollInterval {
     if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
@@ -51,13 +132,30 @@ class NotificationService {
     return const Duration(seconds: 30);
   }
 
+  Duration _activePollInterval = const Duration(seconds: 30);
+
+  /// Faster polling while Android/iOS is backgrounded (WS often dies).
+  void setAppInBackground(bool background) {
+    if (!_running) return;
+    final next = (!kIsWeb && (Platform.isAndroid || Platform.isIOS) && background)
+        ? const Duration(seconds: 6)
+        : _pollInterval;
+    if (next == _activePollInterval) return;
+    _activePollInterval = next;
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(_activePollInterval, (_) {
+      refreshUnreadCount(playSoundOnIncrease: true);
+    });
+  }
+
   Future<void> start() async {
     if (_running) return;
     _running = true;
+    _activePollInterval = _pollInterval;
     await refreshUnreadCount();
     unawaited(_connectWebSocket());
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(_pollInterval, (_) {
+    _pollTimer = Timer.periodic(_activePollInterval, (_) {
       refreshUnreadCount(playSoundOnIncrease: true);
     });
   }
@@ -76,6 +174,7 @@ class NotificationService {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _disconnectWebSocket();
+    _pendingCallSignals.clear();
     unreadCount = 0;
     onUnreadCountChanged?.call(0);
   }
@@ -218,9 +317,40 @@ class NotificationService {
       _presenceController.add(data);
       return;
     }
-    if (type.startsWith('call_')) {
-      _callSignalController.add(data);
+    if (type == 'typing_indicator' || type == 'group_typing') {
+      _typingController.add(data);
       return;
+    }
+    if (type == 'messages_read') {
+      _messagesReadController.add(data);
+      return;
+    }
+    if (_callTypes.contains(type)) {
+      _emitCallSignal(data);
+      return;
+    }
+    if (type == 'chat_message') {
+      final call = CallTokens.chatMessageToCallSignal(data);
+      if (call != null) {
+        _emitCallSignal(call);
+      }
+      return;
+    }
+    if (type == 'notification') {
+      final notifType = data['notification_type']?.toString() ?? '';
+      if (notifType == 'call_invite') {
+        final msg = data['message']?.toString() ?? '';
+        final call = CallTokens.chatMessageToCallSignal({
+          'message': msg,
+          'sender_id': _notifInt(data['sender_id']) ?? _notifInt(data['sender']),
+          'sender_username': data['sender_username'],
+          'sender_name': data['title']?.toString().replaceFirst('Incoming call from ', ''),
+        });
+        if (call != null) {
+          _emitCallSignal(call);
+          return;
+        }
+      }
     }
     if (type != 'notification' && type != 'task_notification') return;
 
@@ -242,8 +372,16 @@ class NotificationService {
     _pushController.add(data);
   }
 
+  int? _notifInt(dynamic v) {
+    if (v is int) return v;
+    return int.tryParse('${v ?? ''}');
+  }
+
   void dispose() {
     stop();
+    _typingController.close();
+    _messagesReadController.close();
+    _callController.close();
     _pushController.close();
     _presenceController.close();
     _callSignalController.close();

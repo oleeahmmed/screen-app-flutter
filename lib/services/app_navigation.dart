@@ -7,9 +7,15 @@ class AppNavigation {
   static const int tabHome = 0;
   static const int tabMyTasks = 1;
   static const int tabChat = 2;
-  static const int tabAlerts = 3;
-  static const int tabProfile = 4;
+  static const int tabVault = 3;
+  static const int tabProject = 4;
   static const int tabCount = 5;
+
+  /// @deprecated Notifications live in the top bar — use [openNotifications].
+  static const int tabAlerts = tabVault;
+
+  /// Profile is opened from the top bar (not a bottom tab).
+  static const int tabProfile = -1;
 
   int selectedTabIndex = 0;
   int unreadNotifs = 0;
@@ -23,12 +29,15 @@ class AppNavigation {
   Future<void> Function()? onOpenProject;
   Future<void> Function()? onOpenP2P;
   Future<void> Function()? onOpenSubmitReport;
+  Future<void> Function()? onOpenNotifications;
+  Future<void> Function()? onOpenProfile;
   Future<void> Function()? onLogout;
 
   void selectTab(int index) => onSelectTab?.call(index);
 
   /// Pop stacked routes (task detail, tools) then switch main tab.
   void navigateToTab(int index) {
+    if (index < 0 || index >= tabCount) return;
     if (onNavigateToTab != null) {
       onNavigateToTab!(index);
     } else {
@@ -39,14 +48,14 @@ class AppNavigation {
   void goHome() => navigateToTab(tabHome);
   void goMyTasks() => navigateToTab(tabMyTasks);
   void goChat() => navigateToTab(tabChat);
-  void goAlerts() => navigateToTab(tabAlerts);
-  void goProfile() => navigateToTab(tabProfile);
+  void goVault() => navigateToTab(tabVault);
+  void goProject() => navigateToTab(tabProject);
 
-  /// Opens project list as a pushed screen (not a bottom tab).
-  Future<void> goProject() async => await openProject();
+  /// Opens profile from the top bar.
+  void goProfile() => openProfile();
 
-  /// @deprecated Use [goProject].
-  void goWork() => goProject();
+  /// Opens notifications (top-bar action — not a bottom tab).
+  void goAlerts() => openNotifications();
 
   Future<void> openDailyReport() async => await onOpenDailyReport?.call();
 
@@ -61,6 +70,10 @@ class AppNavigation {
   Future<void> openP2P() async => await onOpenP2P?.call();
 
   Future<void> openSubmitReport() async => await onOpenSubmitReport?.call();
+
+  Future<void> openNotifications() async => await onOpenNotifications?.call();
+
+  Future<void> openProfile() async => await onOpenProfile?.call();
 
   Future<void> logout() async {
     final fn = onLogout;

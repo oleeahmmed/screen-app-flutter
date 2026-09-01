@@ -8,7 +8,6 @@ import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/responsive.dart';
-import '../widgets/app_quick_menu.dart';
 import '../widgets/app_tab_shell.dart';
 import '../widgets/empty_state.dart';
 import '../utils/platform_capabilities.dart';
@@ -885,7 +884,7 @@ class _ProjectsPageState extends State<ProjectsPage> {
           builder: (_) => AppTabShell(
             selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
             unreadNotifs: AppNavigation.instance.unreadNotifs,
-            showTopBar: false,
+            showTopBar: true,
             showBottomNav: false,
             child: ProjectDetailView(
               apiService: widget.apiService,
@@ -2193,64 +2192,96 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   Widget build(BuildContext context) {
     final stats = _project?['stats'] as Map<String, dynamic>? ?? {};
     final totalTasks = stats['total_tasks'] ?? 0;
+    final pad = Responsive.pagePadding(context);
+
     return Scaffold(
-      body: AppTheme.homeGlassBackground(
-        child: SafeArea(
-          bottom: false,
-          child: _isLoading && _project == null
-              ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright))
-              : _project == null
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(_loadError ?? 'Failed to load', style: const TextStyle(color: AppTheme.textMuted), textAlign: TextAlign.center),
-                          const SizedBox(height: 12),
-                          TextButton(onPressed: _load, child: const Text('Retry', style: TextStyle(color: Colors.white))),
-                        ],
-                      ),
-                    )
-                  : Column(
+      backgroundColor: Colors.transparent,
+      body: SafeArea(
+        bottom: false,
+        child: _isLoading && _project == null
+            ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright))
+            : _project == null
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (_isRefreshing)
-                          const LinearProgressIndicator(
-                            minHeight: 2,
-                            backgroundColor: Colors.transparent,
-                            valueColor: AlwaysStoppedAnimation(AppTheme.featureVault),
-                          ),
-                        _buildHeader(),
-                        TabBar(
-                          controller: _tabCtrl,
-                          indicatorColor: AppTheme.primary,
-                          labelColor: Colors.white,
-                          unselectedLabelColor: AppTheme.textMuted,
-                          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                          tabs: [
-                            Tab(text: 'Tasks ($totalTasks)'),
-                            const Tab(text: 'Vault'),
-                          ],
+                        Text(_loadError ?? 'Failed to load', style: const TextStyle(color: AppTheme.textMuted), textAlign: TextAlign.center),
+                        const SizedBox(height: 12),
+                        TextButton(onPressed: _load, child: const Text('Retry', style: TextStyle(color: Colors.white))),
+                      ],
+                    ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_isRefreshing)
+                        const LinearProgressIndicator(
+                          minHeight: 2,
+                          backgroundColor: Colors.transparent,
+                          valueColor: AlwaysStoppedAnimation(AppTheme.featureVault),
                         ),
-                        Expanded(
-                          child: TabBarView(
+                      _buildHeader(),
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(pad, 10, pad, 8),
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
+                          child: TabBar(
                             controller: _tabCtrl,
-                            children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  _buildTasksToolbar(),
-                                  Expanded(child: _buildTasksContent()),
+                            indicatorSize: TabBarIndicatorSize.tab,
+                            dividerColor: Colors.transparent,
+                            indicator: BoxDecoration(
+                              borderRadius: BorderRadius.circular(10),
+                              gradient: LinearGradient(
+                                colors: [
+                                  AppTheme.primary.withValues(alpha: 0.55),
+                                  AppTheme.featureVault.withValues(alpha: 0.35),
                                 ],
                               ),
-                              ProjectVaultTab(apiService: widget.apiService, projectId: widget.projectId),
+                              border: Border.all(color: AppTheme.primary.withValues(alpha: 0.35)),
+                            ),
+                            labelColor: Colors.white,
+                            unselectedLabelColor: AppTheme.textMuted,
+                            labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                            unselectedLabelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                            tabs: [
+                              Tab(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text('Tasks ($totalTasks)'),
+                                ),
+                              ),
+                              const Tab(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text('Vault'),
+                                ),
+                              ),
                             ],
                           ),
                         ),
-                      ],
-                    ),
-        ),
+                      ),
+                      Expanded(
+                        child: TabBarView(
+                          controller: _tabCtrl,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _buildTasksToolbar(),
+                                Expanded(child: _buildTasksContent()),
+                              ],
+                            ),
+                            ProjectVaultTab(apiService: widget.apiService, projectId: widget.projectId),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
       ),
     );
   }
+
   Widget _buildHeader() {
     final p = _project!;
     final comp = (p['completion_percentage'] ?? 0).toDouble();
@@ -2277,128 +2308,188 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
       }
     }
 
+    final sc = statusColor(st);
+
     return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 8, pad, 6),
+      padding: EdgeInsets.fromLTRB(pad, 6, pad, 4),
       child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: AppTheme.taskCardDecoration(borderRadius: 16),
+        decoration: AppTheme.loginShell().copyWith(borderRadius: BorderRadius.circular(20)),
+        clipBehavior: Clip.antiAlias,
         child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (!widget.embedded && (ModalRoute.of(context)?.canPop ?? false)) ...[
-                const AppBackButton(color: AppTheme.textMuted),
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            _displayStr(p['name']),
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: Responsive.isMobile(context) ? 17 : 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: statusColor(st).withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: statusColor(st).withValues(alpha: 0.35)),
-                          ),
-                          child: Text(
-                            st.replaceAll('_', ' ').toUpperCase(),
-                            style: TextStyle(color: statusColor(st), fontSize: 10, fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (subtitle.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(subtitle, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-                      ),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    AppTheme.primary.withValues(alpha: 0.35),
+                    AppTheme.featureVault.withValues(alpha: 0.22),
+                    Colors.transparent,
                   ],
                 ),
               ),
-              if (!widget.embedded)
-                const AppHeaderMenuActions(iconColor: AppTheme.textMuted, iconSize: 20),
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert, color: AppTheme.textMuted, size: 22),
-                color: AppTheme.surface2,
-                onSelected: (v) {
-                  if (v == 'add_stage') _showAddStageDialog();
-                  else if (v == 'edit') _showEditProjectDialog();
-                  else if (v == 'delete') _deleteProject();
-                  else if (v == 'refresh') _load();
-                },
-                itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'add_stage', child: Text('Add Stage')),
-                  const PopupMenuItem(value: 'edit', child: Text('Edit Project')),
-                  const PopupMenuItem(value: 'refresh', child: Text('Refresh')),
-                  if (_isManager) const PopupMenuItem(value: 'delete', child: Text('Delete Project', style: TextStyle(color: Colors.redAccent))),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _headerStatPill('$pending', 'pending', AppTheme.warning),
-                const SizedBox(width: 8),
-                _headerStatPill('$done', 'completed', AppTheme.success),
-                const SizedBox(width: 8),
-                _headerStatPill('0', 'archived', AppTheme.textMuted),
-                const SizedBox(width: 12),
-                SizedBox(
-                  width: 44,
-                  height: 44,
-                  child: Stack(
-                    alignment: Alignment.center,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      CircularProgressIndicator(
-                        value: (comp / 100).clamp(0.0, 1.0),
-                        strokeWidth: 4,
-                        backgroundColor: Colors.white.withValues(alpha: 0.08),
-                        valueColor: const AlwaysStoppedAnimation(AppTheme.primary),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _displayStr(p['name']),
+                              style: TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontSize: Responsive.isMobile(context) ? 20 : 22,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.4,
+                                height: 1.15,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (subtitle.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                subtitle,
+                                style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.95), fontSize: 12.5),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                      Text('${comp.toInt()}%', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
+                      PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert, color: AppTheme.textMuted, size: 22),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                        color: AppTheme.surface2,
+                        onSelected: (v) {
+                          if (v == 'add_stage') _showAddStageDialog();
+                          else if (v == 'edit') _showEditProjectDialog();
+                          else if (v == 'delete') _deleteProject();
+                          else if (v == 'refresh') _load();
+                        },
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(value: 'add_stage', child: Text('Add Stage')),
+                          const PopupMenuItem(value: 'edit', child: Text('Edit Project')),
+                          const PopupMenuItem(value: 'refresh', child: Text('Refresh')),
+                          if (_isManager) const PopupMenuItem(value: 'delete', child: Text('Delete Project', style: TextStyle(color: Colors.redAccent))),
+                        ],
+                      ),
                     ],
                   ),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: sc.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: sc.withValues(alpha: 0.4)),
+                        ),
+                        child: Text(
+                          st.replaceAll('_', ' ').toUpperCase(),
+                          style: TextStyle(color: sc, fontSize: 10, fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if ((p['priority'] ?? '').toString().isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                          ),
+                          child: Text(
+                            (p['priority'] ?? '').toString().toUpperCase(),
+                            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.95), fontSize: 10, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        '${comp.toInt()}% complete',
+                        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '$done / $total tasks',
+                        style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 11.5),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: (comp / 100).clamp(0.0, 1.0),
+                      minHeight: 7,
+                      backgroundColor: Colors.white.withValues(alpha: 0.08),
+                      valueColor: const AlwaysStoppedAnimation(AppTheme.primaryBright),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(child: _headerStatTile('$pending', 'Pending', AppTheme.warning, Icons.pending_actions_outlined)),
+                      const SizedBox(width: 6),
+                      Expanded(child: _headerStatTile('$done', 'Done', AppTheme.success, Icons.check_circle_outline)),
+                      const SizedBox(width: 6),
+                      Expanded(child: _headerStatTile('$total', 'Total', AppTheme.primaryBright, Icons.layers_outlined)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _headerStatPill(String value, String label, Color color) {
+  Widget _headerStatTile(String value, String label, Color color, IconData icon) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: AppTheme.taskFieldDecoration(borderRadius: 10),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(value, style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.bold)),
-          const SizedBox(width: 6),
-          Text(label, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11)),
+          Icon(icon, size: 16, color: color.withValues(alpha: 0.9)),
+          const SizedBox(height: 6),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.w800, height: 1),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 10.5, fontWeight: FontWeight.w600),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ],
       ),
     );

@@ -605,73 +605,10 @@ class AppTheme {
     );
   }
 
-  /// Home / tool pages — same blue glass shell as Daily Report.
+  /// Alias of [loginDashboardBackground] — keeps every page on the Home / Submit theme.
   static Widget homeGlassBackground({required Widget child}) {
-    return DecoratedBox(
-      decoration: shellBackgroundDecoration,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: const Alignment(-0.2, -0.75),
-                radius: 1.25,
-                colors: [
-                  primaryBright.withValues(alpha: 0.38),
-                  Colors.transparent,
-                ],
-                stops: const [0.0, 0.62],
-              ),
-            ),
-          ),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: const Alignment(1.1, -0.2),
-                radius: 1.0,
-                colors: [
-                  accent.withValues(alpha: 0.22),
-                  Colors.transparent,
-                ],
-                stops: const [0.0, 0.55],
-              ),
-            ),
-          ),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: RadialGradient(
-                center: const Alignment(-0.6, 1.1),
-                radius: 1.15,
-                colors: [
-                  featureVault.withValues(alpha: 0.16),
-                  Colors.transparent,
-                ],
-                stops: const [0.0, 0.58],
-              ),
-            ),
-          ),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 200,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withValues(alpha: 0.07),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-            ),
-          ),
-          child,
-        ],
-      ),
+    return Builder(
+      builder: (context) => loginDashboardBackground(context: context, child: child),
     );
   }
 

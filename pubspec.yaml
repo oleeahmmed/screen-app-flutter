@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.3+3
+version: 1.0.3+8
 
 environment:
   sdk: ^3.10.8
@@ -42,6 +42,7 @@ dependencies:
   record: ^6.0.0
   audioplayers: ^6.4.0  # Voice playback
   file_picker: ^9.2.1  # File/image picker
+  image_picker: ^1.1.2  # Camera + gallery for chat
   mime: ^2.0.0  # MIME type detection
   flutter_webrtc: ^0.12.12  # WebRTC for P2P file transfer
   qr_flutter: ^4.1.0  # QR code generation
@@ -51,14 +52,13 @@ dependencies:
   desktop_drop: ^0.7.1
   flutter_markdown: ^0.7.7
   flutter_local_notifications: ^17.2.4
-  flutter_background_service: ^5.1.0
-  firebase_core: ^3.15.2
-  firebase_messaging: ^15.2.10
-  flutter_quill: 11.5.1
+  firebase_core: ^3.13.0
+  firebase_messaging: ^15.2.5
+  flutter_quill: 11.4.2
   flutter_quill_delta_from_html: ^1.5.3
   vsc_quill_delta_to_html: ^1.0.5
-  lucide_icons:
-    path: third_party/lucide_icons
+  lucide_icons: ^0.257.0
+  open_filex: ^4.7.0
 
 dev_dependencies:
   flutter_test:
