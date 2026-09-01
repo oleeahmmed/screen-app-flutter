@@ -33,7 +33,6 @@ abstract final class PlatformCapabilities {
   static bool get screenshotMonitoring =>
       Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
-  /// Full-screen chat on phone — hide app top bar + bottom nav (back stays in chat UI).
-  static bool get immersiveChatChrome =>
-      Platform.isAndroid || Platform.isIOS;
+  /// Full-screen chat chrome. Off so Chat keeps the same app top/bottom bars as Home.
+  static bool get immersiveChatChrome => false;
 }

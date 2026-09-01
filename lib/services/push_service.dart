@@ -6,6 +6,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
+import '../firebase_options.dart';
 import 'api_service.dart';
 import 'local_notification_service_mobile.dart';
 import 'notification_sound.dart';
@@ -25,7 +26,9 @@ class PushService {
   Future<void> initialize() async {
     if (!supported || _initialized) return;
     try {
-      await Firebase.initializeApp();
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.android,
+      );
       FirebaseMessaging.onBackgroundMessage(_firebaseBackgroundHandler);
       _initialized = true;
 
@@ -140,6 +143,7 @@ abstract final class AppNavigationBridge {
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.android);
   await LocalNotificationService.initialize();
   await PushService._showFromRemoteMessage(message, playSound: true);
 }

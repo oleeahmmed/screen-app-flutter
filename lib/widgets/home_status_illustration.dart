@@ -21,14 +21,18 @@ class HomeStatusIllustration extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!isClockedIn) return const SizedBox.shrink();
-
-    final isBreak = onBreak;
-    final color = isBreak ? AppTheme.warning : AppTheme.success;
-    final title = isBreak ? 'On Break' : 'Working';
-    final subtitle = isBreak
-        ? 'Take your time — end break when you are ready'
-        : 'You are clocked in and your work timer is running';
+    final isBreak = isClockedIn && onBreak;
+    final color = !isClockedIn
+        ? AppTheme.primaryBright
+        : (isBreak ? AppTheme.warning : AppTheme.success);
+    final title = !isClockedIn
+        ? 'Ready'
+        : (isBreak ? 'On Break' : 'Working');
+    final subtitle = !isClockedIn
+        ? 'Clock in to start your work day'
+        : (isBreak
+            ? 'Take your time — end break when you are ready'
+            : 'You are clocked in and your work timer is running');
     final asset = isBreak
         ? 'assets/status/status_break.png'
         : 'assets/status/status_working.png';

@@ -20,6 +20,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_dialog.dart';
 import '../widgets/break_panel.dart';
 import '../widgets/animated_glow_border.dart';
+import '../widgets/home_status_illustration.dart';
 
 class DashboardPage extends StatefulWidget {
   final ApiService apiService;
@@ -367,6 +368,12 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           const SizedBox(height: 18),
           _buildActionArea(),
+          HomeStatusIllustration(
+            isClockedIn: _isClockedIn,
+            onBreak: _onBreak,
+            workDayLabel: _workDayLabel(),
+            shiftInfo: _shiftInfoLabel(displayName),
+          ),
         ],
       ),
     );

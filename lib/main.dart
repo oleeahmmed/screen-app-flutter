@@ -19,8 +19,6 @@ import 'services/call_tokens.dart';
 import 'services/push_service.dart';
 import 'services/local_notification_service.dart';
 import 'services/push_keepalive_service.dart';
-import 'services/fcm_push_service.dart';
-import 'services/call_service.dart';
 import 'pages/login_page.dart';
 import 'pages/dashboard_page.dart';
 import 'pages/tasks_page.dart';
@@ -30,7 +28,6 @@ import 'pages/call_page.dart';
 import 'pages/notifications_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/peer2peer_page.dart';
-import 'pages/call_page.dart';
 import 'pages/daily_report_tool_page.dart';
 import 'pages/activity_tool_page.dart';
 import 'pages/attendance_report_page.dart';
@@ -62,6 +59,7 @@ void main() async {
   AppSession.screenshotIntervalSeconds = AppConfig.screenshotInterval;
   await LocalNotificationService.initialize();
   await PushService.instance.initialize();
+  await PushKeepAlive.configure();
   runApp(const MyApp());
 }
 
@@ -423,8 +421,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycle = state;
+    final foreground = state == AppLifecycleState.resumed;
+    PushKeepAlive.setUiForeground(foreground);
     if (!_isLoggedIn) return;
-    if (state == AppLifecycleState.resumed) {
+    if (foreground) {
       _notificationService.setAppInBackground(false);
       unawaited(_notificationService.reconnect());
     } else if (state == AppLifecycleState.paused ||
@@ -461,6 +461,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       }
     });
     unawaited(_ensureMobileNotificationPermission());
+    unawaited(PushKeepAlive.start());
     unawaited(PushService.instance.bindApi(_apiService));
   }
 
@@ -507,7 +508,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   void _stopNotifications() {
-    unawaited(FcmPushService.unregister(_apiService));
     unawaited(PushKeepAlive.stop());
     _notifPushSub?.cancel();
     _notifPushSub = null;
