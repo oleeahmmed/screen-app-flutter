@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../theme/app_theme.dart';
 import '../utils/notification_ui.dart';
+import '../utils/whatsapp_avatar.dart';
 
-/// Brief top banner when a notification arrives in real time.
+/// WhatsApp-style heads-up banner when a notification arrives in the open app.
 class NotificationBanner {
   NotificationBanner._();
 
@@ -26,7 +26,8 @@ class NotificationBanner {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
 
-    final color = NotificationUi.colorFor(notificationType);
+    final isChat = notificationType == 'new_message' || notificationType == 'new_group_message';
+    final color = isChat ? const Color(0xFF00A884) : NotificationUi.colorFor(notificationType);
     final icon = NotificationUi.iconFor(notificationType);
 
     _entry = OverlayEntry(
@@ -34,81 +35,92 @@ class NotificationBanner {
         child: Align(
           alignment: Alignment.topCenter,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
             child: Material(
               color: Colors.transparent,
-              child: GestureDetector(
-                onTap: () {
-                  hide();
-                  onTap?.call();
-                },
-                child: Container(
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E293B).withValues(alpha: 0.96),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: color.withValues(alpha: 0.45)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.35),
-                        blurRadius: 16,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: color.withValues(alpha: 0.18),
-                          borderRadius: BorderRadius.circular(10),
+              child: Dismissible(
+                key: const ValueKey('aims_wa_banner'),
+                direction: DismissDirection.up,
+                onDismissed: (_) => hide(),
+                child: GestureDetector(
+                  onTap: () {
+                    hide();
+                    onTap?.call();
+                  },
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    padding: const EdgeInsets.fromLTRB(10, 10, 12, 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1F2C34),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.45),
+                          blurRadius: 18,
+                          offset: const Offset(0, 8),
                         ),
-                        child: Icon(icon, color: color, size: 18),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: AppTheme.textPrimary,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13,
-                              ),
-                            ),
-                            if (message.isNotEmpty) ...[
-                              const SizedBox(height: 2),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 22,
+                          backgroundColor: color,
+                          child: isChat
+                              ? Text(
+                                  WhatsAppAvatar.initials(title),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 15,
+                                  ),
+                                )
+                              : Icon(icon, color: Colors.white, size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
                               Text(
-                                message,
-                                maxLines: 2,
+                                title,
+                                maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: AppTheme.textMuted.withValues(alpha: 0.95),
-                                  fontSize: 12,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 15,
+                                  height: 1.2,
                                 ),
                               ),
+                              if (message.isNotEmpty) ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  message,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Color(0xFF8696A0),
+                                    fontSize: 13.5,
+                                    height: 1.25,
+                                  ),
+                                ),
+                              ],
                             ],
-                          ],
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        onPressed: hide,
-                        icon: Icon(
-                          Icons.close_rounded,
-                          size: 18,
-                          color: AppTheme.textMuted.withValues(alpha: 0.8),
+                        const SizedBox(width: 8),
+                        Text(
+                          'now',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.45),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),

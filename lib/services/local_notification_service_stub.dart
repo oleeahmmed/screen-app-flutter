@@ -6,10 +6,11 @@ class LocalNotificationService {
 
   static bool _initialized = false;
   static void Function(String? payload)? onTap;
-  static void Function(String? actionId, String? payload)? onAction;
+  static void Function(String? actionId, String? payload, String? input)? onAction;
 
   static String? pendingActionId;
   static String? pendingPayload;
+  static String? pendingInput;
 
   static const messageChannelId = 'aims_messages_v3';
   static const callChannelId = 'aims_calls_v3';
@@ -20,7 +21,7 @@ class LocalNotificationService {
     _initialized = true;
   }
 
-  static ({String? actionId, String? payload})? takePending() => null;
+  static ({String? actionId, String? payload, String? input})? takePending() => null;
 
   static Future<bool> requestPermissions() async => false;
 
@@ -30,6 +31,20 @@ class LocalNotificationService {
     required String body,
     String? payload,
     String channelId = messageChannelId,
+    String? personName,
+    int? personKey,
+    bool groupConversation = false,
+    String? conversationTitle,
+  }) async {}
+
+  static Future<void> showChat({
+    required String conversationKey,
+    required String personName,
+    required String body,
+    String? payload,
+    bool isGroup = false,
+    String? groupTitle,
+    int? personKey,
   }) async {}
 
   static Future<void> showIncomingCall({
@@ -50,4 +65,6 @@ class LocalNotificationService {
   static Future<void> cancelIncomingCall() async {}
 
   static Future<void> cancel(int id) async {}
+
+  static void clearChatThread(String conversationKey) {}
 }

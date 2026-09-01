@@ -17,10 +17,11 @@ class AppConfig {
     defaultValue: 1,
   );
 
-  static String get apiBaseUrl {
-    final base = _apiOrigin.endsWith('/') ? _apiOrigin.substring(0, _apiOrigin.length - 1) : _apiOrigin;
-    return '$base/api';
+  static String get apiOrigin {
+    return _apiOrigin.endsWith('/') ? _apiOrigin.substring(0, _apiOrigin.length - 1) : _apiOrigin;
   }
+
+  static String get apiBaseUrl => '$apiOrigin/api';
 
   /// JWT login (`/api/auth/login/` or legacy `/api/token/`).
   static String get authLoginUrl => '$apiBaseUrl/auth/login/';

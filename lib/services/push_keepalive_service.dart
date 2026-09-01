@@ -12,6 +12,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config.dart';
 import '../utils/ws_connect.dart';
 import 'call_notification.dart';
+import 'chat_notification.dart';
 import 'local_notification_service.dart';
 
 /// Keeps the chat WebSocket alive after login so Android can show system
@@ -211,6 +212,29 @@ class _PushKeepAliveIsolate {
           'Assigned by ${data['assigned_by'] ?? 'Admin'}';
     }
     if (body.isEmpty) body = 'Tap to open Aims';
+
+    final notifType = data['notification_type']?.toString() ?? '';
+    final isChat = notifType == 'new_message' || notifType == 'new_group_message';
+    if (isChat) {
+      final chat = ChatNotification.fromData(data);
+      await LocalNotificationService.showChat(
+        conversationKey: chat.isGroup
+            ? 'g:${chat.groupId ?? title.hashCode}'
+            : 'u:${chat.peerId ?? title.hashCode}',
+        personName: chat.name,
+        body: chat.body.isNotEmpty ? chat.body : body,
+        payload: ChatNotification.encode(
+          name: chat.name,
+          peerId: chat.peerId,
+          groupId: chat.groupId,
+          notificationType: notifType,
+        ),
+        isGroup: chat.isGroup,
+        groupTitle: chat.isGroup ? chat.name : null,
+        personKey: chat.peerId ?? chat.groupId,
+      );
+      return;
+    }
 
     final rawId = data['id'];
     final id = rawId is int ? rawId : int.tryParse('$rawId') ?? title.hashCode;

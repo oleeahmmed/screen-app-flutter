@@ -19,6 +19,9 @@ class AppNavigation {
 
   int selectedTabIndex = 0;
   int unreadNotifs = 0;
+  int? pendingChatUserId;
+  int? pendingChatGroupId;
+  void Function()? onPendingChatOpen;
 
   void Function(int index)? onSelectTab;
   void Function(int index)? onNavigateToTab;
@@ -48,6 +51,13 @@ class AppNavigation {
   void goHome() => navigateToTab(tabHome);
   void goMyTasks() => navigateToTab(tabMyTasks);
   void goChat() => navigateToTab(tabChat);
+
+  void goChatWithPeer({int? userId, int? groupId}) {
+    pendingChatUserId = userId;
+    pendingChatGroupId = groupId;
+    goChat();
+    onPendingChatOpen?.call();
+  }
   void goVault() => navigateToTab(tabVault);
   void goProject() => navigateToTab(tabProject);
 
