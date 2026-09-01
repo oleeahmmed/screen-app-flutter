@@ -108,6 +108,7 @@ class _ChatPageState extends State<ChatPage> {
     _typingSub = widget.notificationService?.typingStream.listen(_onTypingEvent);
     _messagesReadSub = widget.notificationService?.messagesReadStream.listen(_onMessagesRead);
     _chatMsgSub = widget.notificationService?.chatMessageStream.listen(_onRealtimeChatMessage);
+    AppNavigation.instance.onPendingChatOpen = _consumePendingChatOpen;
     _callPhaseSub = CallService.instance.phaseStream.listen((phase) {
       if (phase == CallPhase.incoming && mounted) {
         CallNavigation.openCallPageIfNeeded();
@@ -142,6 +143,9 @@ class _ChatPageState extends State<ChatPage> {
     _typingSub?.cancel();
     _messagesReadSub?.cancel();
     _chatMsgSub?.cancel();
+    if (AppNavigation.instance.onPendingChatOpen == _consumePendingChatOpen) {
+      AppNavigation.instance.onPendingChatOpen = null;
+    }
     _callPhaseSub?.cancel();
     _recordTimer?.cancel();
     _recProcess?.kill();
@@ -173,9 +177,37 @@ class _ChatPageState extends State<ChatPage> {
           }
         }
       });
+      _consumePendingChatOpen();
     } else if (mounted) {
       setState(() => _isLoadingUsers = false);
       if (!silent) _showError('Failed to load users');
+    }
+  }
+
+  void _consumePendingChatOpen() {
+    final userId = AppNavigation.instance.pendingChatUserId;
+    final groupId = AppNavigation.instance.pendingChatGroupId;
+    if (userId == null && groupId == null) return;
+    if (userId != null) {
+      AppNavigation.instance.pendingChatUserId = null;
+      for (final u in _users) {
+        if (u is Map && _asInt(u['id']) == userId) {
+          unawaited(_selectUser(u));
+          return;
+        }
+      }
+      return;
+    }
+    if (groupId != null) {
+      if (_groups.isEmpty && !_isLoadingGroups) unawaited(_loadGroups());
+      for (final g in _groups) {
+        if (g is Map && _asInt(g['id']) == groupId) {
+          AppNavigation.instance.pendingChatGroupId = null;
+          setState(() => _currentTab = 'group');
+          unawaited(_selectGroup(g));
+          return;
+        }
+      }
     }
   }
 
@@ -441,6 +473,7 @@ class _ChatPageState extends State<ChatPage> {
     final result = await widget.apiService.getChatGroups();
     if (result['success']) {
       setState(() { _groups = result['data'] ?? []; _isLoadingGroups = false; });
+      _consumePendingChatOpen();
     } else {
       setState(() => _isLoadingGroups = false);
       _showError('Failed to load groups');

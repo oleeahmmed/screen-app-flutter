@@ -1,3 +1,4 @@
+import 'package:aims_style_notify/aims_style_notify.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_quill/flutter_quill.dart';
@@ -16,6 +17,7 @@ import 'services/notification_service.dart';
 import 'services/call_service.dart';
 import 'services/call_navigation.dart';
 import 'services/call_notification.dart';
+import 'services/chat_notification.dart';
 import 'services/call_tokens.dart';
 import 'services/push_service.dart';
 import 'services/local_notification_service.dart';
@@ -111,6 +113,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _notifListRefreshToken = 0;
   int _homeRefreshToken = 0;
   StreamSubscription<Map<String, dynamic>>? _notifPushSub;
+  StreamSubscription<Map<String, dynamic>>? _nativeCallSub;
   AppLifecycleState _lifecycle = AppLifecycleState.resumed;
 
   Widget? _dashboardPage;
@@ -183,12 +186,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     super.initState();
     CallNavigation.navigatorKey = appNavigatorKey;
     WidgetsBinding.instance.addObserver(this);
-    LocalNotificationService.onAction = (actionId, payload) {
-      unawaited(_onNotificationAction(actionId, payload));
+    LocalNotificationService.onAction = (actionId, payload, input) {
+      unawaited(_onNotificationAction(actionId, payload, input: input));
     };
     LocalNotificationService.onTap = (payload) {
       if (CallNotification.isCallPayload(payload)) return;
       if (!_isLoggedIn || !mounted) return;
+      if (ChatNotification.isChatPayload(payload) || payload == 'chat') {
+        _openChatFromPayload(payload);
+        return;
+      }
       unawaited(_openNotifications());
     };
     AppNavigation.instance.onSelectTab = _onNavSelected;
@@ -204,6 +211,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenNotifications = _openNotifications;
     AppNavigation.instance.onOpenProfile = _openProfile;
     AppNavigationBridge.openChatTab = () => _navigateToTab(2);
+    AppNavigationBridge.openChatPeer = (userId, groupId) {
+      AppNavigation.instance.goChatWithPeer(userId: userId, groupId: groupId);
+    };
     AppNavigationBridge.openNotifications = _openNotifications;
     AppNavigationBridge.openIncomingCall = (data) {
       unawaited(CallService.instance.handleRemoteSignal(data));
@@ -455,6 +465,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     await _bindCallService();
     await _notificationService.start();
     _notifPushSub = _notificationService.pushStream.listen(_onPushNotification);
+    _nativeCallSub?.cancel();
+    if (!kIsWeb && Platform.isAndroid) {
+      _nativeCallSub = AimsStyleNotify.events().listen((event) {
+        unawaited(_onNotificationAction(
+          event['actionId']?.toString(),
+          event['payload']?.toString(),
+        ));
+      });
+    }
     unawaited(_ensureMobileNotificationPermission());
     unawaited(PushKeepAlive.start());
     unawaited(PushService.instance.bindApi(_apiService));
@@ -488,27 +507,50 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     };
     final pending = LocalNotificationService.takePending();
     if (pending != null) {
-      unawaited(_onNotificationAction(pending.actionId, pending.payload));
+      unawaited(_onNotificationAction(pending.actionId, pending.payload, input: pending.input));
     }
   }
 
-  Future<void> _onNotificationAction(String? actionId, String? payload) async {
+  Future<void> _onNotificationAction(String? actionId, String? payload, {String? input}) async {
     final invite = CallNotification.parse(payload);
     if (invite != null) {
       if (!_isLoggedIn) {
         LocalNotificationService.pendingActionId = actionId;
         LocalNotificationService.pendingPayload = payload;
+        LocalNotificationService.pendingInput = input;
         return;
       }
       await CallService.instance.applyNotificationAction(actionId, invite);
       return;
     }
     if (!_isLoggedIn || !mounted) return;
-    if (payload == 'chat') {
-      _navigateToTab(AppNavigation.tabChat);
+
+    if (actionId == ChatNotification.replyAction) {
+      await ChatNotification.replyViaHttp(payload, input);
+      return;
+    }
+    if (actionId == ChatNotification.markReadAction) {
+      await ChatNotification.markReadViaHttp(payload);
+      final chat = ChatNotification.parse(payload);
+      final peerId = int.tryParse('${chat?['peer_id'] ?? ''}');
+      if (peerId != null) {
+        LocalNotificationService.clearChatThread('u:$peerId');
+      }
+      return;
+    }
+
+    if (ChatNotification.isChatPayload(payload) || payload == 'chat') {
+      _openChatFromPayload(payload);
       return;
     }
     unawaited(_openNotifications());
+  }
+
+  void _openChatFromPayload(String? payload) {
+    final chat = ChatNotification.parse(payload);
+    final peerId = int.tryParse('${chat?['peer_id'] ?? ''}');
+    final groupId = int.tryParse('${chat?['group_id'] ?? ''}');
+    AppNavigation.instance.goChatWithPeer(userId: peerId, groupId: groupId);
   }
 
   void _openCallPage() {
@@ -530,6 +572,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     unawaited(PushKeepAlive.stop());
     _notifPushSub?.cancel();
     _notifPushSub = null;
+    _nativeCallSub?.cancel();
+    _nativeCallSub = null;
     if (CallService.instance.isInCall) CallService.instance.hangUp();
     CallService.instance.unbind();
     unawaited(PushService.instance.unregister());
@@ -562,25 +606,55 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
 
     if (inForeground) {
+      final chatMeta = isChat ? ChatNotification.fromData(data) : null;
       NotificationBanner.show(
         context,
-        title: title,
-        message: message,
+        title: chatMeta?.name ?? title,
+        message: chatMeta?.body.isNotEmpty == true ? chatMeta!.body : message,
         notificationType: notifType,
-        onTap: () => unawaited(_openNotifications()),
+        onTap: () {
+          if (isChat) {
+            _openChatFromPayload(ChatNotification.encode(
+              name: chatMeta?.name ?? title,
+              peerId: chatMeta?.peerId,
+              groupId: chatMeta?.groupId,
+              notificationType: notifType,
+            ));
+          } else {
+            unawaited(_openNotifications());
+          }
+        },
       );
     }
 
-    // Chat: always show system tray heads-up on Android/iOS (even in foreground),
-    // so desktop→phone alerts are visible when the app is open on another tab.
-    // Other types: tray only when backgrounded.
+    // Chat: always show WhatsApp-style system tray heads-up on Android/iOS.
     if (LocalNotificationService.supported && (!inForeground || isChat)) {
-      await LocalNotificationService.show(
-        id: notifId,
-        title: title,
-        body: message.isNotEmpty ? message : 'Tap to open AIMS',
-        payload: isChat ? 'chat' : 'alerts',
-      );
+      if (isChat) {
+        final chat = ChatNotification.fromData(data);
+        await LocalNotificationService.showChat(
+          conversationKey: chat.isGroup
+              ? 'g:${chat.groupId ?? notifId}'
+              : 'u:${chat.peerId ?? notifId}',
+          personName: chat.name,
+          body: chat.body.isNotEmpty ? chat.body : (message.isNotEmpty ? message : 'New message'),
+          payload: ChatNotification.encode(
+            name: chat.name,
+            peerId: chat.peerId,
+            groupId: chat.groupId,
+            notificationType: notifType,
+          ),
+          isGroup: chat.isGroup,
+          groupTitle: chat.isGroup ? chat.name : null,
+          personKey: chat.peerId ?? chat.groupId,
+        );
+      } else {
+        await LocalNotificationService.show(
+          id: notifId,
+          title: title,
+          body: message.isNotEmpty ? message : 'Tap to open AIMS',
+          payload: 'alerts',
+        );
+      }
     }
 
     setState(() => _notifListRefreshToken++);

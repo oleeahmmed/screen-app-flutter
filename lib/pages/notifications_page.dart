@@ -3,10 +3,12 @@ import 'dart:async';
 
 import '../services/api_service.dart';
 import '../services/app_navigation.dart';
+import '../services/chat_notification.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/notification_ui.dart';
 import '../utils/responsive.dart';
+import '../utils/whatsapp_avatar.dart';
 import 'task_detail_page.dart';
 
 class NotificationsPage extends StatefulWidget {
@@ -158,14 +160,19 @@ class _NotificationsPageState extends State<NotificationsPage> {
                   : _notifs.isEmpty
                       ? _emptyState()
                       : RefreshIndicator(
-                          color: AppTheme.primaryBright,
+                          color: const Color(0xFF00A884),
                           backgroundColor: AppTheme.surface,
                           onRefresh: () => _load(),
                           child: ListView.separated(
                             physics: const AlwaysScrollableScrollPhysics(),
-                            padding: EdgeInsets.fromLTRB(pad, 0, pad, bottom),
+                            padding: EdgeInsets.fromLTRB(0, 0, 0, bottom),
                             itemCount: _notifs.length,
-                            separatorBuilder: (_, _) => const SizedBox(height: 8),
+                            separatorBuilder: (_, _) => Divider(
+                              height: 1,
+                              thickness: 0.4,
+                              color: Colors.white.withValues(alpha: 0.06),
+                              indent: 78,
+                            ),
                             itemBuilder: (_, i) => _card(_notifs[i]),
                           ),
                         ),
@@ -367,61 +374,46 @@ class _NotificationsPageState extends State<NotificationsPage> {
     }
     final type = n is Map ? n['notification_type']?.toString() ?? '' : '';
     if (_isChatNotification(type)) {
-      AppNavigation.instance.goChat();
+      final chat = n is Map ? ChatNotification.fromData(Map<String, dynamic>.from(n)) : null;
+      AppNavigation.instance.goChatWithPeer(userId: chat?.peerId, groupId: chat?.groupId);
     }
   }
 
   Widget _card(dynamic n) {
-    final isRead = n['is_read'] == true;
-    final type = n['notification_type']?.toString() ?? '';
-    final color = NotificationUi.colorFor(type);
-    final title = n['title']?.toString() ?? '';
-    final message = n['message']?.toString() ?? '';
+    if (n is! Map) return const SizedBox.shrink();
+    final map = Map<String, dynamic>.from(n);
+    final isRead = map['is_read'] == true;
+    final type = map['notification_type']?.toString() ?? '';
+    final isChat = _isChatNotification(type);
+    final color = isChat ? const Color(0xFF00A884) : NotificationUi.colorFor(type);
+    final title = map['title']?.toString() ?? '';
+    final message = map['message']?.toString() ?? '';
+    final displayName = isChat ? ChatNotification.fromData(map).name : title;
 
     return Material(
-      color: Colors.transparent,
+      color: isRead ? Colors.transparent : const Color(0xFF0B141A).withValues(alpha: 0.55),
       child: InkWell(
         onTap: () => _onNotificationTap(n),
-        borderRadius: BorderRadius.circular(14),
-        child: Ink(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-          decoration: AppTheme.loginInsetDecoration(
-            borderRadius: 14,
-            emphasized: !isRead,
-          ).copyWith(
-            border: Border.all(
-              color: isRead
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : color.withValues(alpha: 0.35),
-            ),
-          ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      color.withValues(alpha: 0.95),
-                      color.withValues(alpha: 0.65),
-                    ],
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: color.withValues(alpha: 0.28),
-                      blurRadius: 10,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Icon(NotificationUi.iconFor(type), color: Colors.white, size: 20),
+              CircleAvatar(
+                radius: 24,
+                backgroundColor: color,
+                child: isChat
+                    ? Text(
+                        WhatsAppAvatar.initials(displayName),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                        ),
+                      )
+                    : Icon(NotificationUi.iconFor(type), color: Colors.white, size: 20),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -430,44 +422,56 @@ class _NotificationsPageState extends State<NotificationsPage> {
                       children: [
                         Expanded(
                           child: Text(
-                            title,
+                            isChat ? displayName : title,
                             style: TextStyle(
                               color: AppTheme.textPrimary,
-                              fontSize: 14,
-                              fontWeight: isRead ? FontWeight.w600 : FontWeight.w800,
-                              height: 1.25,
+                              fontSize: 16,
+                              fontWeight: isRead ? FontWeight.w500 : FontWeight.w700,
+                              height: 1.2,
                             ),
-                            maxLines: 2,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          _timeAgo(n['created_at']?.toString()),
+                          _timeAgo(map['created_at']?.toString()),
                           style: TextStyle(
-                            color: AppTheme.textMuted.withValues(alpha: 0.75),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
+                            color: isRead ? AppTheme.textMuted.withValues(alpha: 0.75) : const Color(0xFF00A884),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ],
                     ),
                     if (message.isNotEmpty) ...[
-                      const SizedBox(height: 5),
+                      const SizedBox(height: 3),
                       Text(
                         message,
                         style: TextStyle(
-                          color: AppTheme.textMuted.withValues(alpha: 0.92),
-                          fontSize: 12.5,
-                          height: 1.35,
+                          color: AppTheme.textMuted.withValues(alpha: 0.95),
+                          fontSize: 14,
+                          height: 1.3,
+                          fontWeight: isRead ? FontWeight.w400 : FontWeight.w500,
                         ),
-                        maxLines: 2,
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ],
                 ),
               ),
+              if (!isRead) ...[
+                const SizedBox(width: 10),
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF25D366),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

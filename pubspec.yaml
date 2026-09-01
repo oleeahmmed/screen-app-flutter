@@ -60,6 +60,8 @@ dependencies:
   vsc_quill_delta_to_html: ^1.0.5
   lucide_icons:
     path: third_party/lucide_icons
+  aims_style_notify:
+    path: third_party/aims_style_notify
   open_filex: ^4.7.0
 
 dev_dependencies:

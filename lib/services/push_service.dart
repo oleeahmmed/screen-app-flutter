@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import '../firebase_options.dart';
 import 'api_service.dart';
 import 'call_notification.dart';
+import 'chat_notification.dart';
 import 'local_notification_service_mobile.dart';
 
 /// FCM push — WhatsApp-style alerts when app is minimized or killed.
@@ -112,16 +113,25 @@ class PushService {
 
   void _handleDataPayload(Map<String, dynamic> data) {
     final type = data['type']?.toString() ?? '';
+    final notifType = data['notification_type']?.toString() ?? '';
     if (type == 'call_invite') {
       AppNavigationBridge.openIncomingCall?.call(data);
-    } else if (type == 'notification' || data['notification_type'] != null) {
+      return;
+    }
+    if (notifType == 'new_message' || notifType == 'new_group_message') {
+      final chat = ChatNotification.fromData(data);
+      AppNavigationBridge.openChatPeer?.call(chat.peerId, chat.groupId);
+      return;
+    }
+    if (type == 'notification' || notifType.isNotEmpty) {
       AppNavigationBridge.openNotifications?.call();
     }
   }
 
   static Future<void> _showFromRemoteMessage(RemoteMessage message, {bool playSound = false}) async {
-    final data = message.data;
+    final data = Map<String, dynamic>.from(message.data);
     final type = data['type']?.toString() ?? '';
+    final notifType = data['notification_type']?.toString() ?? '';
     final isCall = type == 'call_invite';
 
     if (isCall) {
@@ -146,8 +156,35 @@ class PushService {
       return;
     }
 
-    // System already displays FCM `notification` payloads when the app is killed.
-    if (message.notification != null) return;
+    final isChat = notifType == 'new_message' || notifType == 'new_group_message';
+    // Display payload: client draws WhatsApp MessagingStyle. Skip only non-chat
+    // FCM notification payloads (the OS already drew those).
+    if (!isChat && message.notification != null) return;
+
+    if (isChat) {
+      if (data['title'] == null) data['title'] = message.notification?.title;
+      if (data['message'] == null) {
+        data['message'] = data['body'] ?? message.notification?.body;
+      }
+      final chat = ChatNotification.fromData(data);
+      await LocalNotificationService.showChat(
+        conversationKey: chat.isGroup
+            ? 'g:${chat.groupId ?? chat.name.hashCode}'
+            : 'u:${chat.peerId ?? chat.name.hashCode}',
+        personName: chat.name,
+        body: chat.body.isNotEmpty ? chat.body : (message.notification?.body ?? 'New message'),
+        payload: ChatNotification.encode(
+          name: chat.name,
+          peerId: chat.peerId,
+          groupId: chat.groupId,
+          notificationType: notifType,
+        ),
+        isGroup: chat.isGroup,
+        groupTitle: chat.isGroup ? chat.name : null,
+        personKey: chat.peerId ?? chat.groupId,
+      );
+      return;
+    }
 
     final title = data['title']?.toString() ?? message.notification?.title ?? 'Aims';
     final body = data['body']?.toString() ??
@@ -167,6 +204,7 @@ class PushService {
 /// Callbacks wired from main.dart (avoids circular imports).
 abstract final class AppNavigationBridge {
   static void Function()? openChatTab;
+  static void Function(int? userId, int? groupId)? openChatPeer;
   static void Function()? openNotifications;
   static void Function(Map<String, dynamic> data)? openIncomingCall;
 }
