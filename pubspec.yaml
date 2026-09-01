@@ -88,6 +88,9 @@ flutter:
   assets:
     - assets/branding/logo.png
     - assets/sounds/notification.mp3
+    - assets/sounds/message.wav
+    - assets/sounds/ringtone.wav
+    - assets/sounds/ringback.wav
     - assets/status/status_working.png
     - assets/status/status_break.png
 

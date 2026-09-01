@@ -1,9 +1,9 @@
-// config.dart — build-time overrides: --dart-define=API_ORIGIN=http://127.0.0.1:8000
+// config.dart — local override: --dart-define=API_ORIGIN=http://192.168.1.112:8000
 
 class AppConfig {
   static const String _apiOrigin = String.fromEnvironment(
     'API_ORIGIN',
-    defaultValue: 'http://192.168.1.112:8000',
+    defaultValue: 'https://aims.igenhr.com',
   );
 
   static const int screenshotInterval = int.fromEnvironment(
@@ -155,8 +155,6 @@ class AppConfig {
   static String get p2pJoinSessionUrl => '$apiBaseUrl/p2p/session/join/';
   static String get p2pSessionDetailUrl => '$apiBaseUrl/p2p/session/';
   static String get p2pIceServersUrl => '$apiBaseUrl/p2p/ice-servers/';
-  static String get p2pCallSignalUrl => '$apiBaseUrl/p2p/call-signal/';
-  static String get p2pCallSignalsPendingUrl => '$apiBaseUrl/p2p/call-signals/pending/';
   static String get p2pWsPathPrefix => '/ws/p2p/';
 
   static String get breaksStartUrl => '$apiBaseUrl/breaks/start/';

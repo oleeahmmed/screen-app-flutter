@@ -11,6 +11,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../config.dart';
 import '../utils/ws_connect.dart';
+import 'call_notification.dart';
 import 'local_notification_service.dart';
 
 /// Keeps the chat WebSocket alive after login so Android can show system
@@ -176,15 +177,25 @@ class _PushKeepAliveIsolate {
     final type = data['type']?.toString() ?? '';
     if (type.startsWith('call_')) {
       if (type == 'call_invite') {
-        final name = (data['sender_name'] ?? data['sender_username'] ?? 'Someone')
+        final name = (data['sender_name'] ??
+                data['caller_name'] ??
+                data['sender_username'] ??
+                'Someone')
             .toString();
         final video = (data['call_type']?.toString() ?? 'audio') == 'video';
         final callId = data['call_id']?.toString() ?? 'call';
-        await LocalNotificationService.showCall(
-          id: callId.hashCode & 0x7fffffff,
-          title: video ? 'Incoming video call' : 'Incoming call',
+        final callerId = int.tryParse('${data['caller_id'] ?? data['sender_id'] ?? ''}') ?? 0;
+        await LocalNotificationService.showIncomingCall(
+          title: video ? 'Incoming video call' : 'Incoming voice call',
           body: name,
-          payload: 'call:$callId',
+          payload: CallNotification.encode(
+            callId: callId,
+            callerId: callerId,
+            callType: video ? 'video' : 'audio',
+            callerName: name,
+          ),
+          playSound: true,
+          video: video,
         );
       }
       return;

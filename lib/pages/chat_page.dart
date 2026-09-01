@@ -25,13 +25,11 @@ import 'call_page.dart';
 class ChatPage extends StatefulWidget {
   final ApiService apiService;
   final NotificationService? notificationService;
-  final CallService? callService;
 
   const ChatPage({
     super.key,
     required this.apiService,
     this.notificationService,
-    this.callService,
   });
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -56,6 +54,7 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription<Map<String, dynamic>>? _presenceSub;
   StreamSubscription<Map<String, dynamic>>? _typingSub;
   StreamSubscription<Map<String, dynamic>>? _messagesReadSub;
+  StreamSubscription<Map<String, dynamic>>? _chatMsgSub;
   StreamSubscription<CallPhase>? _callPhaseSub;
   bool _isRecording = false;
   int _recordSeconds = 0;
@@ -104,10 +103,11 @@ class _ChatPageState extends State<ChatPage> {
     _msgController.addListener(_onComposerChanged);
     _loadUsers();
     _loadMyUserId();
-    _usersPollTimer = Timer.periodic(const Duration(seconds: 25), (_) => _loadUsers(silent: true));
+    _usersPollTimer = Timer.periodic(const Duration(seconds: 8), (_) => _loadUsers(silent: true));
     _presenceSub = widget.notificationService?.presenceStream.listen(_onPresenceUpdate);
     _typingSub = widget.notificationService?.typingStream.listen(_onTypingEvent);
     _messagesReadSub = widget.notificationService?.messagesReadStream.listen(_onMessagesRead);
+    _chatMsgSub = widget.notificationService?.chatMessageStream.listen(_onRealtimeChatMessage);
     _callPhaseSub = CallService.instance.phaseStream.listen((phase) {
       if (phase == CallPhase.incoming && mounted) {
         CallNavigation.openCallPageIfNeeded();
@@ -141,6 +141,7 @@ class _ChatPageState extends State<ChatPage> {
     _presenceSub?.cancel();
     _typingSub?.cancel();
     _messagesReadSub?.cancel();
+    _chatMsgSub?.cancel();
     _callPhaseSub?.cancel();
     _recordTimer?.cancel();
     _recProcess?.kill();
@@ -215,6 +216,79 @@ class _ChatPageState extends State<ChatPage> {
     return 'Tap to chat';
   }
 
+  String _formatLastSeen(dynamic iso) {
+    final dt = DateTime.tryParse('${iso ?? ''}');
+    if (dt == null) return 'offline';
+    final local = dt.toLocal();
+    final now = DateTime.now();
+    final diff = now.difference(local);
+    if (diff.inMinutes < 1) return 'last seen just now';
+    if (diff.inMinutes < 60) return 'last seen ${diff.inMinutes} min ago';
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(local.year, local.month, local.day);
+    final t = '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    if (day == today) return 'last seen today at $t';
+    if (day == today.subtract(const Duration(days: 1))) return 'last seen yesterday at $t';
+    return 'last seen ${local.day}/${local.month} at $t';
+  }
+
+  void _onRealtimeChatMessage(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final senderId = _asInt(data['sender_id']);
+    final receiverId = _asInt(data['receiver_id']);
+    final text = (data['message'] ?? '').toString();
+    if (CallService.isHiddenCallChatMessage(text)) return;
+
+    final isOwn = _myUserId != null && senderId == _myUserId;
+    final peerId = isOwn ? receiverId : senderId;
+    if (peerId == null) return;
+
+    final preview = text.trim().isEmpty
+        ? _chatPreviewText({'last_message': data['message_type']})
+        : (text.length > 80 ? '${text.substring(0, 80)}…' : text);
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+
+    setState(() {
+      _users = _users.map((u) {
+        if (u['id'] != peerId && '${u['id']}' != '$peerId') return u;
+        final map = Map<String, dynamic>.from(u as Map);
+        map['last_message'] = preview;
+        map['last_message_at'] = nowIso;
+        if (!isOwn && (_selectedUser == null || _selectedUser['id'] != peerId)) {
+          final unread = map['unread_count'];
+          final n = unread is int ? unread : int.tryParse('$unread') ?? 0;
+          map['unread_count'] = n + 1;
+        }
+        return map;
+      }).toList();
+      _users = _sortUsersByRecent(_users);
+
+      final viewing = _selectedUser != null &&
+          (_selectedUser['id'] == peerId || '${_selectedUser['id']}' == '$peerId');
+      if (viewing) {
+        final msg = {
+          'id': data['message_id'] ?? DateTime.now().millisecondsSinceEpoch,
+          'message': text,
+          'message_type': data['message_type'] ?? 'text',
+          'sender_id': senderId,
+          'is_own': isOwn,
+          'is_read': false,
+          'created_at': data['created_at'] ?? nowIso,
+          'image_url': data['image_url'],
+          'file_url': data['file_url'],
+          'file_name': data['file_name'],
+          'voice_url': data['voice_url'],
+        };
+        _messages = [..._messages, msg];
+      }
+    });
+    if (_selectedUser != null &&
+        (_selectedUser['id'] == peerId || '${_selectedUser['id']}' == '$peerId')) {
+      _scrollToBottom();
+      if (!isOwn) unawaited(widget.apiService.markMessagesRead(peerId));
+    }
+  }
+
   void _onPresenceUpdate(Map<String, dynamic> data) {
     final userId = data['user_id'];
     final online = _parseOnline(data['is_online']);
@@ -227,7 +301,11 @@ class _ChatPageState extends State<ChatPage> {
         return u;
       }).toList();
       if (_selectedUser != null && _selectedUser['id'] == userId) {
-        _selectedUser = {...Map<String, dynamic>.from(_selectedUser as Map), 'is_online': online};
+        _selectedUser = {
+          ...Map<String, dynamic>.from(_selectedUser as Map),
+          'is_online': online,
+          if (online) 'last_seen': DateTime.now().toUtc().toIso8601String(),
+        };
       }
     });
   }
@@ -683,13 +761,13 @@ class _ChatPageState extends State<ChatPage> {
       myUserId: _myUserId!,
     );
 
-    final ok = await CallService.instance.startOutgoing(
+    final err = await CallService.instance.startOutgoing(
       peerId: peerId,
       peerName: name,
       kind: kind,
     );
-    if (!ok) {
-      _showError('Could not start call');
+    if (err != null) {
+      _showError(err);
       return;
     }
     if (!mounted) return;
@@ -1608,15 +1686,10 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         : (_selectedUser['full_name'] ?? _selectedUser['username'] ?? 'Chat');
     final isOnline = !isGroup && _parseOnline(_selectedUser?['is_online']);
     final typingLabel = _activeTypingLabel();
-    final designation = !isGroup
-        ? (_selectedUser?['designation'] ?? '').toString().trim()
-        : '';
     final subtitle = typingLabel ??
         (isGroup
             ? '${_selectedGroup['member_count'] ?? 0} members'
-            : (isOnline
-                ? 'online'
-                : (designation.isNotEmpty ? designation : 'offline')));
+            : (isOnline ? 'online' : _formatLastSeen(_selectedUser?['last_seen'])));
     final subtitleColor = typingLabel != null
         ? const Color(0xFF34D399)
         : (isOnline ? const Color(0xFF34D399) : AppTheme.textMuted);

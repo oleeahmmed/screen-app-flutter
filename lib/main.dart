@@ -15,6 +15,7 @@ import 'services/screenshot_service.dart';
 import 'services/notification_service.dart';
 import 'services/call_service.dart';
 import 'services/call_navigation.dart';
+import 'services/call_notification.dart';
 import 'services/call_tokens.dart';
 import 'services/push_service.dart';
 import 'services/local_notification_service.dart';
@@ -102,7 +103,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   late final ApiService _apiService = ApiService();
   late final ScreenshotService _screenshotService = ScreenshotService(_apiService);
   late final NotificationService _notificationService = NotificationService(_apiService);
-  late final CallService _callService = CallService(_apiService, _notificationService);
   bool _isLoggedIn = false;
   String _username = '';
   int _currentIndex = 0;
@@ -111,8 +111,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _notifListRefreshToken = 0;
   int _homeRefreshToken = 0;
   StreamSubscription<Map<String, dynamic>>? _notifPushSub;
-  StreamSubscription<CallInvite?>? _incomingCallSub;
-  CallInvite? _incomingCall;
   AppLifecycleState _lifecycle = AppLifecycleState.resumed;
 
   Widget? _dashboardPage;
@@ -185,8 +183,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     super.initState();
     CallNavigation.navigatorKey = appNavigatorKey;
     WidgetsBinding.instance.addObserver(this);
-    LocalNotificationService.onTap = (_) {
-      if (_isLoggedIn && mounted) unawaited(_openNotifications());
+    LocalNotificationService.onAction = (actionId, payload) {
+      unawaited(_onNotificationAction(actionId, payload));
+    };
+    LocalNotificationService.onTap = (payload) {
+      if (CallNotification.isCallPayload(payload)) return;
+      if (!_isLoggedIn || !mounted) return;
+      unawaited(_openNotifications());
     };
     AppNavigation.instance.onSelectTab = _onNavSelected;
     AppNavigation.instance.onNavigateToTab = _navigateToTab;
@@ -202,6 +205,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenProfile = _openProfile;
     AppNavigationBridge.openChatTab = () => _navigateToTab(2);
     AppNavigationBridge.openNotifications = _openNotifications;
+    AppNavigationBridge.openIncomingCall = (data) {
+      unawaited(CallService.instance.handleRemoteSignal(data));
+      _openCallPage();
+    };
     _notificationService.onUnreadCountChanged = _onUnreadCountChanged;
     _initializeApp();
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
@@ -448,18 +455,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     await _bindCallService();
     await _notificationService.start();
     _notifPushSub = _notificationService.pushStream.listen(_onPushNotification);
-    _incomingCallSub = _callService.incomingStream.listen((invite) {
-      if (!mounted) return;
-      setState(() => _incomingCall = invite);
-      if (invite != null && _lifecycle != AppLifecycleState.resumed) {
-        unawaited(LocalNotificationService.showCall(
-          id: invite.callId.hashCode & 0x7fffffff,
-          title: invite.video ? 'Incoming video call' : 'Incoming call',
-          body: invite.peerName,
-          payload: 'call:${invite.callId}',
-        ));
-      }
-    });
     unawaited(_ensureMobileNotificationPermission());
     unawaited(PushKeepAlive.start());
     unawaited(PushService.instance.bindApi(_apiService));
@@ -481,6 +476,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       }
     }
     if (uid == null) return;
+    await CallNotification.flushPendingDecline();
     CallService.instance.bind(
       notificationService: _notificationService,
       apiService: _apiService,
@@ -490,6 +486,29 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       _openCallPage();
     };
+    final pending = LocalNotificationService.takePending();
+    if (pending != null) {
+      unawaited(_onNotificationAction(pending.actionId, pending.payload));
+    }
+  }
+
+  Future<void> _onNotificationAction(String? actionId, String? payload) async {
+    final invite = CallNotification.parse(payload);
+    if (invite != null) {
+      if (!_isLoggedIn) {
+        LocalNotificationService.pendingActionId = actionId;
+        LocalNotificationService.pendingPayload = payload;
+        return;
+      }
+      await CallService.instance.applyNotificationAction(actionId, invite);
+      return;
+    }
+    if (!_isLoggedIn || !mounted) return;
+    if (payload == 'chat') {
+      _navigateToTab(AppNavigation.tabChat);
+      return;
+    }
+    unawaited(_openNotifications());
   }
 
   void _openCallPage() {
@@ -516,7 +535,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     unawaited(PushService.instance.unregister());
     _notificationService.stop();
     NotificationBanner.hide();
-    _incomingCall = null;
   }
 
   Future<void> _onPushNotification(Map<String, dynamic> data) async {
@@ -807,14 +825,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _rejectIncomingCall() async {
-    final invite = _incomingCall;
-    if (invite == null) return;
-    setState(() => _incomingCall = null);
-    _callService.clearIncoming();
-    await _callService.reject(callerId: invite.peerId, callId: invite.callId);
-  }
-
   void _onNavSelected(int i) {
     final comingHome = i == 0 && _currentIndex != 0;
     setState(() {
@@ -844,7 +854,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onLogout = null;
     _stopNotifications();
     _notificationService.dispose();
-    _callService.dispose();
     _screenshotService.stopCapture();
     super.dispose();
   }

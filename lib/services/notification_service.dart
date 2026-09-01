@@ -43,6 +43,9 @@ class NotificationService {
   final _callController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get callStream => _callController.stream;
 
+  final _chatMessageController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get chatMessageStream => _chatMessageController.stream;
+
   static const _callTypes = {
     'call_invite',
     'call_accept',
@@ -333,6 +336,8 @@ class NotificationService {
       final call = CallTokens.chatMessageToCallSignal(data);
       if (call != null) {
         _emitCallSignal(call);
+      } else {
+        _chatMessageController.add(data);
       }
       return;
     }
@@ -355,7 +360,9 @@ class NotificationService {
     if (type != 'notification' && type != 'task_notification') return;
 
     await refreshUnreadCount();
-    await NotificationSound.playNotification();
+    if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) {
+      await NotificationSound.playNotification();
+    }
 
     if (type == 'task_notification') {
       data = {
@@ -382,8 +389,8 @@ class NotificationService {
     _typingController.close();
     _messagesReadController.close();
     _callController.close();
+    _chatMessageController.close();
     _pushController.close();
     _presenceController.close();
-    _callSignalController.close();
   }
 }

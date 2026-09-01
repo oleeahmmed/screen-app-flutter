@@ -8,8 +8,8 @@ import 'package:flutter/widgets.dart';
 
 import '../firebase_options.dart';
 import 'api_service.dart';
+import 'call_notification.dart';
 import 'local_notification_service_mobile.dart';
-import 'notification_sound.dart';
 
 /// FCM push — WhatsApp-style alerts when app is minimized or killed.
 class PushService {
@@ -74,6 +74,9 @@ class PushService {
       if (token != null && token.isNotEmpty) {
         _lastToken = token;
         await _registerToken(token);
+        debugPrint('[PushService] token registered (${token.length} chars)');
+      } else {
+        debugPrint('[PushService] no FCM token');
       }
     } catch (e) {
       if (kDebugMode) debugPrint('[PushService] token: $e');
@@ -96,7 +99,10 @@ class PushService {
   }
 
   void _onForegroundMessage(RemoteMessage message) {
-    _showFromRemoteMessage(message, playSound: true);
+    final type = message.data['type']?.toString() ?? '';
+    if (type != 'call_invite') {
+      unawaited(_showFromRemoteMessage(message, playSound: true));
+    }
     _handleDataPayload(message.data);
   }
 
@@ -107,29 +113,53 @@ class PushService {
   void _handleDataPayload(Map<String, dynamic> data) {
     final type = data['type']?.toString() ?? '';
     if (type == 'call_invite') {
-      // CallService picks up via WS when app opens; tray tap opens app → main navigates to chat tab.
-      AppNavigationBridge.openChatTab?.call();
+      AppNavigationBridge.openIncomingCall?.call(data);
     } else if (type == 'notification' || data['notification_type'] != null) {
       AppNavigationBridge.openNotifications?.call();
     }
   }
 
   static Future<void> _showFromRemoteMessage(RemoteMessage message, {bool playSound = false}) async {
-    final n = message.notification;
     final data = message.data;
-    final title = n?.title ?? data['title']?.toString() ?? 'AIMS';
-    final body = n?.body ?? data['body']?.toString() ?? data['message']?.toString() ?? '';
     final type = data['type']?.toString() ?? '';
     final isCall = type == 'call_invite';
 
-    if (playSound) await NotificationSound.playNotification();
+    if (isCall) {
+      final name = data['caller_name']?.toString() ??
+          data['sender_name']?.toString() ??
+          'Incoming call';
+      final callType = data['call_type']?.toString() ?? 'audio';
+      final callId = data['call_id']?.toString() ?? '';
+      final callerId = int.tryParse('${data['caller_id'] ?? data['sender_id'] ?? ''}') ?? 0;
+      await LocalNotificationService.showIncomingCall(
+        title: callType == 'video' ? 'Incoming video call' : 'Incoming voice call',
+        body: name,
+        payload: CallNotification.encode(
+          callId: callId,
+          callerId: callerId,
+          callType: callType == 'video' ? 'video' : 'audio',
+          callerName: name,
+        ),
+        playSound: playSound,
+        video: callType == 'video',
+      );
+      return;
+    }
+
+    // System already displays FCM `notification` payloads when the app is killed.
+    if (message.notification != null) return;
+
+    final title = data['title']?.toString() ?? message.notification?.title ?? 'Aims';
+    final body = data['body']?.toString() ??
+        data['message']?.toString() ??
+        message.notification?.body ??
+        '';
 
     await LocalNotificationService.show(
       id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       title: title,
       body: body.isNotEmpty ? body : 'Tap to open',
-      payload: isCall ? 'call' : 'alerts',
-      channelId: isCall ? 'aims_calls_v1' : 'aims_alerts_v2',
+      payload: 'alerts',
     );
   }
 }
@@ -138,6 +168,7 @@ class PushService {
 abstract final class AppNavigationBridge {
   static void Function()? openChatTab;
   static void Function()? openNotifications;
+  static void Function(Map<String, dynamic> data)? openIncomingCall;
 }
 
 @pragma('vm:entry-point')
