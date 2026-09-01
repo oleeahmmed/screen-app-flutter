@@ -33,6 +33,15 @@ class NotificationService {
   final _presenceController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get presenceStream => _presenceController.stream;
 
+  final _callSignalController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get callSignalStream => _callSignalController.stream;
+
+  void sendJson(Map<String, dynamic> payload) {
+    try {
+      _channel?.sink.add(jsonEncode(payload));
+    } catch (_) {}
+  }
+
   void Function(int count)? onUnreadCountChanged;
 
   Duration get _pollInterval {
@@ -209,6 +218,10 @@ class NotificationService {
       _presenceController.add(data);
       return;
     }
+    if (type.startsWith('call_')) {
+      _callSignalController.add(data);
+      return;
+    }
     if (type != 'notification' && type != 'task_notification') return;
 
     await refreshUnreadCount();
@@ -233,5 +246,6 @@ class NotificationService {
     stop();
     _pushController.close();
     _presenceController.close();
+    _callSignalController.close();
   }
 }

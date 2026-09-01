@@ -14,6 +14,9 @@ import 'services/user_data_service.dart';
 import 'services/screenshot_service.dart';
 import 'services/notification_service.dart';
 import 'services/local_notification_service.dart';
+import 'services/push_keepalive_service.dart';
+import 'services/fcm_push_service.dart';
+import 'services/call_service.dart';
 import 'pages/login_page.dart';
 import 'pages/dashboard_page.dart';
 import 'pages/tasks_page.dart';
@@ -22,6 +25,7 @@ import 'pages/chat_page.dart';
 import 'pages/notifications_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/peer2peer_page.dart';
+import 'pages/call_page.dart';
 import 'pages/daily_report_tool_page.dart';
 import 'pages/activity_tool_page.dart';
 import 'pages/attendance_report_page.dart';
@@ -44,12 +48,15 @@ int _intFromDynamic(dynamic v, int fallback) {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  debugPrint('AIMS API: ${AppConfig.apiBaseUrl}');
   if (!kIsWeb) {
     // Fail slow/broken routes faster (common on Android IPv6) so login can retry.
     HttpOverrides.global = _AimsHttpOverrides();
   }
   AppSession.screenshotIntervalSeconds = AppConfig.screenshotInterval;
   await LocalNotificationService.initialize();
+  await FcmPushService.initialize();
+  await PushKeepAlive.configure();
   runApp(const MyApp());
 }
 
@@ -92,6 +99,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   late final ApiService _apiService = ApiService();
   late final ScreenshotService _screenshotService = ScreenshotService(_apiService);
   late final NotificationService _notificationService = NotificationService(_apiService);
+  late final CallService _callService = CallService(_apiService, _notificationService);
   bool _isLoggedIn = false;
   String _username = '';
   int _currentIndex = 0;
@@ -100,6 +108,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _notifListRefreshToken = 0;
   int _homeRefreshToken = 0;
   StreamSubscription<Map<String, dynamic>>? _notifPushSub;
+  StreamSubscription<CallInvite?>? _incomingCallSub;
+  CallInvite? _incomingCall;
   AppLifecycleState _lifecycle = AppLifecycleState.resumed;
 
   Widget? _dashboardPage;
@@ -138,6 +148,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           child: ChatPage(
             apiService: _apiService,
             notificationService: _notificationService,
+            callService: _callService,
           ),
         );
       case 3:
@@ -368,7 +379,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycle = state;
-    if (state == AppLifecycleState.resumed && _isLoggedIn) {
+    final foreground = state == AppLifecycleState.resumed;
+    PushKeepAlive.setUiForeground(foreground);
+    if (foreground && _isLoggedIn) {
       unawaited(_notificationService.reconnect());
     }
   }
@@ -380,16 +393,38 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   void _startNotifications() {
     _notifPushSub?.cancel();
+    _incomingCallSub?.cancel();
     _notificationService.start();
+    _callService.start();
     _notifPushSub = _notificationService.pushStream.listen(_onPushNotification);
+    _incomingCallSub = _callService.incomingStream.listen((invite) {
+      if (!mounted) return;
+      setState(() => _incomingCall = invite);
+      if (invite != null && _lifecycle != AppLifecycleState.resumed) {
+        unawaited(LocalNotificationService.showCall(
+          id: invite.callId.hashCode & 0x7fffffff,
+          title: invite.video ? 'Incoming video call' : 'Incoming call',
+          body: invite.peerName,
+          payload: 'call:${invite.callId}',
+        ));
+      }
+    });
     unawaited(_ensureMobileNotificationPermission());
+    unawaited(PushKeepAlive.start());
+    unawaited(FcmPushService.register(_apiService));
   }
 
   void _stopNotifications() {
+    unawaited(FcmPushService.unregister(_apiService));
+    unawaited(PushKeepAlive.stop());
     _notifPushSub?.cancel();
     _notifPushSub = null;
+    _incomingCallSub?.cancel();
+    _incomingCallSub = null;
+    _callService.stop();
     _notificationService.stop();
     NotificationBanner.hide();
+    _incomingCall = null;
   }
 
   Future<void> _onPushNotification(Map<String, dynamic> data) async {
@@ -631,16 +666,56 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     _syncNavState();
 
-    return AppTabShell(
-      selectedIndex: _currentIndex,
-      unreadNotifs: _unreadNotifs,
-      onLogout: _handleLogout,
-      showTopBar: true,
-      child: IndexedStack(
-        index: _currentIndex,
-        children: _mainStackChildren(),
+    return Stack(
+      children: [
+        AppTabShell(
+          selectedIndex: _currentIndex,
+          unreadNotifs: _unreadNotifs,
+          onLogout: _handleLogout,
+          showTopBar: true,
+          child: IndexedStack(
+            index: _currentIndex,
+            children: _mainStackChildren(),
+          ),
+        ),
+        if (_incomingCall != null)
+          Positioned.fill(
+            child: IncomingCallOverlay(
+              invite: _incomingCall!,
+              onAccept: _acceptIncomingCall,
+              onReject: _rejectIncomingCall,
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _acceptIncomingCall() async {
+    final invite = _incomingCall;
+    if (invite == null) return;
+    setState(() => _incomingCall = null);
+    _callService.clearIncoming();
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => CallPage(
+          apiService: _apiService,
+          callService: _callService,
+          peerId: invite.peerId,
+          peerName: invite.peerName,
+          callId: invite.callId,
+          isCaller: false,
+          video: invite.video,
+        ),
       ),
     );
+  }
+
+  Future<void> _rejectIncomingCall() async {
+    final invite = _incomingCall;
+    if (invite == null) return;
+    setState(() => _incomingCall = null);
+    _callService.clearIncoming();
+    await _callService.reject(callerId: invite.peerId, callId: invite.callId);
   }
 
   void _onNavSelected(int i) {
@@ -671,6 +746,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onLogout = null;
     _stopNotifications();
     _notificationService.dispose();
+    _callService.dispose();
     _screenshotService.stopCapture();
     super.dispose();
   }

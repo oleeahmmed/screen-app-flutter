@@ -7,7 +7,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
+import '../services/call_service.dart';
 import '../services/voice_recorder_service.dart';
+import '../pages/call_page.dart';
 import '../theme/app_theme.dart';
 import '../widgets/empty_state.dart';
 import '../utils/responsive.dart';
@@ -16,11 +18,13 @@ import '../utils/platform_capabilities.dart';
 class ChatPage extends StatefulWidget {
   final ApiService apiService;
   final NotificationService? notificationService;
+  final CallService? callService;
 
   const ChatPage({
     super.key,
     required this.apiService,
     this.notificationService,
+    this.callService,
   });
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -164,6 +168,44 @@ class _ChatPageState extends State<ChatPage> {
       _scrollToBottom();
       widget.apiService.markMessagesRead(user['id']);
     }
+  }
+
+  Widget _headerIconButton(IconData icon, {required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: const BoxDecoration(shape: BoxShape.circle),
+        child: Icon(icon, color: AppTheme.textMuted, size: 22),
+      ),
+    );
+  }
+
+  Future<void> _startCall({required bool video}) async {
+    final callService = widget.callService;
+    final user = _selectedUser;
+    if (callService == null || user == null) return;
+    final id = user['id'] is int ? user['id'] as int : int.tryParse('${user['id']}') ?? 0;
+    if (id <= 0) return;
+    if (callService.inCall) {
+      _showError('Already in a call');
+      return;
+    }
+    final name = (user['full_name'] ?? user['username'] ?? 'Call').toString();
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => CallPage(
+          apiService: widget.apiService,
+          callService: callService,
+          peerId: id,
+          peerName: name,
+          callId: CallService.newCallId(),
+          isCaller: true,
+          video: video,
+        ),
+      ),
+    );
   }
 
   Future<void> _selectGroup(dynamic group) async {
@@ -798,6 +840,17 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   ],
                 ),
               ),
+              if (!isGroup && widget.callService != null) ...[
+                _headerIconButton(
+                  Icons.call,
+                  onTap: () => _startCall(video: false),
+                ),
+                const SizedBox(width: 4),
+                _headerIconButton(
+                  Icons.videocam,
+                  onTap: () => _startCall(video: true),
+                ),
+              ],
               if (isGroup)
                 GestureDetector(
                   onTap: () => _showGroupSettings(_selectedGroup),

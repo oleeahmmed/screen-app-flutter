@@ -21,4 +21,11 @@ class LocalNotificationService {
     required String body,
     String? payload,
   }) async {}
+
+  static Future<void> showCall({
+    required int id,
+    required String title,
+    required String body,
+    String? payload,
+  }) async {}
 }

@@ -2683,6 +2683,81 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> sendCallSignal(Map<String, dynamic> payload) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.p2pCallSignalUrl),
+            headers: _getHeaders(),
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        if (response.body.isEmpty) return {'success': true};
+        try {
+          return {'success': true, 'data': jsonDecode(response.body)};
+        } catch (_) {
+          return {'success': true};
+        }
+      }
+      return {'success': false, 'error': 'Call signal failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> pollCallSignals() async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.p2pCallSignalsPendingUrl));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final signals = data is Map ? (data['signals'] as List? ?? []) : <dynamic>[];
+        return {'success': true, 'signals': signals};
+      }
+      return {'success': false, 'error': 'Failed to poll call signals'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> registerPushDevice(String token, {String platform = 'android'}) async {
+    try {
+      await ensureAuth();
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.pushRegisterUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({'token': token, 'platform': platform}),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Push register failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> unregisterPushDevice({String? token}) async {
+    try {
+      await ensureAuth();
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.pushUnregisterUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({if (token != null && token.isNotEmpty) 'token': token}),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return {'success': true};
+      }
+      return {'success': false, 'error': 'Push unregister failed (${response.statusCode})'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> p2pCreateSession({String fileName = '', int fileSize = 0, int? receiverId}) async {
     try {
       final body = <String, dynamic>{

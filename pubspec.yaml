@@ -51,10 +51,14 @@ dependencies:
   desktop_drop: ^0.7.1
   flutter_markdown: ^0.7.7
   flutter_local_notifications: ^17.2.4
-  flutter_quill: 11.4.2
+  flutter_background_service: ^5.1.0
+  firebase_core: ^3.15.2
+  firebase_messaging: ^15.2.10
+  flutter_quill: 11.5.1
   flutter_quill_delta_from_html: ^1.5.3
   vsc_quill_delta_to_html: ^1.0.5
-  lucide_icons: ^0.257.0
+  lucide_icons:
+    path: third_party/lucide_icons
 
 dev_dependencies:
   flutter_test:

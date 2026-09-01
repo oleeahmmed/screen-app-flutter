@@ -38,10 +38,27 @@ class LocalNotificationService {
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
       await androidImpl?.createNotificationChannel(
         const AndroidNotificationChannel(
-          'aims_alerts',
-          'AIMS Alerts',
+          'aims_alerts_v2',
+          'Aims alerts',
           description: 'Tasks, chat, attendance and HR alerts',
           importance: Importance.high,
+        ),
+      );
+      await androidImpl?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'aims_calls_v1',
+          'Incoming calls',
+          description: 'Audio and video call alerts',
+          importance: Importance.max,
+          playSound: true,
+        ),
+      );
+      await androidImpl?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'aims_keepalive',
+          'Aims connection',
+          description: 'Keeps Aims connected for calls and alerts',
+          importance: Importance.low,
         ),
       );
     }
@@ -83,8 +100,8 @@ class LocalNotificationService {
     await initialize();
 
     const androidDetails = AndroidNotificationDetails(
-      'aims_alerts',
-      'AIMS Alerts',
+      'aims_alerts_v2',
+      'Aims alerts',
       channelDescription: 'Tasks, chat, attendance and HR alerts',
       importance: Importance.high,
       priority: Priority.high,
@@ -94,6 +111,41 @@ class LocalNotificationService {
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
+    );
+
+    await _plugin.show(
+      id,
+      title,
+      body,
+      const NotificationDetails(android: androidDetails, iOS: iosDetails),
+      payload: payload,
+    );
+  }
+
+  static Future<void> showCall({
+    required int id,
+    required String title,
+    required String body,
+    String? payload,
+  }) async {
+    if (!supported) return;
+    await initialize();
+
+    const androidDetails = AndroidNotificationDetails(
+      'aims_calls_v1',
+      'Incoming calls',
+      channelDescription: 'Audio and video call alerts',
+      importance: Importance.max,
+      priority: Priority.max,
+      category: AndroidNotificationCategory.call,
+      fullScreenIntent: true,
+      icon: '@mipmap/ic_launcher',
+    );
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      interruptionLevel: InterruptionLevel.timeSensitive,
     );
 
     await _plugin.show(
