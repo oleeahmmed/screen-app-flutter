@@ -15,9 +15,11 @@ import 'services/screenshot_service.dart';
 import 'services/notification_service.dart';
 import 'services/call_service.dart';
 import 'services/call_navigation.dart';
+import 'services/call_notification.dart';
 import 'services/call_tokens.dart';
 import 'services/push_service.dart';
 import 'services/local_notification_service.dart';
+import 'services/push_keepalive_service.dart';
 import 'pages/login_page.dart';
 import 'pages/dashboard_page.dart';
 import 'pages/tasks_page.dart';
@@ -50,6 +52,7 @@ int _intFromDynamic(dynamic v, int fallback) {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  debugPrint('AIMS API: ${AppConfig.apiBaseUrl}');
   if (!kIsWeb) {
     // Fail slow/broken routes faster (common on Android IPv6) so login can retry.
     HttpOverrides.global = _AimsHttpOverrides();
@@ -57,6 +60,7 @@ void main() async {
   AppSession.screenshotIntervalSeconds = AppConfig.screenshotInterval;
   await LocalNotificationService.initialize();
   await PushService.instance.initialize();
+  await PushKeepAlive.configure();
   runApp(const MyApp());
 }
 
@@ -179,8 +183,13 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     super.initState();
     CallNavigation.navigatorKey = appNavigatorKey;
     WidgetsBinding.instance.addObserver(this);
-    LocalNotificationService.onTap = (_) {
-      if (_isLoggedIn && mounted) unawaited(_openNotifications());
+    LocalNotificationService.onAction = (actionId, payload) {
+      unawaited(_onNotificationAction(actionId, payload));
+    };
+    LocalNotificationService.onTap = (payload) {
+      if (CallNotification.isCallPayload(payload)) return;
+      if (!_isLoggedIn || !mounted) return;
+      unawaited(_openNotifications());
     };
     AppNavigation.instance.onSelectTab = _onNavSelected;
     AppNavigation.instance.onNavigateToTab = _navigateToTab;
@@ -196,6 +205,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenProfile = _openProfile;
     AppNavigationBridge.openChatTab = () => _navigateToTab(2);
     AppNavigationBridge.openNotifications = _openNotifications;
+    AppNavigationBridge.openIncomingCall = (data) {
+      unawaited(CallService.instance.handleRemoteSignal(data));
+      _openCallPage();
+    };
     _notificationService.onUnreadCountChanged = _onUnreadCountChanged;
     _initializeApp();
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
@@ -415,8 +428,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycle = state;
+    final foreground = state == AppLifecycleState.resumed;
+    PushKeepAlive.setUiForeground(foreground);
     if (!_isLoggedIn) return;
-    if (state == AppLifecycleState.resumed) {
+    if (foreground) {
       _notificationService.setAppInBackground(false);
       unawaited(_notificationService.reconnect());
     } else if (state == AppLifecycleState.paused ||
@@ -441,6 +456,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     await _notificationService.start();
     _notifPushSub = _notificationService.pushStream.listen(_onPushNotification);
     unawaited(_ensureMobileNotificationPermission());
+    unawaited(PushKeepAlive.start());
     unawaited(PushService.instance.bindApi(_apiService));
   }
 
@@ -460,6 +476,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       }
     }
     if (uid == null) return;
+    await CallNotification.flushPendingDecline();
     CallService.instance.bind(
       notificationService: _notificationService,
       apiService: _apiService,
@@ -469,6 +486,29 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       _openCallPage();
     };
+    final pending = LocalNotificationService.takePending();
+    if (pending != null) {
+      unawaited(_onNotificationAction(pending.actionId, pending.payload));
+    }
+  }
+
+  Future<void> _onNotificationAction(String? actionId, String? payload) async {
+    final invite = CallNotification.parse(payload);
+    if (invite != null) {
+      if (!_isLoggedIn) {
+        LocalNotificationService.pendingActionId = actionId;
+        LocalNotificationService.pendingPayload = payload;
+        return;
+      }
+      await CallService.instance.applyNotificationAction(actionId, invite);
+      return;
+    }
+    if (!_isLoggedIn || !mounted) return;
+    if (payload == 'chat') {
+      _navigateToTab(AppNavigation.tabChat);
+      return;
+    }
+    unawaited(_openNotifications());
   }
 
   void _openCallPage() {
@@ -487,6 +527,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   void _stopNotifications() {
+    unawaited(PushKeepAlive.stop());
     _notifPushSub?.cancel();
     _notifPushSub = null;
     if (CallService.instance.isInCall) CallService.instance.hangUp();

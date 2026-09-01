@@ -73,7 +73,7 @@ class _BreakToolPageState extends State<BreakToolPage> {
               screenshotService: widget.screenshotService,
               isClockedIn: true,
               refreshToken: _refresh,
-              onBreakChanged: (_) => setState(() => _refresh++),
+              onBreakChanged: (_, {breakStart}) => setState(() => _refresh++),
             )
           else
             _clockInPrompt(),

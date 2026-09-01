@@ -11,9 +11,11 @@ import '../config.dart';
 import '../utils/ws_connect.dart';
 import 'api_service.dart';
 import 'call_navigation.dart';
+import 'call_notification.dart';
 import 'call_tokens.dart';
 import 'local_notification_service.dart';
 import 'notification_service.dart';
+import 'notification_sound.dart';
 
 enum CallPhase { idle, outgoing, incoming, connecting, active, ended }
 
@@ -185,18 +187,47 @@ class CallService {
   void _setPhase(CallPhase p) {
     _phase = p;
     if (!_phaseController.isClosed) _phaseController.add(p);
+    switch (p) {
+      case CallPhase.incoming:
+        unawaited(NotificationSound.playRingtone());
+        break;
+      case CallPhase.outgoing:
+        unawaited(NotificationSound.playRingback());
+        break;
+      default:
+        unawaited(NotificationSound.stopCallSounds());
+    }
   }
 
-  Future<bool> startOutgoing({
+  /// Answer / Decline from the system notification (or open the incoming UI).
+  Future<void> applyNotificationAction(String? actionId, Map<String, dynamic> invite) async {
+    await handleRemoteSignal(invite);
+    if (actionId == CallNotification.declineAction) {
+      rejectIncoming();
+      return;
+    }
+    CallNavigation.openCallPageIfNeeded();
+    if (actionId == CallNotification.acceptAction) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await acceptIncoming();
+    }
+  }
+
+  /// Returns null on success, or an error message.
+  Future<String?> startOutgoing({
     required int peerId,
     required String peerName,
     required CallKind kind,
   }) async {
-    if (isInCall) return false;
-    if (_myUserId == null || _api == null) return false;
+    if (isInCall) return 'Already in a call';
+    if (_myUserId == null || _api == null) return 'Call service not ready';
 
     final ok = await _ensurePermissions(kind);
-    if (!ok) return false;
+    if (!ok) {
+      return kind == CallKind.video
+          ? 'Camera and microphone permission required'
+          : 'Microphone permission required';
+    }
 
     final callId = _newCallId();
     _session = CallSession(
@@ -209,14 +240,11 @@ class CallService {
     _sessionController.add(_session);
     _setPhase(CallPhase.outgoing);
 
-    if (kind == CallKind.video) {
-      try {
-        await _ensureLocalMedia(kind);
-      } catch (e) {
-        if (kDebugMode) debugPrint('[CallService] video preview: $e');
-        _endCall('Camera unavailable');
-        return false;
-      }
+    try {
+      await _ensureLocalMedia(kind);
+    } catch (e) {
+      _endCall(kind == CallKind.video ? 'Camera unavailable' : 'Microphone unavailable');
+      return kind == CallKind.video ? 'Camera unavailable' : 'Microphone unavailable';
     }
 
     final api = _api!;
@@ -226,13 +254,13 @@ class CallService {
     );
     if (createR['success'] != true) {
       _endCall(createR['error']?.toString() ?? 'Could not start call');
-      return false;
+      return createR['error']?.toString() ?? 'Could not start call';
     }
 
     final sessionId = createR['data']?['session_id']?.toString();
     if (sessionId == null || sessionId.isEmpty) {
       _endCall('Could not start call');
-      return false;
+      return 'Could not start call';
     }
 
     _p2pSessionId = sessionId;
@@ -252,12 +280,20 @@ class CallService {
       callType: kind == CallKind.video ? 'video' : 'audio',
       callerId: _myUserId!,
     );
+    await _notif?.waitForConnection(timeout: const Duration(seconds: 6));
     final sendR = await api.sendMessage(peerId, inviteMsg);
     if (sendR['success'] != true) {
       await api.p2pCancelSession(sessionId);
-      _endCall('Could not reach user');
-      return false;
+      _endCall(sendR['error']?.toString() ?? 'Could not reach user');
+      return sendR['error']?.toString() ?? 'Could not reach user';
     }
+
+    _notif?.sendChatPayload({
+      'type': 'call_invite',
+      'call_id': sessionId,
+      'callee_id': peerId,
+      'call_type': kind == CallKind.video ? 'video' : 'audio',
+    });
 
     await _connectP2p(sessionId);
 
@@ -267,7 +303,7 @@ class CallService {
         hangUp(reason: 'No answer');
       }
     });
-    return true;
+    return null;
   }
 
   Future<bool> acceptIncoming() async {
@@ -305,6 +341,12 @@ class CallService {
     }
 
     await _sendChatControl('$acceptPrefix${s.callId}');
+    _notif?.sendChatPayload({
+      'type': 'call_accept',
+      'call_id': s.callId,
+      'caller_id': s.peerId,
+      'peer_id': s.peerId,
+    });
 
     _p2pSessionId = s.callId;
     await _connectP2p(s.callId);
@@ -317,6 +359,13 @@ class CallService {
     if (s == null) return;
     _ringTimer?.cancel();
     unawaited(_sendChatControl('$rejectPrefix${s.callId}'));
+    _notif?.sendChatPayload({
+      'type': 'call_reject',
+      'call_id': s.callId,
+      'caller_id': s.peerId,
+      'peer_id': s.peerId,
+      'reason': reason,
+    });
     _endCall(reason);
   }
 
@@ -324,6 +373,11 @@ class CallService {
     final s = _session;
     if (s != null && _phase != CallPhase.ended && _phase != CallPhase.idle) {
       unawaited(_sendChatControl('$endPrefix${s.callId}'));
+      _notif?.sendChatPayload({
+        'type': 'call_hangup',
+        'call_id': s.callId,
+        'peer_id': s.peerId,
+      });
       if (s.isOutgoing) {
         unawaited(_api?.p2pCancelSession(s.callId));
       }
@@ -399,6 +453,7 @@ class CallService {
     final callId = data['call_id']?.toString() ?? data['session_id']?.toString() ?? '';
     if (callId.isEmpty) return;
 
+    if (_session?.callId == callId) return;
     if (_outgoingSessionIds.contains(callId)) return;
     if (_p2pSessionId == callId && (_phase == CallPhase.outgoing || _phase == CallPhase.connecting)) {
       return;
@@ -421,6 +476,7 @@ class CallService {
 
     final kind = data['call_type']?.toString() == 'video' ? CallKind.video : CallKind.audio;
     final name = data['sender_name']?.toString() ??
+        data['caller_name']?.toString() ??
         data['sender_username']?.toString() ??
         'Incoming call';
 
@@ -438,12 +494,17 @@ class CallService {
     onIncomingCall?.call(_session!);
     CallNavigation.openCallPageIfNeeded();
 
-    unawaited(LocalNotificationService.show(
-      id: callId.hashCode,
+    unawaited(LocalNotificationService.showIncomingCall(
       title: kind == CallKind.video ? 'Incoming video call' : 'Incoming voice call',
       body: name,
-      payload: 'call:$callId',
-      channelId: 'aims_calls_v1',
+      payload: CallNotification.encode(
+        callId: callId,
+        callerId: callerId,
+        callType: kind == CallKind.video ? 'video' : 'audio',
+        callerName: name,
+      ),
+      playSound: false,
+      video: kind == CallKind.video,
     ));
 
     _ringTimer?.cancel();
@@ -784,6 +845,8 @@ class CallService {
     _ringTimer?.cancel();
     _negotiationTimer?.cancel();
     _clearConnectTimeout();
+    unawaited(LocalNotificationService.cancelIncomingCall());
+    unawaited(NotificationSound.stopCallSounds());
     _negotiating = false;
     _remoteReady = false;
     _pendingIce.clear();

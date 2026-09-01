@@ -6,12 +6,21 @@ class LocalNotificationService {
 
   static bool _initialized = false;
   static void Function(String? payload)? onTap;
+  static void Function(String? actionId, String? payload)? onAction;
+
+  static String? pendingActionId;
+  static String? pendingPayload;
+
+  static const messageChannelId = 'aims_messages_v3';
+  static const callChannelId = 'aims_calls_v3';
 
   static bool get supported => false;
 
   static Future<void> initialize() async {
     _initialized = true;
   }
+
+  static ({String? actionId, String? payload})? takePending() => null;
 
   static Future<bool> requestPermissions() async => false;
 
@@ -20,6 +29,25 @@ class LocalNotificationService {
     required String title,
     required String body,
     String? payload,
-    String channelId = 'aims_alerts_v2',
+    String channelId = messageChannelId,
   }) async {}
+
+  static Future<void> showIncomingCall({
+    required String title,
+    required String body,
+    String? payload,
+    bool playSound = true,
+    bool video = false,
+  }) async {}
+
+  static Future<void> showCall({
+    required int id,
+    required String title,
+    required String body,
+    String? payload,
+  }) async {}
+
+  static Future<void> cancelIncomingCall() async {}
+
+  static Future<void> cancel(int id) async {}
 }

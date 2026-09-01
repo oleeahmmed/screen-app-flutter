@@ -1,4 +1,4 @@
-// config.dart — build-time overrides: --dart-define=API_ORIGIN=http://127.0.0.1:8000
+// config.dart — local override: --dart-define=API_ORIGIN=http://192.168.1.112:8000
 
 class AppConfig {
   static const String _apiOrigin = String.fromEnvironment(
@@ -205,4 +205,7 @@ class AppConfig {
       '$apiBaseUrl/projects/vault/context/customers/';
   static String vaultContextCustomerProjectsUrl(int customerId) =>
       '$apiBaseUrl/projects/vault/context/customers/$customerId/projects/';
+
+  static String get pushRegisterUrl => '$apiBaseUrl/devices/push/register/';
+  static String get pushUnregisterUrl => '$apiBaseUrl/devices/push/unregister/';
 }
