@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -83,10 +82,6 @@ class CallService {
   String? _p2pSessionId;
   String? _p2pRole;
   bool _p2pPeerJoined = false;
-  bool _p2pIntentionalClose = false;
-  int _p2pReconnectAttempt = 0;
-  Timer? _iceFailTimer;
-  bool _iceRestarted = false;
 
   final _phaseController = StreamController<CallPhase>.broadcast();
   final _sessionController = StreamController<CallSession?>.broadcast();
@@ -125,7 +120,7 @@ class CallService {
       unawaited(_pollChatInvites());
     });
     unawaited(_pollChatInvites());
-    unawaited(_ensureIceServers());
+    unawaited(_loadIceServers());
     if (kDebugMode) debugPrint('[CallService] bound userId=$myUserId');
   }
 
@@ -173,31 +168,14 @@ class CallService {
     final api = _api;
     if (api == null) return;
     final r = await api.p2pGetIceServers();
-    if (r['success'] != true) return;
-    final data = r['data'];
-    if (data is Map && data['ice_servers'] is List) {
-      final loaded = (data['ice_servers'] as List)
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-      if (loaded.isNotEmpty) _iceServers = loaded;
-      final hasTurn = _iceServers.any((e) {
-        final urls = e['urls'];
-        final raw = urls is List ? urls.join(' ') : urls.toString();
-        return raw.toLowerCase().contains('turn:');
-      });
-      if (!hasTurn && kDebugMode) {
-        debugPrint('[CallService] ICE has no TURN — Connecting may hang on mobile NAT');
+    if (r['success'] == true) {
+      final data = r['data'];
+      if (data is Map && data['ice_servers'] is List) {
+        _iceServers = (data['ice_servers'] as List)
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
       }
-    }
-  }
-
-  Future<void> _ensureIceServers() async {
-    await _loadIceServers();
-    if (_iceServers.isEmpty) {
-      _iceServers = const [
-        {'urls': 'stun:stun.l.google.com:19302'},
-      ];
     }
   }
 
@@ -230,17 +208,8 @@ class CallService {
     }
     CallNavigation.openCallPageIfNeeded();
     if (actionId == CallNotification.acceptAction) {
-      await _waitUntilCallReady();
+      await Future<void>.delayed(const Duration(milliseconds: 250));
       await acceptIncoming();
-    }
-  }
-
-  Future<void> _waitUntilCallReady() async {
-    for (var i = 0; i < 50; i++) {
-      if (_api != null && _myUserId != null && _phase == CallPhase.incoming && _session != null) {
-        return;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 200));
     }
   }
 
@@ -272,7 +241,6 @@ class CallService {
     _setPhase(CallPhase.outgoing);
 
     try {
-      await _ensureIceServers();
       await _ensureLocalMedia(kind);
     } catch (e) {
       _endCall(kind == CallKind.video ? 'Camera unavailable' : 'Microphone unavailable');
@@ -339,24 +307,17 @@ class CallService {
   }
 
   Future<bool> acceptIncoming() async {
-    if (_phase != CallPhase.incoming) {
-      for (var i = 0; i < 50; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-        if (_phase == CallPhase.incoming && _session != null) break;
-      }
-    }
     final s = _session;
     if (s == null || _phase != CallPhase.incoming) return false;
 
     final ok = await _ensurePermissions(s.kind);
     if (!ok) {
-      // Stay on the incoming UI so the user can grant and tap Accept again.
+      rejectIncoming(reason: 'Permission denied');
       return false;
     }
 
     _ringTimer?.cancel();
     _setPhase(CallPhase.connecting);
-    await _ensureIceServers();
 
     try {
       await _ensureLocalMedia(s.kind);
@@ -449,42 +410,13 @@ class CallService {
   }
 
   Future<bool> _ensurePermissions(CallKind kind) async {
-    await _waitUntilResumed();
-    if (await _permissionsGranted(kind)) return true;
-
-    var mic = await Permission.microphone.request();
-    await _waitUntilResumed();
-    if (!mic.isGranted) mic = await Permission.microphone.status;
-    if (!mic.isGranted) {
-      for (var i = 0; i < 20; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 200));
-        mic = await Permission.microphone.status;
-        if (mic.isGranted) break;
-      }
-    }
+    final mic = await Permission.microphone.request();
     if (!mic.isGranted) return false;
-
     if (kind == CallKind.video) {
-      var cam = await Permission.camera.request();
-      await _waitUntilResumed();
-      if (!cam.isGranted) cam = await Permission.camera.status;
+      final cam = await Permission.camera.request();
       if (!cam.isGranted) return false;
     }
     return true;
-  }
-
-  Future<bool> _permissionsGranted(CallKind kind) async {
-    if (!await Permission.microphone.isGranted) return false;
-    if (kind == CallKind.video && !await Permission.camera.isGranted) return false;
-    return true;
-  }
-
-  Future<void> _waitUntilResumed() async {
-    for (var i = 0; i < 40; i++) {
-      final state = WidgetsBinding.instance.lifecycleState;
-      if (state == null || state == AppLifecycleState.resumed) return;
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
   }
 
   Future<void> _onSignal(Map<String, dynamic> data) async {
@@ -611,7 +543,6 @@ class CallService {
     if (token == null || token.isEmpty) return;
 
     final url = AppConfig.p2pWsUrl(sessionId, token);
-    _p2pIntentionalClose = false;
     try {
       _p2pWs = connectWs(url);
       _p2pSub = _p2pWs!.stream.listen(
@@ -627,47 +558,19 @@ class CallService {
         },
         onError: (_) {},
         onDone: () {
-          if (_p2pIntentionalClose) return;
-          if (_phase == CallPhase.outgoing ||
-              _phase == CallPhase.incoming ||
-              _phase == CallPhase.connecting) {
-            unawaited(_reconnectP2p(sessionId));
-            return;
-          }
-          if (_phase == CallPhase.active) {
+          if (_phase == CallPhase.active || _phase == CallPhase.connecting) {
             hangUp(reason: 'Connection lost');
           }
         },
       );
       await _p2pWs!.ready.timeout(const Duration(seconds: 12));
       _p2pSessionId = sessionId;
-      _p2pReconnectAttempt = 0;
     } catch (e) {
       if (kDebugMode) debugPrint('[CallService] P2P connect failed: $e');
-      if (_phase == CallPhase.outgoing ||
-          _phase == CallPhase.incoming ||
-          _phase == CallPhase.connecting) {
-        unawaited(_reconnectP2p(sessionId));
-      }
     }
-  }
-
-  Future<void> _reconnectP2p(String sessionId) async {
-    if (_p2pSessionId != null && _p2pSessionId != sessionId) return;
-    if (_phase == CallPhase.idle || _phase == CallPhase.ended) return;
-    if (_p2pReconnectAttempt >= 8) {
-      if (_phase == CallPhase.connecting) hangUp(reason: 'Could not connect');
-      return;
-    }
-    _p2pReconnectAttempt++;
-    await Future<void>.delayed(Duration(milliseconds: 350 * _p2pReconnectAttempt));
-    if (_phase == CallPhase.idle || _phase == CallPhase.ended) return;
-    if (_p2pSessionId != null && _p2pSessionId != sessionId) return;
-    await _connectP2p(sessionId);
   }
 
   Future<void> _disconnectP2p() async {
-    _p2pIntentionalClose = true;
     await _p2pSub?.cancel();
     _p2pSub = null;
     try {
@@ -860,30 +763,16 @@ class CallService {
             }
           : false,
     };
-    Object? last;
-    for (var i = 0; i < 3; i++) {
-      try {
-        final stream = await navigator.mediaDevices.getUserMedia(constraints);
-        _localStream = stream;
-        _localStreamController.add(stream);
-        return;
-      } catch (e) {
-        last = e;
-        await Future<void>.delayed(Duration(milliseconds: 350 * (i + 1)));
-      }
-    }
-    throw last ?? Exception('Microphone unavailable');
+    final stream = await navigator.mediaDevices.getUserMedia(constraints);
+    _localStream = stream;
+    _localStreamController.add(stream);
   }
 
   Future<void> _initPc({required bool asCaller}) async {
     if (_pc != null) return;
-    _iceRestarted = false;
     _pc = await createPeerConnection({
       'iceServers': _iceServers,
       'sdpSemantics': 'unified-plan',
-      'iceTransportPolicy': 'all',
-      'bundlePolicy': 'max-bundle',
-      'iceCandidatePoolSize': 4,
     });
 
     _pc!.onIceCandidate = (c) {
@@ -914,22 +803,9 @@ class CallService {
     _pc!.onIceConnectionState = (state) {
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
-        _iceFailTimer?.cancel();
         markActive();
-      } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        _iceFailTimer?.cancel();
-        _iceFailTimer = Timer(const Duration(seconds: 5), () {
-          if (_phase == CallPhase.active || _phase == CallPhase.connecting) {
-            hangUp(reason: 'Connection lost');
-          }
-        });
-      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
-        _iceFailTimer?.cancel();
-        if (!_iceRestarted && _pc != null && _phase == CallPhase.connecting) {
-          _iceRestarted = true;
-          unawaited(_pc!.restartIce());
-          return;
-        }
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
+          state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
         if (_phase == CallPhase.active || _phase == CallPhase.connecting) {
           hangUp(reason: 'Connection lost');
         }
@@ -968,7 +844,6 @@ class CallService {
   void _endCall(String reason) {
     _ringTimer?.cancel();
     _negotiationTimer?.cancel();
-    _iceFailTimer?.cancel();
     _clearConnectTimeout();
     unawaited(LocalNotificationService.cancelIncomingCall());
     unawaited(NotificationSound.stopCallSounds());

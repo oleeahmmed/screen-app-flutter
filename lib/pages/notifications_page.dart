@@ -4,11 +4,14 @@ import 'dart:async';
 import '../services/api_service.dart';
 import '../services/app_navigation.dart';
 import '../services/chat_notification.dart';
+import '../services/notification_deep_link.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/notification_ui.dart';
 import '../utils/responsive.dart';
+import '../widgets/app_tab_shell.dart';
 import '../utils/whatsapp_avatar.dart';
+import 'projects_page.dart';
 import 'task_detail_page.dart';
 
 class NotificationsPage extends StatefulWidget {
@@ -160,7 +163,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                   : _notifs.isEmpty
                       ? _emptyState()
                       : RefreshIndicator(
-                          color: const Color(0xFF00A884),
+                          color: AppTheme.accent,
                           backgroundColor: AppTheme.surface,
                           onRefresh: () => _load(),
                           child: ListView.separated(
@@ -362,20 +365,59 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
   Future<void> _onNotificationTap(dynamic n) async {
     unawaited(_markOneRead(n));
-    final taskId = _taskIdFromNotification(n);
-    if (taskId != null) {
+    if (n is! Map) return;
+    final map = Map<String, dynamic>.from(n);
+    final link = NotificationDeepLink.fromData(map);
+    if (link.dest == NotificationDest.task && link.taskId != null) {
       if (!mounted) return;
       openTaskDetailPage(
         context,
         apiService: widget.apiService,
-        taskId: taskId,
+        taskId: link.taskId!,
+        projectId: link.projectId ?? 0,
       );
       return;
     }
-    final type = n is Map ? n['notification_type']?.toString() ?? '' : '';
-    if (_isChatNotification(type)) {
-      final chat = n is Map ? ChatNotification.fromData(Map<String, dynamic>.from(n)) : null;
-      AppNavigation.instance.goChatWithPeer(userId: chat?.peerId, groupId: chat?.groupId);
+    if (link.dest == NotificationDest.chat) {
+      AppNavigation.instance.goChatWithPeer(userId: link.peerId, groupId: link.groupId);
+      return;
+    }
+    if (link.dest == NotificationDest.myTasks) {
+      AppNavigation.instance.goMyTasks();
+      return;
+    }
+    if (link.dest == NotificationDest.project) {
+      if (link.projectId != null && mounted) {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => AppTabShell(
+              selectedIndex: AppNavigation.tabProject,
+              unreadNotifs: AppNavigation.instance.unreadNotifs,
+              showTopBar: true,
+              showBottomNav: false,
+              child: ProjectDetailView(
+                apiService: widget.apiService,
+                projectId: link.projectId!,
+                projectName: '',
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+      AppNavigation.instance.goProject();
+      return;
+    }
+    if (link.dest == NotificationDest.vault) {
+      AppNavigation.instance.goVault();
+      return;
+    }
+    if (link.dest == NotificationDest.report) {
+      // Stay on alerts — closing report is prompted from the live push path.
+      return;
+    }
+    if (link.dest == NotificationDest.attendance) {
+      await AppNavigation.instance.openAttendanceReport();
     }
   }
 
@@ -385,7 +427,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
     final isRead = map['is_read'] == true;
     final type = map['notification_type']?.toString() ?? '';
     final isChat = _isChatNotification(type);
-    final color = isChat ? const Color(0xFF00A884) : NotificationUi.colorFor(type);
+    final color = isChat ? AppTheme.accent : NotificationUi.colorFor(type);
     final title = map['title']?.toString() ?? '';
     final message = map['message']?.toString() ?? '';
     final displayName = isChat ? ChatNotification.fromData(map).name : title;
@@ -437,7 +479,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                         Text(
                           _timeAgo(map['created_at']?.toString()),
                           style: TextStyle(
-                            color: isRead ? AppTheme.textMuted.withValues(alpha: 0.75) : const Color(0xFF00A884),
+                            color: isRead ? AppTheme.textMuted.withValues(alpha: 0.75) : AppTheme.accent,
                             fontSize: 12,
                             fontWeight: FontWeight.w500,
                           ),

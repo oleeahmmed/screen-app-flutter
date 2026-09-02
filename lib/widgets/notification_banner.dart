@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
 import '../utils/notification_ui.dart';
 import '../utils/whatsapp_avatar.dart';
 
@@ -27,7 +28,7 @@ class NotificationBanner {
     if (overlay == null) return;
 
     final isChat = notificationType == 'new_message' || notificationType == 'new_group_message';
-    final color = isChat ? const Color(0xFF00A884) : NotificationUi.colorFor(notificationType);
+    final color = isChat ? AppTheme.accent : NotificationUi.colorFor(notificationType);
     final icon = NotificationUi.iconFor(notificationType);
 
     _entry = OverlayEntry(
@@ -51,7 +52,7 @@ class NotificationBanner {
                     constraints: const BoxConstraints(maxWidth: 520),
                     padding: const EdgeInsets.fromLTRB(10, 10, 12, 10),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1F2C34),
+                      color: AppTheme.surface2,
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(

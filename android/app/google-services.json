@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "000000000000",
-    "project_id": "aims-igenhr-placeholder",
-    "storage_bucket": "aims-igenhr-placeholder.appspot.com"
+    "project_number": "207559932217",
+    "project_id": "aims-igenhr",
+    "storage_bucket": "aims-igenhr.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+        "mobilesdk_app_id": "1:207559932217:android:712e4be6c10afb976c90e8",
         "android_client_info": {
           "package_name": "com.example.igen_app"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "REPLACE_WITH_FIREBASE_CONSOLE_API_KEY"
+          "current_key": "AIzaSyAcq8Yzsj4ozotKW89A-mr4hFaiyUmW5hs"
         }
       ],
       "services": {

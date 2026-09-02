@@ -190,8 +190,10 @@ class AppConfig {
       '$apiBaseUrl/projects/$projectId/vault/entries/$entryId/copy-field/';
   static String vaultEntryHidePasswordUrl(int projectId, int entryId) =>
       '$apiBaseUrl/projects/$projectId/vault/entries/$entryId/hide-password/';
-  static String vaultEntryAttachmentUrl(int projectId, int entryId) =>
-      '$apiBaseUrl/projects/$projectId/vault/entries/$entryId/attachments/add/';
+  static String vaultEntryAttachmentDownloadUrl(int projectId, int entryId, int attachmentId) =>
+      '$apiBaseUrl/projects/$projectId/vault/entries/$entryId/attachments/$attachmentId/download/';
+  static String vaultEntryAttachmentDetailUrl(int projectId, int entryId, int attachmentId) =>
+      '$apiBaseUrl/projects/$projectId/vault/entries/$entryId/attachments/$attachmentId/';
   static String vaultEntryShareUrl(int projectId, int entryId) =>
       '$apiBaseUrl/projects/$projectId/vault/entries/$entryId/share/';
   static String vaultEntrySharesUrl(int projectId, int entryId) =>

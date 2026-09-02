@@ -16,7 +16,12 @@ subprojects {
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
 subprojects {
-    project.evaluationDependsOn(":app")
+    afterEvaluate {
+        extensions.findByType(com.android.build.gradle.LibraryExtension::class.java)?.apply {
+            compileSdk = 36
+            buildToolsVersion = "36.0.0"
+        }
+    }
 }
 
 // file_picker (and other plugins) lintVitalAnalyzeRelease can fail on AGP 8.x.

@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/api_service.dart';
 import '../../services/user_data_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/app_toast.dart';
+import '../../utils/local_file_actions.dart';
 import 'vault_helpers.dart';
 import 'vault_sheets.dart';
 
@@ -106,8 +109,15 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
   Timer? _hideTimer;
   int? _currentUserId;
   bool _permissionsLoaded = false;
+  int? _busyAttachmentId;
 
   int get _entryId => _entry['id'] as int;
+
+  List<Map<String, dynamic>> get _attachments {
+    final raw = _entry['attachments'];
+    if (raw is! List) return const [];
+    return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
 
   bool get _canManageEntry =>
       _permissionsLoaded &&
@@ -248,9 +258,11 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
           ),
         );
 
+    final pendingFiles = <Map<String, dynamic>>[];
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
         backgroundColor: AppTheme.surface2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: const Text('Edit entry', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700)),
@@ -259,6 +271,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 TextField(
                   controller: nameCtrl,
@@ -291,6 +304,20 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
                   style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
                   decoration: deco('Notes', Icons.notes_rounded),
                 ),
+                const SizedBox(height: 12),
+                vaultPendingFilesPicker(
+                  pendingFiles: pendingFiles,
+                  onAdd: () async {
+                    final picked = await pickVaultPendingFiles(
+                      ctx,
+                      alreadyCount: _attachments.length + pendingFiles.length,
+                    );
+                    if (picked.isEmpty) return;
+                    pendingFiles.addAll(picked);
+                    setD(() {});
+                  },
+                  onRemove: (i) => setD(() => pendingFiles.removeAt(i)),
+                ),
               ],
             ),
           ),
@@ -303,6 +330,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
             child: const Text('Save'),
           ),
         ],
+        ),
       ),
     );
     if (ok != true || !mounted) return;
@@ -319,17 +347,23 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
       username: userCtrl.text.trim(),
       password: passCtrl.text.isEmpty ? null : passCtrl.text,
       notes: notesCtrl.text.trim(),
+      files: pendingFiles,
     );
     if (!mounted) return;
     if (r['success'] == true) {
+      final data = r['data'];
       setState(() {
-        _entry = {
-          ..._entry,
-          'name': nameCtrl.text.trim(),
-          'url': urlCtrl.text.trim(),
-          'username': userCtrl.text.trim(),
-          'notes': notesCtrl.text.trim(),
-        };
+        if (data is Map) {
+          _entry = {..._entry, ...Map<String, dynamic>.from(data)};
+        } else {
+          _entry = {
+            ..._entry,
+            'name': nameCtrl.text.trim(),
+            'url': urlCtrl.text.trim(),
+            'username': userCtrl.text.trim(),
+            'notes': notesCtrl.text.trim(),
+          };
+        }
       });
       widget.onChanged();
       if (!widget.embedded) Navigator.pop(context);
@@ -373,6 +407,103 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
     } else {
       _toast(r['error']?.toString() ?? 'Delete failed', error: true);
     }
+  }
+
+  String _attachmentName(Map<String, dynamic> a) {
+    final title = a['title']?.toString().trim() ?? '';
+    if (title.isNotEmpty) return title;
+    final original = a['original_filename']?.toString().trim() ?? '';
+    if (original.isNotEmpty) return original;
+    return 'File';
+  }
+
+  String _attachmentSizeLabel(Map<String, dynamic> a) {
+    final raw = a['file_size'];
+    final bytes = raw is int ? raw : int.tryParse('$raw') ?? 0;
+    if (bytes <= 0) return '';
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  IconData _attachmentIcon(String name) {
+    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+    if ({'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'}.contains(ext)) return Icons.image_outlined;
+    if ({'pdf'}.contains(ext)) return Icons.picture_as_pdf_outlined;
+    if ({'xls', 'xlsx', 'csv'}.contains(ext)) return Icons.table_chart_outlined;
+    if ({'doc', 'docx', 'rtf', 'odt'}.contains(ext)) return Icons.description_outlined;
+    if ({'env', 'ini', 'conf', 'cfg', 'yml', 'yaml', 'json', 'xml'}.contains(ext)) {
+      return Icons.settings_outlined;
+    }
+    return Icons.attach_file_rounded;
+  }
+
+  Future<void> _openAttachment(Map<String, dynamic> a) async {
+    final id = a['id'] is int ? a['id'] as int : int.tryParse('${a['id']}');
+    if (id == null || _busyAttachmentId != null) return;
+    setState(() => _busyAttachmentId = id);
+    final r = await widget.apiService.downloadVaultAttachment(widget.projectId, _entryId, id);
+    if (!mounted) return;
+    if (r['success'] != true) {
+      setState(() => _busyAttachmentId = null);
+      _toast(r['error']?.toString() ?? 'Download failed', error: true);
+      return;
+    }
+    try {
+      final filename = (r['filename']?.toString().trim().isNotEmpty == true)
+          ? r['filename'].toString()
+          : _attachmentName(a);
+      final safe = filename.replaceAll(RegExp(r'[^\w.\- ()]'), '_');
+      final dir = await getTemporaryDirectory();
+      final path = '${dir.path}/vault_${_entryId}_${id}_$safe';
+      final file = File(path);
+      await file.writeAsBytes(List<int>.from(r['bytes'] as List<int>), flush: true);
+      final opened = await LocalFileActions.openFile(path);
+      if (mounted && opened != 'ok' && opened != 'no_handler') {
+        _toast(opened == 'missing' ? 'Could not open file' : opened, error: true);
+      }
+    } catch (e) {
+      if (mounted) _toast('$e', error: true);
+    }
+    if (mounted) setState(() => _busyAttachmentId = null);
+  }
+
+  Future<void> _deleteAttachment(Map<String, dynamic> a) async {
+    if (!_canManageEntry) return;
+    final id = a['id'] is int ? a['id'] as int : int.tryParse('${a['id']}');
+    if (id == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface2,
+        title: const Text('Remove file?', style: TextStyle(color: AppTheme.textPrimary)),
+        content: Text(
+          'Delete "${_attachmentName(a)}"?',
+          style: const TextStyle(color: AppTheme.textMuted),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final r = await widget.apiService.deleteVaultAttachment(widget.projectId, _entryId, id);
+    if (!mounted) return;
+    if (r['success'] != true) {
+      _toast(r['error']?.toString() ?? 'Delete failed', error: true);
+      return;
+    }
+    widget.onChanged();
+    setState(() {
+      final next = List<Map<String, dynamic>>.from(_attachments)..removeWhere((e) => e['id'] == id);
+      _entry = {..._entry, 'attachments': next};
+    });
+    _toast('File removed');
   }
 
   Widget _formField({
@@ -542,6 +673,64 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
             style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7), fontSize: 11.5),
           ),
         ],
+        if (_attachments.isNotEmpty) ...[
+          const SizedBox(height: 22),
+          vaultSectionLabel('Files'),
+          const SizedBox(height: 10),
+          vaultSurfaceCard(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              children: [
+                ..._attachments.map((a) {
+                  final name = _attachmentName(a);
+                  final size = _attachmentSizeLabel(a);
+                  final id = a['id'] is int ? a['id'] as int : int.tryParse('${a['id']}');
+                  final busy = id != null && id == _busyAttachmentId;
+                  return ListTile(
+                    leading: vaultIconBox(
+                      icon: _attachmentIcon(name),
+                      color: AppTheme.featureVault,
+                      size: 40,
+                      iconSize: 20,
+                      radius: 12,
+                    ),
+                    title: Text(
+                      name,
+                      style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: size.isEmpty
+                        ? null
+                        : Text(size, style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
+                    onTap: busy ? null : () => _openAttachment(a),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (busy)
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.featureVault),
+                          )
+                        else
+                          IconButton(
+                            tooltip: 'Open',
+                            icon: const Icon(Icons.download_outlined, color: AppTheme.textMuted, size: 20),
+                            onPressed: () => _openAttachment(a),
+                          ),
+                        if (_canManageEntry)
+                          IconButton(
+                            tooltip: 'Delete',
+                            icon: const Icon(Icons.delete_outline, color: AppTheme.danger, size: 20),
+                            onPressed: () => _deleteAttachment(a),
+                          ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+        ],
         if (_canManageEntry || _canShareEntry) ...[
           const SizedBox(height: 22),
           vaultSectionLabel('Actions'),
@@ -560,7 +749,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
                       radius: 12,
                     ),
                     title: const Text('Edit entry', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
-                    subtitle: Text('Update name, URL, username or password', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
+                    subtitle: Text('Update name, files, URL, username or password', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
                     onTap: _editEntry,
                   ),
                   Padding(

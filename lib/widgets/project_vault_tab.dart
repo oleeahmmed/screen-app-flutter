@@ -275,52 +275,74 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
     final userCtrl = TextEditingController(text: existing?['username']?.toString() ?? '');
     final passCtrl = TextEditingController();
     final notesCtrl = TextEditingController(text: existing?['notes']?.toString() ?? '');
+    final pendingFiles = <Map<String, dynamic>>[];
+    final isNew = existing == null;
 
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface2,
-        title: Text(
-          existing == null ? 'New entry' : 'Edit entry',
-          style: const TextStyle(color: AppTheme.textPrimary),
-        ),
-        content: SizedBox(
-          width: 360,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(controller: nameCtrl, style: const TextStyle(color: AppTheme.textPrimary), decoration: _deco('Name *')),
-                const SizedBox(height: 10),
-                TextField(controller: urlCtrl, style: const TextStyle(color: AppTheme.textPrimary), decoration: _deco('URL')),
-                const SizedBox(height: 10),
-                TextField(controller: userCtrl, style: const TextStyle(color: AppTheme.textPrimary), decoration: _deco('Username')),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: passCtrl,
-                  obscureText: true,
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                  decoration: _deco(existing == null ? 'Password' : 'Password (blank = keep)'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: notesCtrl,
-                  maxLines: 2,
-                  style: const TextStyle(color: AppTheme.textPrimary),
-                  decoration: _deco('Notes'),
-                ),
-              ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: AppTheme.surface2,
+          title: Text(
+            isNew ? 'New entry' : 'Edit entry',
+            style: const TextStyle(color: AppTheme.textPrimary),
+          ),
+          content: SizedBox(
+            width: 360,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(controller: nameCtrl, style: const TextStyle(color: AppTheme.textPrimary), decoration: _deco('Name *')),
+                  const SizedBox(height: 10),
+                  TextField(controller: urlCtrl, style: const TextStyle(color: AppTheme.textPrimary), decoration: _deco('URL')),
+                  const SizedBox(height: 10),
+                  TextField(controller: userCtrl, style: const TextStyle(color: AppTheme.textPrimary), decoration: _deco('Username')),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: passCtrl,
+                    obscureText: true,
+                    style: const TextStyle(color: AppTheme.textPrimary),
+                    decoration: _deco(isNew ? 'Password' : 'Password (blank = keep)'),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: notesCtrl,
+                    maxLines: 2,
+                    style: const TextStyle(color: AppTheme.textPrimary),
+                    decoration: _deco('Notes'),
+                  ),
+                  const SizedBox(height: 12),
+                  vaultPendingFilesPicker(
+                    pendingFiles: pendingFiles,
+                    onAdd: () async {
+                      final existingCount = existing == null
+                          ? 0
+                          : (existing['attachments'] is List ? (existing['attachments'] as List).length : 0);
+                      final picked = await pickVaultPendingFiles(
+                        ctx,
+                        alreadyCount: existingCount + pendingFiles.length,
+                      );
+                      if (picked.isEmpty) return;
+                      pendingFiles.addAll(picked);
+                      setD(() {});
+                    },
+                    onRemove: (i) => setD(() => pendingFiles.removeAt(i)),
+                  ),
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, nameCtrl.text.trim().isNotEmpty),
+              style: FilledButton.styleFrom(backgroundColor: AppTheme.featureVault),
+              child: Text(isNew ? 'Add' : 'Save'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, nameCtrl.text.trim().isNotEmpty),
-            style: FilledButton.styleFrom(backgroundColor: AppTheme.featureVault),
-            child: Text(existing == null ? 'Add' : 'Save'),
-          ),
-        ],
       ),
     );
     if (ok != true || !mounted) return;
@@ -336,6 +358,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
         username: userCtrl.text.trim(),
         password: passCtrl.text.isEmpty ? null : passCtrl.text,
         notes: notesCtrl.text.trim(),
+        files: pendingFiles,
       );
     } else {
       r = await widget.apiService.createVaultEntry(
@@ -346,6 +369,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
         username: userCtrl.text.trim(),
         password: passCtrl.text,
         notes: notesCtrl.text.trim(),
+        files: pendingFiles,
       );
     }
     if (!mounted) return;

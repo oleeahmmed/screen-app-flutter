@@ -31,7 +31,8 @@ String taskStageNameFrom(dynamic task) {
 bool taskIsCompleted(dynamic task) {
   if (task is! Map) return false;
   if (task['completed'] == true) return true;
-  return (task['status'] ?? '').toString().toLowerCase() == 'completed';
+  final status = (task['status'] ?? '').toString().toLowerCase();
+  return status == 'completed' || status == 'done';
 }
 
 String taskDisplayTitle(dynamic task) {

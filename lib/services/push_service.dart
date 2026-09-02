@@ -10,6 +10,7 @@ import '../firebase_options.dart';
 import 'api_service.dart';
 import 'call_notification.dart';
 import 'chat_notification.dart';
+import 'notification_deep_link.dart';
 import 'local_notification_service_mobile.dart';
 
 /// FCM push — WhatsApp-style alerts when app is minimized or killed.
@@ -124,7 +125,7 @@ class PushService {
       return;
     }
     if (type == 'notification' || notifType.isNotEmpty) {
-      AppNavigationBridge.openNotifications?.call();
+      AppNavigationBridge.openDeepLink?.call(data);
     }
   }
 
@@ -196,7 +197,7 @@ class PushService {
       id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       title: title,
       body: body.isNotEmpty ? body : 'Tap to open',
-      payload: 'alerts',
+      payload: NotificationDeepLink.encodeFromData(data),
     );
   }
 }
@@ -206,6 +207,7 @@ abstract final class AppNavigationBridge {
   static void Function()? openChatTab;
   static void Function(int? userId, int? groupId)? openChatPeer;
   static void Function()? openNotifications;
+  static void Function(Map<String, dynamic> data)? openDeepLink;
   static void Function(Map<String, dynamic> data)? openIncomingCall;
 }
 

@@ -1,8 +1,101 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
+import '../../utils/app_toast.dart';
 
-/// Category permission for non-admin users.
+/// Allowed last-extensions for vault attachments (must match backend whitelist).
+const vaultAllowedAttachmentExtensions = {
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'rtf', 'odt', 'ods', 'ppt', 'pptx',
+  'txt', 'md', 'log', 'json', 'xml', 'yaml', 'yml', 'toml', 'ini', 'conf', 'cfg',
+  'env', 'properties',
+  'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp',
+  'sql', 'py', 'rb', 'pl', 'lua', 'r', 'sh', 'bash', 'zsh', 'ps1', 'js', 'ts',
+};
+
+const vaultMaxAttachmentBytes = 10 * 1024 * 1024;
+const vaultMaxAttachmentsPerEntry = 20;
+
+bool vaultAttachmentFilenameAllowed(String name) {
+  final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+  return vaultAllowedAttachmentExtensions.contains(ext);
+}
+
+Future<List<Map<String, dynamic>>> pickVaultPendingFiles(
+  BuildContext context, {
+  int alreadyCount = 0,
+}) async {
+  final remaining = vaultMaxAttachmentsPerEntry - alreadyCount;
+  if (remaining <= 0) {
+    if (context.mounted) {
+      AppToast.error(context, 'At most $vaultMaxAttachmentsPerEntry files per entry');
+    }
+    return const [];
+  }
+  final result = await FilePicker.platform.pickFiles(allowMultiple: true, withData: true);
+  if (result == null) return const [];
+  final out = <Map<String, dynamic>>[];
+  for (final f in result.files) {
+    if (out.length >= remaining) break;
+    if (!vaultAttachmentFilenameAllowed(f.name)) {
+      if (context.mounted) AppToast.error(context, '${f.name}: file type not allowed');
+      continue;
+    }
+    List<int>? bytes = f.bytes?.toList();
+    if (bytes == null && f.path != null) {
+      bytes = await File(f.path!).readAsBytes();
+    }
+    if (bytes == null || bytes.isEmpty) continue;
+    if (bytes.length > vaultMaxAttachmentBytes) {
+      if (context.mounted) AppToast.error(context, '${f.name}: must be 10 MB or smaller');
+      continue;
+    }
+    out.add({'filename': f.name, 'bytes': bytes});
+  }
+  return out;
+}
+
+Widget vaultPendingFilesPicker({
+  required List<Map<String, dynamic>> pendingFiles,
+  required VoidCallback onAdd,
+  required void Function(int index) onRemove,
+}) {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      OutlinedButton.icon(
+        onPressed: onAdd,
+        icon: const Icon(Icons.attach_file, size: 16),
+        label: Text(
+          pendingFiles.isEmpty
+              ? 'Add files (optional)'
+              : '${pendingFiles.length} file${pendingFiles.length == 1 ? '' : 's'} to attach',
+        ),
+      ),
+      if (pendingFiles.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (var i = 0; i < pendingFiles.length; i++)
+                InputChip(
+                  label: Text(
+                    pendingFiles[i]['filename']?.toString() ?? 'file',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  onDeleted: () => onRemove(i),
+                ),
+            ],
+          ),
+        ),
+    ],
+  );
+}
+
 String vaultCategoryPermissionLabel(Map<String, dynamic> cat) {
   if (cat['can_admin'] == true) return 'Admin';
   final p = (cat['my_permission'] ?? '').toString().toLowerCase();
