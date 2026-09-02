@@ -19,7 +19,10 @@ import 'services/call_navigation.dart';
 import 'services/call_notification.dart';
 import 'services/chat_notification.dart';
 import 'services/call_tokens.dart';
+import 'services/notification_deep_link.dart';
 import 'services/push_service.dart';
+import 'pages/projects_page.dart';
+import 'pages/task_detail_page.dart';
 import 'services/local_notification_service.dart';
 import 'services/push_keepalive_service.dart';
 import 'pages/login_page.dart';
@@ -190,13 +193,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       unawaited(_onNotificationAction(actionId, payload, input: input));
     };
     LocalNotificationService.onTap = (payload) {
-      if (CallNotification.isCallPayload(payload)) return;
-      if (!_isLoggedIn || !mounted) return;
-      if (ChatNotification.isChatPayload(payload) || payload == 'chat') {
-        _openChatFromPayload(payload);
-        return;
-      }
-      unawaited(_openNotifications());
+      unawaited(_openNotificationLink(payload));
     };
     AppNavigation.instance.onSelectTab = _onNavSelected;
     AppNavigation.instance.onNavigateToTab = _navigateToTab;
@@ -215,6 +212,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       AppNavigation.instance.goChatWithPeer(userId: userId, groupId: groupId);
     };
     AppNavigationBridge.openNotifications = _openNotifications;
+    AppNavigationBridge.openDeepLink = (data) {
+      unawaited(_openNotificationLink(null, data: data));
+    };
     AppNavigationBridge.openIncomingCall = (data) {
       unawaited(CallService.instance.handleRemoteSignal(data));
       _openCallPage();
@@ -543,7 +543,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       _openChatFromPayload(payload);
       return;
     }
-    unawaited(_openNotifications());
+    unawaited(_openNotificationLink(payload));
   }
 
   void _openChatFromPayload(String? payload) {
@@ -551,6 +551,93 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     final peerId = int.tryParse('${chat?['peer_id'] ?? ''}');
     final groupId = int.tryParse('${chat?['group_id'] ?? ''}');
     AppNavigation.instance.goChatWithPeer(userId: peerId, groupId: groupId);
+  }
+
+  Future<void> _openNotificationLink(String? payload, {Map<String, dynamic>? data}) async {
+    if (!_isLoggedIn || !mounted) {
+      if (payload != null && payload.isNotEmpty) {
+        LocalNotificationService.pendingPayload = payload;
+      }
+      return;
+    }
+    final link = NotificationDeepLink.parse(payload, data: data);
+    final nav = appNavigatorKey.currentState;
+    if (link.dest != NotificationDest.alerts) {
+      nav?.popUntil((route) => route.isFirst);
+    }
+    switch (link.dest) {
+      case NotificationDest.call:
+        final invite = CallNotification.parse(link.callPayload ?? payload);
+        if (invite != null) {
+          await CallService.instance.applyNotificationAction(null, invite);
+        } else {
+          _openCallPage();
+        }
+        return;
+      case NotificationDest.chat:
+        AppNavigation.instance.goChatWithPeer(userId: link.peerId, groupId: link.groupId);
+        return;
+      case NotificationDest.task:
+        final ctx = nav?.context;
+        if (ctx == null || link.taskId == null) {
+          AppNavigation.instance.goMyTasks();
+          return;
+        }
+        openTaskDetailPage(
+          ctx,
+          apiService: _apiService,
+          taskId: link.taskId!,
+          projectId: link.projectId ?? 0,
+        );
+        return;
+      case NotificationDest.myTasks:
+        AppNavigation.instance.goMyTasks();
+        return;
+      case NotificationDest.project:
+        final ctx = nav?.context;
+        if (ctx == null || link.projectId == null) {
+          AppNavigation.instance.goProject();
+          return;
+        }
+        AppNavigation.instance.goProject();
+        await Navigator.of(ctx).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => AppTabShell(
+              selectedIndex: AppNavigation.tabProject,
+              unreadNotifs: _unreadNotifs,
+              showTopBar: true,
+              showBottomNav: false,
+              child: ProjectDetailView(
+                apiService: _apiService,
+                projectId: link.projectId!,
+                projectName: link.projectName,
+              ),
+            ),
+          ),
+        );
+        return;
+      case NotificationDest.report:
+        final ctx = nav?.context;
+        if (ctx == null) return;
+        await showClosingReportDialog(
+          context: ctx,
+          apiService: _apiService,
+          required: link.notificationType == 'closing_report_due',
+        );
+        return;
+      case NotificationDest.vault:
+        AppNavigation.instance.goVault();
+        return;
+      case NotificationDest.p2p:
+        await _openP2P();
+        return;
+      case NotificationDest.attendance:
+        await _openAttendanceReportTool();
+        return;
+      case NotificationDest.alerts:
+        await _openNotifications();
+        return;
+    }
   }
 
   void _openCallPage() {
@@ -613,16 +700,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         message: chatMeta?.body.isNotEmpty == true ? chatMeta!.body : message,
         notificationType: notifType,
         onTap: () {
-          if (isChat) {
-            _openChatFromPayload(ChatNotification.encode(
-              name: chatMeta?.name ?? title,
-              peerId: chatMeta?.peerId,
-              groupId: chatMeta?.groupId,
-              notificationType: notifType,
-            ));
-          } else {
-            unawaited(_openNotifications());
-          }
+          unawaited(_openNotificationLink(
+            NotificationDeepLink.encodeFromData(data),
+            data: data,
+          ));
         },
       );
     }
@@ -652,7 +733,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           id: notifId,
           title: title,
           body: message.isNotEmpty ? message : 'Tap to open AIMS',
-          payload: 'alerts',
+          payload: NotificationDeepLink.encodeFromData(data),
         );
       }
     }

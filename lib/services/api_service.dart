@@ -1246,21 +1246,20 @@ class ApiService {
 
   Future<Map<String, dynamic>> createGroup(String name, String description, List<int> memberIds) async {
     try {
-      final response = await http
-          .post(
-            Uri.parse(AppConfig.chatGroupsUrl),
-            headers: _getHeaders(),
-            body: jsonEncode({
-              'name': name,
-              'description': description,
-              'member_ids': memberIds,
-            }),
-          )
-          .timeout(Duration(seconds: 10));
+      await ensureAuth();
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.chatGroupsUrl),
+        body: jsonEncode({
+          'name': name,
+          'description': description,
+          'member_ids': memberIds,
+        }),
+      );
       if (response.statusCode == 200 || response.statusCode == 201) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+        return {'success': true, 'data': raw};
       }
-      return {'success': false, 'error': 'Failed to create group'};
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1372,16 +1371,22 @@ class ApiService {
 
   Future<Map<String, dynamic>> getGroupMembers(int groupId) async {
     try {
-      final response = await http
-          .get(
-            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/'),
-            headers: _getHeaders(),
-          )
-          .timeout(Duration(seconds: 10));
+      await ensureAuth();
+      final response = await _authorizedGet(
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/'),
+      );
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final decoded = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+        final list = decoded is List
+            ? decoded
+            : (decoded is Map && decoded['results'] is List)
+                ? decoded['results']
+                : (decoded is Map && decoded['members'] is List)
+                    ? decoded['members']
+                    : <dynamic>[];
+        return {'success': true, 'data': list};
       }
-      return {'success': false, 'error': 'Failed to load members'};
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1389,17 +1394,16 @@ class ApiService {
 
   Future<Map<String, dynamic>> addGroupMembers(int groupId, List<int> memberIds) async {
     try {
-      final response = await http
-          .post(
-            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/'),
-            headers: _getHeaders(),
-            body: jsonEncode({'member_ids': memberIds}),
-          )
-          .timeout(Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+      await ensureAuth();
+      final response = await _authorizedPost(
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/'),
+        body: jsonEncode({'member_ids': memberIds}),
+      );
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+        return {'success': true, 'data': raw is Map ? Map<String, dynamic>.from(raw) : raw};
       }
-      return {'success': false, 'error': 'Failed to add members'};
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1407,16 +1411,35 @@ class ApiService {
 
   Future<Map<String, dynamic>> removeGroupMember(int groupId, int memberId) async {
     try {
-      final response = await http
-          .delete(
-            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/$memberId/'),
-            headers: _getHeaders(),
-          )
-          .timeout(Duration(seconds: 10));
-      if (response.statusCode == 200) {
+      await ensureAuth();
+      final response = await _authorizedDelete(
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/$memberId/'),
+      );
+      if (response.statusCode == 200 || response.statusCode == 204) {
         return {'success': true};
       }
-      return {'success': false, 'error': 'Failed to remove member'};
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> updateGroupMemberRole(
+    int groupId,
+    int memberId,
+    String role,
+  ) async {
+    try {
+      await ensureAuth();
+      final response = await _authorizedPatch(
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/members/$memberId/'),
+        body: jsonEncode({'role': role}),
+      );
+      if (response.statusCode == 200) {
+        final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+        return {'success': true, 'data': raw is Map ? Map<String, dynamic>.from(raw) : raw};
+      }
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1424,16 +1447,14 @@ class ApiService {
 
   Future<Map<String, dynamic>> deleteGroup(int groupId) async {
     try {
-      final response = await http
-          .delete(
-            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/'),
-            headers: _getHeaders(),
-          )
-          .timeout(Duration(seconds: 10));
+      await ensureAuth();
+      final response = await _authorizedDelete(
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/'),
+      );
       if (response.statusCode == 200 || response.statusCode == 204) {
         return {'success': true};
       }
-      return {'success': false, 'error': 'Failed to delete group'};
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -1441,17 +1462,16 @@ class ApiService {
 
   Future<Map<String, dynamic>> updateGroup(int groupId, String name, String description) async {
     try {
-      final response = await http
-          .patch(
-            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/'),
-            headers: _getHeaders(),
-            body: jsonEncode({'name': name, 'description': description}),
-          )
-          .timeout(Duration(seconds: 10));
+      await ensureAuth();
+      final response = await _authorizedPatch(
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/'),
+        body: jsonEncode({'name': name, 'description': description}),
+      );
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+        return {'success': true, 'data': raw is Map ? Map<String, dynamic>.from(raw) : raw};
       }
-      return {'success': false, 'error': 'Failed to update group'};
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -3241,6 +3261,35 @@ class ApiService {
     }
   }
 
+  Future<http.Response> _sendVaultEntryMultipart({
+    required String method,
+    required Uri uri,
+    required Map<String, String> fields,
+    required List<Map<String, dynamic>> files,
+  }) async {
+    Future<http.MultipartRequest> build() {
+      final request = http.MultipartRequest(method, uri);
+      request.headers.addAll(_authHeaderOnly());
+      request.fields.addAll(fields);
+      for (final f in files) {
+        final bytes = f['bytes'];
+        final filename = f['filename']?.toString() ?? 'attachment';
+        if (bytes is List<int> && bytes.isNotEmpty) {
+          request.files.add(http.MultipartFile.fromBytes('files', bytes, filename: filename));
+        }
+      }
+      return request;
+    }
+
+    var streamed = await build().send().timeout(const Duration(seconds: 120));
+    var response = await http.Response.fromStream(streamed);
+    if (response.statusCode == 401 && await refreshAccessToken()) {
+      streamed = await build().send().timeout(const Duration(seconds: 120));
+      response = await http.Response.fromStream(streamed);
+    }
+    return response;
+  }
+
   Future<Map<String, dynamic>> createVaultEntry(
     int projectId, {
     required int categoryId,
@@ -3250,28 +3299,56 @@ class ApiService {
     String password = '',
     String notes = '',
     bool isFavorite = false,
+    List<Map<String, dynamic>> files = const [],
   }) async {
     try {
-      final response = await _authorizedPost(
-        Uri.parse(AppConfig.vaultEntriesUrl(projectId)),
-        body: jsonEncode({
-          'category': categoryId,
-          'name': name,
-          'url': url,
-          'username': username,
-          if (password.isNotEmpty) 'password': password,
-          'notes': notes,
-          'is_favorite': isFavorite,
-        }),
+      await ensureAuth();
+      if (files.isEmpty) {
+        final response = await _authorizedPost(
+          Uri.parse(AppConfig.vaultEntriesUrl(projectId)),
+          body: jsonEncode({
+            'category': categoryId,
+            'name': name,
+            'url': url,
+            'username': username,
+            if (password.isNotEmpty) 'password': password,
+            'notes': notes,
+            'is_favorite': isFavorite,
+          }),
+        );
+        final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+        if ((response.statusCode == 201 || response.statusCode == 200) && raw is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+        }
+        if (raw is Map) {
+          return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? raw['files'] ?? 'Create failed'};
+        }
+        return {'success': false, 'error': 'Create entry failed (${response.statusCode})'};
+      }
+
+      final fields = <String, String>{
+        'category': '$categoryId',
+        'name': name,
+        'url': url,
+        'username': username,
+        'notes': notes,
+        'is_favorite': isFavorite ? 'true' : 'false',
+        if (password.isNotEmpty) 'password': password,
+      };
+      final response = await _sendVaultEntryMultipart(
+        method: 'POST',
+        uri: Uri.parse(AppConfig.vaultEntriesUrl(projectId)),
+        fields: fields,
+        files: files,
       );
       final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
       if ((response.statusCode == 201 || response.statusCode == 200) && raw is Map) {
         return {'success': true, 'data': Map<String, dynamic>.from(raw)};
       }
-      if (raw is Map) {
-        return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? 'Create failed'};
-      }
-      return {'success': false, 'error': 'Create entry failed (${response.statusCode})'};
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -3302,28 +3379,56 @@ class ApiService {
     String? password,
     String? notes,
     bool? isFavorite,
+    List<Map<String, dynamic>> files = const [],
   }) async {
     try {
-      final body = <String, dynamic>{};
-      if (categoryId != null) body['category'] = categoryId;
-      if (name != null) body['name'] = name;
-      if (url != null) body['url'] = url;
-      if (username != null) body['username'] = username;
-      if (password != null) body['password'] = password;
-      if (notes != null) body['notes'] = notes;
-      if (isFavorite != null) body['is_favorite'] = isFavorite;
-      final response = await _authorizedPatch(
-        Uri.parse(AppConfig.vaultEntryUrl(projectId, entryId)),
-        body: jsonEncode(body),
+      await ensureAuth();
+      if (files.isEmpty) {
+        final body = <String, dynamic>{};
+        if (categoryId != null) body['category'] = categoryId;
+        if (name != null) body['name'] = name;
+        if (url != null) body['url'] = url;
+        if (username != null) body['username'] = username;
+        if (password != null) body['password'] = password;
+        if (notes != null) body['notes'] = notes;
+        if (isFavorite != null) body['is_favorite'] = isFavorite;
+        final response = await _authorizedPatch(
+          Uri.parse(AppConfig.vaultEntryUrl(projectId, entryId)),
+          body: jsonEncode(body),
+        );
+        final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+        if (response.statusCode == 200 && raw is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+        }
+        if (raw is Map) {
+          return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? 'Update failed'};
+        }
+        return {'success': false, 'error': 'Update failed (${response.statusCode})'};
+      }
+
+      final fields = <String, String>{
+        if (categoryId != null) 'category': '$categoryId',
+        if (name != null) 'name': name,
+        if (url != null) 'url': url,
+        if (username != null) 'username': username,
+        if (password != null && password.isNotEmpty) 'password': password,
+        if (notes != null) 'notes': notes,
+        if (isFavorite != null) 'is_favorite': isFavorite ? 'true' : 'false',
+      };
+      final response = await _sendVaultEntryMultipart(
+        method: 'PATCH',
+        uri: Uri.parse(AppConfig.vaultEntryUrl(projectId, entryId)),
+        fields: fields,
+        files: files,
       );
       final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
       if (response.statusCode == 200 && raw is Map) {
         return {'success': true, 'data': Map<String, dynamic>.from(raw)};
       }
-      if (raw is Map) {
-        return {'success': false, 'error': raw['detail'] ?? raw['error'] ?? 'Update failed'};
-      }
-      return {'success': false, 'error': 'Update failed (${response.statusCode})'};
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -3386,34 +3491,53 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> uploadVaultAttachment(
+  Future<Map<String, dynamic>> downloadVaultAttachment(
     int projectId,
     int entryId,
-    List<int> bytes,
-    String filename, {
-    String? title,
-  }) async {
+    int attachmentId,
+  ) async {
     try {
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse(AppConfig.vaultEntryAttachmentUrl(projectId, entryId)),
+      await ensureAuth();
+      final response = await _authorizedGet(
+        Uri.parse(AppConfig.vaultEntryAttachmentDownloadUrl(projectId, entryId, attachmentId)),
+        timeout: const Duration(seconds: 120),
       );
-      request.headers.addAll(_authHeaderOnly());
-      request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
-      if (title != null && title.trim().isNotEmpty) {
-        request.fields['title'] = title.trim();
+      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+        var filename = 'attachment';
+        final disp = response.headers['content-disposition'] ?? '';
+        final star = RegExp(r"filename\*=UTF-8''([^;]+)", caseSensitive: false).firstMatch(disp);
+        final plain = RegExp(r'filename="([^"]+)"', caseSensitive: false).firstMatch(disp) ??
+            RegExp(r'filename=([^;]+)', caseSensitive: false).firstMatch(disp);
+        final rawName = star?.group(1) ?? plain?.group(1);
+        if (rawName != null && rawName.trim().isNotEmpty) {
+          filename = Uri.decodeFull(rawName.trim());
+        }
+        return {
+          'success': true,
+          'bytes': response.bodyBytes,
+          'filename': filename,
+          'contentType': response.headers['content-type'] ?? '',
+        };
       }
-      final streamed = await request.send().timeout(const Duration(seconds: 120));
-      final response = await http.Response.fromStream(streamed);
-      if (response.statusCode == 201 || response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> deleteVaultAttachment(
+    int projectId,
+    int entryId,
+    int attachmentId,
+  ) async {
+    try {
+      final response = await _authorizedDelete(
+        Uri.parse(AppConfig.vaultEntryAttachmentDetailUrl(projectId, entryId, attachmentId)),
+      );
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        return {'success': true};
       }
-      var err = 'Upload failed';
-      try {
-        final d = jsonDecode(response.body);
-        if (d is Map) err = d['detail']?.toString() ?? d['error']?.toString() ?? err;
-      } catch (_) {}
-      return {'success': false, 'error': err};
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }

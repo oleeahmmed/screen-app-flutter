@@ -1352,7 +1352,14 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
         .toList();
   }
   List<dynamic> get _stages => (_project?['stages'] as List?) ?? [];
-  List<dynamic> get _calEvents => (_project?['calendar_events'] as List?) ?? [];
+  List<dynamic> get _calEvents {
+    final raw = (_project?['calendar_events'] as List?) ?? [];
+    return raw.where((e) {
+      if (e is! Map) return false;
+      if (e['type'] == 'milestone' || e['type'] == 'deadline') return true;
+      return e['completed'] != true;
+    }).toList();
+  }
   Color _pc(String p) { switch(p){ case 'high': case 'critical': return AppTheme.danger; case 'medium': return AppTheme.warning; default: return AppTheme.success; } }
   Color _parseHex(String h) { try { return Color(int.parse(h.replaceFirst('#', '0xFF'))); } catch(_) { return AppTheme.primary; } }
   Widget _tf(TextEditingController c, String h, {int ml=1}) => TextField(controller: c, maxLines: ml, style: TextStyle(color: Colors.white),
@@ -2042,6 +2049,8 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   }
 
   void _openTaskDetailPage(dynamic t) {
+    final id = int.tryParse('${t['id']}');
+    if (id == null) return;
     final customer = _project?['customer'];
     final customerName = _displayStr(_project?['customer_name']).isNotEmpty
         ? _displayStr(_project?['customer_name'])
@@ -2049,7 +2058,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     openTaskDetailPage(
       context,
       apiService: widget.apiService,
-      taskId: t['id'] as int,
+      taskId: id,
       projectId: widget.projectId,
       projectName: widget.projectName,
       customerName: customerName,
@@ -2649,7 +2658,8 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   bool _taskMatchesSearch(Map<String, dynamic> t) {
     final q = _taskSearchCtrl.text.trim().toLowerCase();
     if (q.isEmpty) return true;
-    final blob = '${t['name']} ${t['title']} T-${t['id']}'.toLowerCase();
+    final assignees = _taskAssigneeList(t).map((a) => '${a['name']}').join(' ');
+    final blob = '${t['name']} ${t['title']} T-${t['id']} $assignees'.toLowerCase();
     return blob.contains(q);
   }
 
@@ -3197,7 +3207,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
         _legendDot(AppTheme.featureVault, 'Task'), SizedBox(width: 10),
         _legendDot(AppTheme.warning, 'High'), SizedBox(width: 10),
         _legendDot(AppTheme.primary, 'Active'), SizedBox(width: 10),
-        _legendDot(AppTheme.success, 'Done/Due'),
+        _legendDot(AppTheme.success, 'Due'),
       ])),
     ]);
   }
@@ -3216,9 +3226,18 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     return GestureDetector(
       onTap: () {
         final taskId = e['id'];
-        if (taskId != null && taskId != 0) {
-          _openTaskDetailPage({'id': taskId, 'name': e['title'], 'title': e['title']});
+        if (taskId == null || taskId == 0) return;
+        final id = int.tryParse('$taskId');
+        Map<String, dynamic> task = {'id': id ?? taskId, 'name': e['title'], 'title': e['title']};
+        if (id != null) {
+          for (final t in _allProjectTasks()) {
+            if (int.tryParse('${t['id']}') == id) {
+              task = t;
+              break;
+            }
+          }
         }
+        _openTaskDetailPage(task);
       },
       child: Container(margin: EdgeInsets.fromLTRB(3, 0, 3, 2), padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(4)),

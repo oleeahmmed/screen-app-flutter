@@ -273,7 +273,7 @@ class LocalNotificationService {
         const AndroidNotificationAction(
           ChatNotification.replyAction,
           'Reply',
-          titleColor: Color(0xFF00A884),
+          titleColor: Color(0xFF3B82F6),
           cancelNotification: false,
           showsUserInterface: false,
           inputs: <AndroidNotificationActionInput>[

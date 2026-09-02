@@ -14,6 +14,7 @@ import '../utils/ws_connect.dart';
 import 'call_notification.dart';
 import 'chat_notification.dart';
 import 'local_notification_service.dart';
+import 'notification_deep_link.dart';
 
 /// Keeps the chat WebSocket alive after login so Android can show system
 /// notifications when Aims is not on screen.
@@ -210,6 +211,11 @@ class _PushKeepAliveIsolate {
       title = 'New task: ${data['task_name'] ?? 'Task'}';
       body = data['task_description']?.toString() ??
           'Assigned by ${data['assigned_by'] ?? 'Admin'}';
+      data['notification_type'] = data['notification_type'] ?? 'task_assigned';
+      data['object_type'] = data['object_type'] ?? 'task';
+      data['object_id'] = data['object_id'] ?? data['task_id'];
+      data['title'] = title;
+      data['message'] = body;
     }
     if (body.isEmpty) body = 'Tap to open Aims';
 
@@ -242,7 +248,7 @@ class _PushKeepAliveIsolate {
       id: id & 0x7fffffff,
       title: title,
       body: body,
-      payload: 'alerts',
+      payload: NotificationDeepLink.encodeFromData(data),
     );
   }
 }

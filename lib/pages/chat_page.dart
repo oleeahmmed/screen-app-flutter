@@ -16,11 +16,25 @@ import '../services/user_data_service.dart';
 import '../services/voice_recorder_service.dart';
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_toast.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/empty_state.dart';
 import '../utils/responsive.dart';
 import '../utils/platform_capabilities.dart';
 import 'call_page.dart';
+
+int? _chatInt(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  return int.tryParse('$v');
+}
+
+int? _membershipUserId(dynamic m) {
+  if (m is! Map) return null;
+  final u = m['user'];
+  if (u is Map) return _chatInt(u['id']);
+  return _chatInt(u ?? m['user_id']);
+}
 
 class ChatPage extends StatefulWidget {
   final ApiService apiService;
@@ -102,8 +116,12 @@ class _ChatPageState extends State<ChatPage> {
     });
     _msgController.addListener(_onComposerChanged);
     _loadUsers();
+    _loadGroups(silent: true);
     _loadMyUserId();
-    _usersPollTimer = Timer.periodic(const Duration(seconds: 8), (_) => _loadUsers(silent: true));
+    _usersPollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      _loadUsers(silent: true);
+      _loadGroups(silent: true);
+    });
     _presenceSub = widget.notificationService?.presenceStream.listen(_onPresenceUpdate);
     _typingSub = widget.notificationService?.typingStream.listen(_onTypingEvent);
     _messagesReadSub = widget.notificationService?.messagesReadStream.listen(_onMessagesRead);
@@ -468,15 +486,18 @@ class _ChatPageState extends State<ChatPage> {
     return colors[id.abs() % colors.length];
   }
 
-  Future<void> _loadGroups() async {
-    setState(() => _isLoadingGroups = true);
+  Future<void> _loadGroups({bool silent = false}) async {
+    if (!silent && mounted) setState(() => _isLoadingGroups = true);
     final result = await widget.apiService.getChatGroups();
-    if (result['success']) {
-      setState(() { _groups = result['data'] ?? []; _isLoadingGroups = false; });
+    if (result['success'] == true && mounted) {
+      setState(() {
+        _groups = result['data'] ?? [];
+        _isLoadingGroups = false;
+      });
       _consumePendingChatOpen();
-    } else {
+    } else if (mounted) {
       setState(() => _isLoadingGroups = false);
-      _showError('Failed to load groups');
+      if (!silent) _showError(result['error']?.toString() ?? 'Failed to load groups');
     }
   }
 
@@ -1200,12 +1221,11 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   Future<void> _createGroup(String name, String desc, List<int> memberIds) async {
     final result = await widget.apiService.createGroup(name, desc, memberIds);
-    if (result['success']) {
+    if (result['success'] == true) {
       _loadGroups();
-      if (mounted) Navigator.pop(context);
       _showSuccess('Group created');
     } else {
-      _showError('Failed to create group');
+      _showError(result['error']?.toString() ?? 'Failed to create group');
     }
   }
 
@@ -1295,7 +1315,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
-  // ─── LEFT SIDEBAR ───
+  // ─── LEFT SIDEBAR (WhatsApp-style unified inbox) ───
   Widget _buildSidebar() {
     final immersive = PlatformCapabilities.immersiveChatChrome;
     return Column(
@@ -1304,7 +1324,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           padding: EdgeInsets.fromLTRB(
             immersive ? 4 : Responsive.pagePadding(context),
             immersive ? 4 : 8,
-            Responsive.pagePadding(context),
+            8,
             4,
           ),
           child: Row(
@@ -1315,11 +1335,11 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   onPressed: () => AppNavigation.instance.goHome(),
                   icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AppTheme.textPrimary),
                 ),
-              Expanded(
+              const Expanded(
                 child: Text(
-                  'Chat',
-                  textAlign: immersive ? TextAlign.left : TextAlign.center,
-                  style: const TextStyle(
+                  'Chats',
+                  textAlign: TextAlign.left,
+                  style: TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 22,
                     fontWeight: FontWeight.w700,
@@ -1327,63 +1347,236 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   ),
                 ),
               ),
-              if (immersive && _currentTab == 'group')
-                IconButton(
-                  tooltip: 'New group',
-                  onPressed: _showCreateGroupDialog,
-                  icon: const Icon(Icons.group_add_rounded, color: AppTheme.primaryBright, size: 22),
-                ),
+              IconButton(
+                tooltip: 'New group',
+                onPressed: _showCreateGroupDialog,
+                icon: const Icon(Icons.group_add_rounded, color: AppTheme.primaryBright, size: 22),
+              ),
               if (immersive) _dashboardLogoButton(),
             ],
           ),
         ),
-        Container(
-          margin: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 4, Responsive.pagePadding(context), 10),
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.06),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-          ),
-          child: Row(
-            children: [
-              _buildTab('Direct', Icons.person_outline_rounded, 'direct'),
-              _buildTab('Groups', Icons.groups_outlined, 'group'),
-            ],
-          ),
-        ),
         Padding(
-          padding: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 0, Responsive.pagePadding(context), 10),
+          padding: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 6, Responsive.pagePadding(context), 8),
           child: TextField(
             controller: _searchController,
             onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
             style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
             decoration: InputDecoration(
-              hintText: 'Search people or groups',
-              hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 14),
+              hintText: 'Search…',
+              hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 15),
               prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9), size: 22),
               filled: true,
               fillColor: Colors.white.withValues(alpha: 0.07),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide.none,
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide.none,
               ),
               focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(16),
-                borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.55)),
+                borderRadius: BorderRadius.circular(24),
+                borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.45)),
               ),
             ),
           ),
         ),
-        Expanded(
-          child: _currentTab == 'direct' ? _buildUsersList() : _buildGroupsList(),
-        ),
+        Expanded(child: _buildInboxList()),
       ],
+    );
+  }
+
+  List<Map<String, dynamic>> _inboxRows() {
+    final rows = <Map<String, dynamic>>[];
+    for (final u in _users) {
+      if (u is! Map) continue;
+      final name = (u['full_name'] ?? u['username'] ?? 'User').toString();
+      if (_searchQuery.isNotEmpty && !name.toLowerCase().contains(_searchQuery)) continue;
+      final unread = u['unread_count'];
+      rows.add({
+        'kind': 'user',
+        'data': u,
+        'name': name,
+        'unread': unread is int ? unread : int.tryParse('$unread') ?? 0,
+        'at': DateTime.tryParse('${u['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0),
+      });
+    }
+    for (final g in _groups) {
+      if (g is! Map) continue;
+      final name = (g['name'] ?? 'Group').toString();
+      if (_searchQuery.isNotEmpty && !name.toLowerCase().contains(_searchQuery)) continue;
+      final unread = g['unread_count'];
+      rows.add({
+        'kind': 'group',
+        'data': g,
+        'name': name,
+        'unread': unread is int ? unread : int.tryParse('$unread') ?? 0,
+        'at': DateTime.tryParse('${g['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0),
+      });
+    }
+    rows.sort((a, b) => (b['at'] as DateTime).compareTo(a['at'] as DateTime));
+    return rows;
+  }
+
+  Widget _buildInboxList() {
+    if (_isLoadingUsers && _users.isEmpty) return _buildLoader('Loading chats...');
+    final rows = _inboxRows();
+    if (rows.isEmpty) return _buildEmpty('No chats yet');
+    final immersive = PlatformCapabilities.immersiveChatChrome;
+
+    return ListView.separated(
+      padding: EdgeInsets.fromLTRB(immersive ? 4 : 8, 0, immersive ? 4 : 8, 8),
+      itemCount: rows.length,
+      separatorBuilder: (_, i) => Divider(
+        height: 1,
+        indent: 76,
+        color: Colors.white.withValues(alpha: 0.06),
+      ),
+      itemBuilder: (_, i) {
+        final row = rows[i];
+        final isGroup = row['kind'] == 'group';
+        final data = row['data'] as Map;
+        final name = row['name'] as String;
+        final unread = row['unread'] as int;
+        final id = isGroup
+            ? (_asInt(data['id']) ?? 0)
+            : (_asInt(data['id']) ?? 0);
+        final isSelected = isGroup
+            ? (_selectedGroup != null && _asInt(_selectedGroup['id']) == id)
+            : (_selectedUser != null && _asInt(_selectedUser['id']) == id);
+        final isOnline = !isGroup && _parseOnline(data['is_online']);
+        final typingKey = isGroup ? 'g:$id' : 'u:$id';
+        final isTyping = _typingPeers.containsKey(typingKey);
+        final preview = isTyping
+            ? 'typing…'
+            : (isGroup
+                ? ((data['last_message'] ?? '').toString().trim().isEmpty
+                    ? '${data['member_count'] ?? 0} members'
+                    : data['last_message'].toString())
+                : _chatPreviewText(Map<String, dynamic>.from(data)));
+        final timeLabel = _formatChatListTime(data['last_message_at'] ?? row['at']);
+
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => isGroup ? _selectGroup(data) : _selectUser(data),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              color: isSelected ? AppTheme.primary.withValues(alpha: 0.14) : Colors.transparent,
+              child: Row(
+                children: [
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      CircleAvatar(
+                        radius: 24,
+                        backgroundColor: isGroup ? AppTheme.primary : _avatarColor(id),
+                        child: isGroup
+                            ? const Icon(Icons.group_rounded, color: Colors.white, size: 22)
+                            : Text(
+                                _initials(name),
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
+                              ),
+                      ),
+                      if (!isGroup)
+                        Positioned(
+                          bottom: 0,
+                          right: 0,
+                          child: Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              color: isOnline ? AppTheme.success : const Color(0xFF6B7280),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: AppTheme.bgDeep, width: 2),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                name,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              ),
+                            ),
+                            if (timeLabel.isNotEmpty)
+                              Text(
+                                timeLabel,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: unread > 0 ? AppTheme.accent : AppTheme.textMuted,
+                                  fontWeight: unread > 0 ? FontWeight.w600 : FontWeight.w400,
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                preview,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: isTyping
+                                      ? AppTheme.accent
+                                      : unread > 0
+                                          ? AppTheme.textPrimary.withValues(alpha: 0.88)
+                                          : AppTheme.textMuted,
+                                  fontWeight: isTyping || unread > 0 ? FontWeight.w500 : FontWeight.w400,
+                                  fontStyle: isTyping ? FontStyle.italic : FontStyle.normal,
+                                ),
+                              ),
+                            ),
+                            if (unread > 0) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+                                padding: const EdgeInsets.symmetric(horizontal: 6),
+                                decoration: const BoxDecoration(
+                                  color: AppTheme.accent,
+                                  borderRadius: BorderRadius.all(Radius.circular(11)),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  unread > 99 ? '99+' : '$unread',
+                                  style: const TextStyle(
+                                    color: Color(0xFF0A1628),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1855,15 +2048,21 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
         Expanded(
           child: ColoredBox(
-            color: const Color(0xFF0B141A),
-            child: _messages.isEmpty
-                ? _buildEmpty('No messages yet\nStart the conversation!')
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                    itemCount: _messages.length,
-                    itemBuilder: (_, i) => _buildMessageBubble(_messages[i]),
-                  ),
+            color: AppTheme.bgDeep,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                const CustomPaint(painter: _ChatWallpaperPainter()),
+                _messages.isEmpty
+                    ? _buildEmpty('No messages yet\nStart the conversation!')
+                    : ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                        itemCount: _messages.length,
+                        itemBuilder: (_, i) => _buildMessageBubble(_messages[i]),
+                      ),
+              ],
+            ),
           ),
         ),
 
@@ -1923,12 +2122,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     if (keyboard > 120) {
       _emojiPanelHeight = keyboard;
     }
-    const waGreen = Color(0xFF00A884);
-    const inputBg = Color(0xFF2A3942);
-    const iconGrey = Color(0xFF8696A0);
+    const sendColor = AppTheme.primary;
+    const inputBg = Color(0xFF162033);
+    const iconGrey = AppTheme.textMuted;
 
     return Container(
-      color: const Color(0xFF0B141A),
+      color: AppTheme.bgDeep,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1976,7 +2175,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                                   textInputAction: TextInputAction.newline,
                                   textCapitalization: TextCapitalization.sentences,
                                   style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 16, height: 1.35),
-                                  cursorColor: waGreen,
+                                  cursorColor: AppTheme.accent,
                                   onTap: () {
                                     if (_emojiOpen) setState(() => _emojiOpen = false);
                                   },
@@ -2028,7 +2227,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                             width: 48,
                             height: 48,
                             decoration: const BoxDecoration(
-                              color: waGreen,
+                              color: sendColor,
                               shape: BoxShape.circle,
                             ),
                             child: _isSending
@@ -2101,7 +2300,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   Widget _buildReplyComposerBar() {
     final reply = _replyTo!;
-    const accent = Color(0xFF00A884);
+    const accent = AppTheme.accent;
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(
@@ -2208,8 +2407,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         (reply['sender_name'] ?? '').toString().trim().isEmpty) {
       reply = null;
     }
-    const ownBubble = Color(0xFF005C4B);
-    const otherBubble = Color(0xFF1F2C34);
+    const ownBubble = Color(0xFF1D4ED8);
+    const otherBubble = Color(0xFF1E293B);
 
     Widget metaRow({required bool light}) {
       return Padding(
@@ -2242,7 +2441,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                 Icons.done_all_rounded,
                 size: 16,
                 color: msg['is_read'] == true
-                    ? const Color(0xFF53BDEB)
+                    ? AppTheme.accent
                     : Colors.white.withValues(alpha: 0.55),
               ),
             ],
@@ -2303,7 +2502,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Icon(
                         _playingUrl == voiceUrl ? Icons.stop_circle : Icons.play_circle_fill,
-                        color: isOwn ? Colors.white : const Color(0xFF00A884),
+                        color: isOwn ? Colors.white : AppTheme.accent,
                         size: 28,
                       ),
                       const SizedBox(width: 8),
@@ -2591,8 +2790,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       itemCount: _users.length,
                       itemBuilder: (_, i) {
                         final u = _users[i];
-                        final uid = u['id'] as int;
-                        final uname = u['full_name'] ?? u['username'] ?? 'User';
+                        final uid = _chatInt(u is Map ? u['id'] : null);
+                        if (uid == null) return const SizedBox.shrink();
+                        final uname = (u is Map ? (u['full_name'] ?? u['username']) : null) ?? 'User';
                         return CheckboxListTile(
                           dense: true,
                           value: selectedIds.contains(uid),
@@ -2703,6 +2903,27 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 }
 
 
+class _ChatWallpaperPainter extends CustomPainter {
+  const _ChatWallpaperPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bg = Paint()..color = AppTheme.bgDeep;
+    canvas.drawRect(Offset.zero & size, bg);
+    final dot = Paint()..color = AppTheme.primary.withValues(alpha: 0.06);
+    const step = 22.0;
+    for (double y = 8; y < size.height; y += step) {
+      for (double x = 8; x < size.width; x += step) {
+        canvas.drawCircle(Offset(x, y), 1.15, dot);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+
 // ═══════════════════════════════════════════════════════════════
 // Group Settings Bottom Sheet
 // ═══════════════════════════════════════════════════════════════
@@ -2728,21 +2949,73 @@ class _GroupSettingsSheet extends StatefulWidget {
 }
 
 class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
-  List<dynamic> _members = [];
+  List<Map<String, dynamic>> _members = [];
   bool _loading = true;
+  bool _saving = false;
+  int? _currentUserId;
+  bool _isCompanyManager = false;
+
+  bool get _canManage {
+    if (_isCompanyManager) return true;
+    final createdBy = _chatInt(widget.group is Map ? widget.group['created_by'] : null);
+    if (createdBy != null && createdBy == _currentUserId) return true;
+    for (final m in _members) {
+      if (_membershipUserId(m) == _currentUserId) {
+        final role = (m['role'] ?? '').toString().toLowerCase();
+        return role == 'admin';
+      }
+    }
+    return false;
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadMembers();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    final id = int.tryParse(await UserDataService.getUserId());
+    final manager = await UserDataService.isManagerOrAbove();
+    if (mounted) {
+      setState(() {
+        _currentUserId = id;
+        _isCompanyManager = manager;
+      });
+    }
+    await _loadMembers();
+  }
+
+  List<Map<String, dynamic>> _asMemberList(dynamic raw) {
+    Iterable list;
+    if (raw is List) {
+      list = raw;
+    } else if (raw is Map && raw['results'] is List) {
+      list = raw['results'] as List;
+    } else if (raw is Map && raw['members'] is List) {
+      list = raw['members'] as List;
+    } else {
+      return [];
+    }
+    return list.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
   }
 
   Future<void> _loadMembers() async {
-    final r = await widget.apiService.getGroupMembers(widget.group['id']);
-    if (r['success'] && mounted) {
-      setState(() { _members = r['data'] ?? []; _loading = false; });
+    final groupId = _chatInt(widget.group is Map ? widget.group['id'] : widget.group);
+    if (groupId == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    final r = await widget.apiService.getGroupMembers(groupId);
+    if (!mounted) return;
+    if (r['success'] == true) {
+      setState(() {
+        _members = _asMemberList(r['data']);
+        _loading = false;
+      });
     } else {
       setState(() => _loading = false);
+      AppToast.error(context, r['error']?.toString() ?? 'Could not load members');
     }
   }
 
@@ -2767,11 +3040,13 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
           _infoRow('Created', group['created_at'] ?? ''),
           if (group['project_name'] != null)
             _infoRow('Project', group['project_name']),
-        ], action: TextButton.icon(
-          onPressed: () => _showEditGroup(),
-          icon: Icon(Icons.edit, size: 14, color: AppTheme.primary),
-          label: Text('Edit', style: TextStyle(color: AppTheme.primary, fontSize: 12)),
-        )),
+        ], action: _canManage
+            ? TextButton.icon(
+                onPressed: _saving ? null : () => _showEditGroup(),
+                icon: Icon(Icons.edit, size: 14, color: AppTheme.primary),
+                label: Text('Edit', style: TextStyle(color: AppTheme.primary, fontSize: 12)),
+              )
+            : null),
         SizedBox(height: 16),
 
         // ─── Members ───
@@ -2780,11 +3055,12 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text('Members (${_members.length})', style: TextStyle(color: AppTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.w600)),
-              TextButton.icon(
-                onPressed: _showAddMembers,
-                icon: Icon(Icons.person_add, size: 14, color: AppTheme.success),
-                label: Text('Add', style: TextStyle(color: AppTheme.success, fontSize: 12)),
-              ),
+              if (_canManage)
+                TextButton.icon(
+                  onPressed: _saving ? null : _showAddMembers,
+                  icon: Icon(Icons.person_add, size: 14, color: AppTheme.success),
+                  label: Text('Add', style: TextStyle(color: AppTheme.success, fontSize: 12)),
+                ),
             ],
           ),
           if (_loading)
@@ -2810,7 +3086,7 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
               Text('These actions cannot be undone.', style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
               SizedBox(height: 12),
               ElevatedButton.icon(
-                onPressed: _confirmDeleteGroup,
+                onPressed: _canManage && !_saving ? _confirmDeleteGroup : null,
                 icon: Icon(Icons.delete, size: 16),
                 label: Text('Delete Group'),
                 style: ElevatedButton.styleFrom(
@@ -2849,64 +3125,133 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
     ]),
   );
 
-  Widget _memberTile(dynamic m) {
-    final name = m['full_name'] ?? m['username'] ?? 'User';
-    final role = m['role'] ?? 'member';
+  Widget _memberTile(Map<String, dynamic> m) {
+    final name = (m['full_name'] ?? m['username'] ?? 'User').toString();
+    final role = (m['role'] ?? 'member').toString();
+    final uid = _membershipUserId(m);
+    final createdBy = _chatInt(widget.group is Map ? widget.group['created_by'] : null);
+    final isCreator = uid != null && uid == createdBy;
+    final canRemove = _canManage && uid != null && uid != createdBy && uid != _currentUserId;
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
     return Padding(
-      padding: EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          CircleAvatar(radius: 16, backgroundColor: AppTheme.surface2,
-            child: Text(name[0].toUpperCase(), style: TextStyle(color: Colors.white, fontSize: 12))),
-          SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(name, style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
-            Text(role, style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-          ])),
-          if (role != 'admin')
-            GestureDetector(
-              onTap: () => _removeMember(m),
-              child: Icon(Icons.remove_circle_outline, color: AppTheme.danger, size: 20),
+          CircleAvatar(
+            radius: 16,
+            backgroundColor: AppTheme.surface2,
+            child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 12)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(name, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+              Text(
+                isCreator ? 'creator' : role,
+                style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+              ),
+            ]),
+          ),
+          if (_canManage && uid != null && !isCreator)
+            PopupMenuButton<String>(
+              enabled: !_saving,
+              icon: const Icon(Icons.more_vert, color: AppTheme.textMuted, size: 20),
+              color: AppTheme.surface2,
+              onSelected: (value) {
+                if (value == 'admin' || value == 'member') {
+                  _setMemberRole(uid, value);
+                } else if (value == 'remove' && canRemove) {
+                  _removeMember(m);
+                }
+              },
+              itemBuilder: (_) => [
+                if (role != 'admin')
+                  const PopupMenuItem(value: 'admin', child: Text('Make admin')),
+                if (role == 'admin')
+                  const PopupMenuItem(value: 'member', child: Text('Make member')),
+                if (canRemove)
+                  const PopupMenuItem(
+                    value: 'remove',
+                    child: Text('Remove', style: TextStyle(color: Colors.redAccent)),
+                  ),
+              ],
+            )
+          else if (canRemove)
+            IconButton(
+              tooltip: 'Remove',
+              onPressed: _saving ? null : () => _removeMember(m),
+              icon: const Icon(Icons.remove_circle_outline, color: AppTheme.danger, size: 20),
             ),
         ],
       ),
     );
   }
 
+  int? get _groupId => _chatInt(widget.group is Map ? widget.group['id'] : widget.group);
+
   void _showEditGroup() {
-    final nameCtrl = TextEditingController(text: widget.group['name'] ?? '');
-    final descCtrl = TextEditingController(text: widget.group['description'] ?? '');
+    if (!_canManage) {
+      AppToast.error(context, 'Only group admins can edit this group');
+      return;
+    }
+    final nameCtrl = TextEditingController(text: widget.group['name']?.toString() ?? '');
+    final descCtrl = TextEditingController(text: widget.group['description']?.toString() ?? '');
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Edit Group', style: TextStyle(color: AppTheme.textPrimary)),
+        title: const Text('Edit Group', style: TextStyle(color: AppTheme.textPrimary)),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(controller: nameCtrl, style: TextStyle(color: AppTheme.textPrimary),
-            decoration: InputDecoration(labelText: 'Group Name', labelStyle: TextStyle(color: AppTheme.textMuted),
-              filled: true, fillColor: AppTheme.surface2.withValues(alpha: 0.5),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.primary)))),
-          SizedBox(height: 12),
-          TextField(controller: descCtrl, style: TextStyle(color: AppTheme.textPrimary), maxLines: 3,
-            decoration: InputDecoration(labelText: 'Description', labelStyle: TextStyle(color: AppTheme.textMuted),
-              filled: true, fillColor: AppTheme.surface2.withValues(alpha: 0.5),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.primary)))),
+          TextField(
+            controller: nameCtrl,
+            style: const TextStyle(color: AppTheme.textPrimary),
+            decoration: InputDecoration(
+              labelText: 'Group Name',
+              labelStyle: const TextStyle(color: AppTheme.textMuted),
+              filled: true,
+              fillColor: AppTheme.surface2.withValues(alpha: 0.5),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.border)),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.border)),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.primary)),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: descCtrl,
+            style: const TextStyle(color: AppTheme.textPrimary),
+            maxLines: 3,
+            decoration: InputDecoration(
+              labelText: 'Description',
+              labelStyle: const TextStyle(color: AppTheme.textMuted),
+              filled: true,
+              fillColor: AppTheme.surface2.withValues(alpha: 0.5),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.border)),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.border)),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.primary)),
+            ),
+          ),
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
           ElevatedButton(
             onPressed: () async {
-              Navigator.pop(context);
-              final r = await widget.apiService.updateGroup(widget.group['id'], nameCtrl.text.trim(), descCtrl.text.trim());
-              if (r['success']) { widget.onGroupUpdated(); if (mounted) Navigator.pop(context); }
+              final groupId = _groupId;
+              final name = nameCtrl.text.trim();
+              if (groupId == null || name.isEmpty) return;
+              final r = await widget.apiService.updateGroup(groupId, name, descCtrl.text.trim());
+              if (!ctx.mounted) return;
+              Navigator.pop(ctx);
+              if (!mounted) return;
+              if (r['success'] == true) {
+                AppToast.success(context, 'Group updated');
+                widget.onGroupUpdated();
+              } else {
+                AppToast.error(context, r['error']?.toString() ?? 'Could not update group');
+              }
             },
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
-            child: Text('Save'),
+            child: const Text('Save'),
           ),
         ],
       ),
@@ -2914,36 +3259,52 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
   }
 
   void _showAddMembers() {
-    final memberUserIds = _members.map((m) => m['user']).toSet();
-    final available = widget.users.where((u) => !memberUserIds.contains(u['id'])).toList();
+    if (!_canManage) {
+      AppToast.error(context, 'Only group admins can add members');
+      return;
+    }
+    final memberUserIds = _members.map(_membershipUserId).whereType<int>().toSet();
+    final available = widget.users.where((u) {
+      if (u is! Map) return false;
+      final id = _chatInt(u['id']);
+      return id != null && !memberUserIds.contains(id);
+    }).toList();
     final selectedIds = <int>{};
 
     showDialog(
       context: context,
-      builder: (_) => StatefulBuilder(
+      builder: (dialogCtx) => StatefulBuilder(
         builder: (ctx, setDState) => AlertDialog(
           backgroundColor: AppTheme.surface2,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text('Add Members', style: TextStyle(color: AppTheme.textPrimary)),
+          title: const Text('Add Members', style: TextStyle(color: AppTheme.textPrimary)),
           content: SizedBox(
             width: double.maxFinite,
             child: available.isEmpty
-                ? Text('No available members to add', style: TextStyle(color: AppTheme.textMuted))
+                ? const Text('No available members to add', style: TextStyle(color: AppTheme.textMuted))
                 : Container(
-                    constraints: BoxConstraints(maxHeight: 300),
+                    constraints: const BoxConstraints(maxHeight: 300),
                     child: ListView.builder(
                       shrinkWrap: true,
                       itemCount: available.length,
                       itemBuilder: (_, i) {
-                        final u = available[i];
+                        final u = available[i] as Map;
+                        final uid = _chatInt(u['id']);
+                        if (uid == null) return const SizedBox.shrink();
                         return CheckboxListTile(
                           dense: true,
-                          value: selectedIds.contains(u['id']),
+                          value: selectedIds.contains(uid),
                           onChanged: (v) => setDState(() {
-                            v == true ? selectedIds.add(u['id']) : selectedIds.remove(u['id']);
+                            if (v == true) {
+                              selectedIds.add(uid);
+                            } else {
+                              selectedIds.remove(uid);
+                            }
                           }),
-                          title: Text(u['full_name'] ?? u['username'] ?? 'User',
-                            style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.85), fontSize: 14)),
+                          title: Text(
+                            '${u['full_name'] ?? u['username'] ?? 'User'}',
+                            style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.85), fontSize: 14),
+                          ),
                           activeColor: AppTheme.primary,
                           controlAffinity: ListTileControlAffinity.leading,
                         );
@@ -2952,18 +3313,30 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
                   ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
+            TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
             ElevatedButton(
               onPressed: () async {
-                Navigator.pop(context);
-                if (selectedIds.isNotEmpty) {
-                  await widget.apiService.addGroupMembers(widget.group['id'], selectedIds.toList());
-                  _loadMembers();
+                if (selectedIds.isEmpty) {
+                  Navigator.pop(dialogCtx);
+                  return;
+                }
+                final groupId = _groupId;
+                if (groupId == null) return;
+                setState(() => _saving = true);
+                final r = await widget.apiService.addGroupMembers(groupId, selectedIds.toList());
+                if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                if (!mounted) return;
+                setState(() => _saving = false);
+                if (r['success'] == true) {
+                  AppToast.success(context, 'Members added');
+                  await _loadMembers();
                   widget.onGroupUpdated();
+                } else {
+                  AppToast.error(context, r['error']?.toString() ?? 'Could not add members');
                 }
               },
               style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-              child: Text('Add Members'),
+              child: const Text('Add Members'),
             ),
           ],
         ),
@@ -2971,30 +3344,90 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
     );
   }
 
-  Future<void> _removeMember(dynamic m) async {
-    final r = await widget.apiService.removeGroupMember(widget.group['id'], m['user']);
-    if (r['success']) { _loadMembers(); widget.onGroupUpdated(); }
+  Future<void> _setMemberRole(int userId, String role) async {
+    final groupId = _groupId;
+    if (groupId == null) return;
+    setState(() => _saving = true);
+    final r = await widget.apiService.updateGroupMemberRole(groupId, userId, role);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (r['success'] == true) {
+      AppToast.success(context, role == 'admin' ? 'Made admin' : 'Role updated');
+      await _loadMembers();
+    } else {
+      AppToast.error(context, r['error']?.toString() ?? 'Could not update member');
+    }
+  }
+
+  Future<void> _removeMember(Map<String, dynamic> m) async {
+    final uid = _membershipUserId(m);
+    final groupId = _groupId;
+    if (uid == null || groupId == null) {
+      AppToast.error(context, 'Invalid member');
+      return;
+    }
+    final name = (m['full_name'] ?? m['username'] ?? 'this member').toString();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface2,
+        title: const Text('Remove member?', style: TextStyle(color: AppTheme.textPrimary)),
+        content: Text('Remove $name from this group?', style: const TextStyle(color: AppTheme.textMuted)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => _saving = true);
+    final r = await widget.apiService.removeGroupMember(groupId, uid);
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (r['success'] == true) {
+      AppToast.success(context, 'Member removed');
+      await _loadMembers();
+      widget.onGroupUpdated();
+    } else {
+      AppToast.error(context, r['error']?.toString() ?? 'Could not remove member');
+    }
   }
 
   void _confirmDeleteGroup() {
+    if (!_canManage) {
+      AppToast.error(context, 'Only group admins can delete this group');
+      return;
+    }
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.surface2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Delete Group?', style: TextStyle(color: AppTheme.danger)),
-        content: Text('This action cannot be undone.', style: TextStyle(color: AppTheme.textMuted)),
+        title: const Text('Delete Group?', style: TextStyle(color: AppTheme.danger)),
+        content: const Text('This action cannot be undone.', style: TextStyle(color: AppTheme.textMuted)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
           ElevatedButton(
             onPressed: () async {
-              Navigator.pop(context); // close dialog
-              Navigator.pop(context); // close settings sheet
-              await widget.apiService.deleteGroup(widget.group['id']);
-              widget.onGroupDeleted();
+              final groupId = _groupId;
+              if (groupId == null) return;
+              final r = await widget.apiService.deleteGroup(groupId);
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (!mounted) return;
+              if (r['success'] == true) {
+                Navigator.pop(context);
+                widget.onGroupDeleted();
+                AppToast.success(context, 'Group deleted');
+              } else {
+                AppToast.error(context, r['error']?.toString() ?? 'Could not delete group');
+              }
             },
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            child: Text('Delete'),
+            child: const Text('Delete'),
           ),
         ],
       ),
