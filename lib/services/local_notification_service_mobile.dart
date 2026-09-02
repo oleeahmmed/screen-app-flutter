@@ -5,6 +5,7 @@ import 'package:aims_style_notify/aims_style_notify.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
@@ -140,6 +141,7 @@ class LocalNotificationService {
     await initialize();
 
     if (Platform.isAndroid) {
+      await Permission.notification.request();
       final androidImpl = _plugin
           .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
       await androidImpl?.requestFullScreenIntentPermission();

@@ -338,7 +338,19 @@ class _CallPageState extends State<CallPage> with TickerProviderStateMixin {
             color: const Color(0xFF25D366),
             size: 68,
             onTap: () async {
-              await _call.acceptIncoming();
+              final ok = await _call.acceptIncoming();
+              if (!ok && mounted) {
+                final video = _session?.kind == CallKind.video;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      video
+                          ? 'Allow camera and microphone, then tap Accept again'
+                          : 'Allow microphone, then tap Accept again',
+                    ),
+                  ),
+                );
+              }
             },
           ),
         ],

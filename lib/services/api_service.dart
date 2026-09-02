@@ -1370,6 +1370,38 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> sendGroupVoiceMessage(
+    int groupId,
+    List<int> audioBytes,
+    String filename, {
+    int? replyToId,
+  }) async {
+    try {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
+      );
+      final headers = _getHeaders();
+      headers.remove('Content-Type');
+      request.headers.addAll(headers);
+      request.fields['message'] = '';
+      if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
+      request.files.add(http.MultipartFile.fromBytes(
+        'voice_message',
+        audioBytes,
+        filename: filename,
+      ));
+      final response = await request.send().timeout(const Duration(seconds: 30));
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {'success': true, 'data': jsonDecode(body)};
+      }
+      return {'success': false, 'error': 'Failed: ${response.statusCode}'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> getGroupMembers(int groupId) async {
     try {
       final response = await http

@@ -163,7 +163,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _loadUsers({bool silent = false}) async {
     if (!silent && mounted) setState(() => _isLoadingUsers = true);
     final result = await widget.apiService.getChatUsers();
-    if (result['success'] && mounted) {
+      if (result['success'] == true && mounted) {
       setState(() {
         _users = _sortUsersByRecent(result['data'] ?? []);
         _isLoadingUsers = false;
@@ -180,7 +180,9 @@ class _ChatPageState extends State<ChatPage> {
       _consumePendingChatOpen();
     } else if (mounted) {
       setState(() => _isLoadingUsers = false);
-      if (!silent) _showError('Failed to load users');
+      if (!silent) {
+        _showError(result['error']?.toString() ?? 'Failed to load users');
+      }
     }
   }
 

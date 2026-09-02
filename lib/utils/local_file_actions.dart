@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -59,6 +60,48 @@ class LocalFileActions {
       debugPrint('[LocalFileActions] commitReceiveFile: $e');
       rethrow;
     }
+  }
+
+  /// Save image bytes into Pictures/Aims (Android gallery).
+  static Future<Map<String, String?>> saveImageToGallery(
+    Uint8List bytes,
+    String displayName,
+  ) async {
+    if (Platform.isAndroid) {
+      final raw = await _channel.invokeMethod<Map>('saveImageToGallery', {
+        'bytes': bytes,
+        'displayName': displayName,
+      });
+      return {
+        'path': raw?['path']?.toString(),
+        'contentUri': raw?['contentUri']?.toString(),
+      };
+    }
+    final dir = await receiveDirectory();
+    final file = File('${dir.path}${Platform.pathSeparator}$displayName');
+    await file.writeAsBytes(bytes, flush: true);
+    return {'path': file.path, 'contentUri': null};
+  }
+
+  /// Save any file bytes into Download/Aims.
+  static Future<Map<String, String?>> saveBytesToDownloads(
+    Uint8List bytes,
+    String displayName,
+  ) async {
+    if (Platform.isAndroid) {
+      final raw = await _channel.invokeMethod<Map>('saveBytesToDownloads', {
+        'bytes': bytes,
+        'displayName': displayName,
+      });
+      return {
+        'path': raw?['path']?.toString(),
+        'contentUri': raw?['contentUri']?.toString(),
+      };
+    }
+    final dir = await receiveDirectory();
+    final file = File('${dir.path}${Platform.pathSeparator}$displayName');
+    await file.writeAsBytes(bytes, flush: true);
+    return {'path': file.path, 'contentUri': null};
   }
 
   /// Opens [path] with the system “Open with” chooser on Android.

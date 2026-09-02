@@ -308,14 +308,22 @@ try {
       final tempDir = await getTemporaryDirectory();
       final tempFile =
           '${tempDir.path}${Platform.pathSeparator}linux_capture_${DateTime.now().millisecondsSinceEpoch}.png';
+      final wayland = _linuxIsWayland;
+
+      // X11: maim/scrot are silent (no portal, no flash).
+      // Wayland + GNOME: those grab a black XWayland root — skip them.
       final tools = <List<String>>[
-        ['grim', tempFile],
+        if (!wayland) ...[
+          ['maim', tempFile],
+          ['scrot', '--silent', tempFile],
+          ['scrot', tempFile],
+          ['import', '-window', 'root', tempFile],
+          ['xwd', '-root', '-out', tempFile.replaceAll('.png', '.xwd')],
+        ],
+        // No portal dialog (GTK_USE_PORTAL=0). gnome-screenshot may still flash.
         ['gnome-screenshot', '-f', tempFile],
         ['spectacle', '-b', '-n', '-o', tempFile],
-        ['scrot', tempFile],
-        ['import', '-window', 'root', tempFile],
-        ['maim', tempFile],
-        ['xwd', '-root', '-out', tempFile.replaceAll('.png', '.xwd')],
+        ['grim', tempFile],
       ];
       for (final tool in tools) {
         try {
@@ -323,10 +331,18 @@ try {
           final resolved = await _resolveCommand(exe);
           if (resolved == null) continue;
           final args = tool.sublist(1);
+          final env = Map<String, String>.from(Platform.environment);
+          if (exe == 'gnome-screenshot') {
+            env['GTK_USE_PORTAL'] = '0';
+          }
           ProcessResult result;
           try {
-            result = await Process.run(resolved, args, runInShell: false)
-                .timeout(const Duration(seconds: 12));
+            result = await Process.run(
+              resolved,
+              args,
+              runInShell: false,
+              environment: env,
+            ).timeout(const Duration(seconds: 8));
           } on TimeoutException {
             _debugLog('Linux capture timeout: $exe');
             continue;
@@ -351,16 +367,30 @@ try {
           if (await file.exists()) {
             final bytes = await file.readAsBytes();
             await file.delete().catchError((_) => file);
-            if (bytes.isNotEmpty) return bytes;
+            if (_isUsableCapture(bytes)) return bytes;
+            _debugLog('Linux capture discarded (blank): $exe');
           }
         } catch (_) {}
       }
-      _debugLog('Linux: install grim, gnome-screenshot, scrot, or maim for capture');
+      _debugLog('Linux: install maim (Xorg) or gnome-screenshot for capture');
       return null;
     } catch (e) {
       _debugLog('Linux capture error: $e');
       return null;
     }
+  }
+
+  bool get _linuxIsWayland {
+    final session = Platform.environment['XDG_SESSION_TYPE']?.toLowerCase();
+    if (session == 'wayland') return true;
+    if (session == 'x11') return false;
+    return (Platform.environment['WAYLAND_DISPLAY'] ?? '').isNotEmpty;
+  }
+
+  /// Black XWayland roots are tiny; a real desktop PNG is much larger.
+  bool _isUsableCapture(Uint8List bytes) {
+    if (bytes.length < 24 * 1024) return false;
+    return true;
   }
 
   Future<bool> _linuxCaptureToolAvailable() async {
