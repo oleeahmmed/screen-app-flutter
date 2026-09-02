@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'api_service.dart';
 import 'activity_detection_service.dart';
 import 'image_compress_util.dart';
+import 'windows_app_capture.dart';
 import '../config.dart';
 import '../app_session.dart';
 import '../utils/platform_capabilities.dart';
@@ -30,6 +31,8 @@ class ScreenshotService {
   int _captureCount = 0;
   DateTime _lastActivityTime = DateTime.now();
   bool _isUserActive = true;
+  bool _appFilterMode = false;
+  List<String> _allowedAppExes = const [];
   static const int idleThresholdSeconds = 60;
   static const bool enableDebugLogs = true;
 
@@ -67,7 +70,29 @@ class ScreenshotService {
   }
 
   Future<void> startCapture() async {
-    if (_isRunning) return;
+    _appFilterMode = false;
+    _allowedAppExes = const [];
+    await _startCaptureInternal();
+  }
+
+  /// Option B — capture only the foreground window when it matches [allowedExes].
+  Future<void> startAppFilterCapture(List<String> allowedExes) async {
+    if (!Platform.isWindows) {
+      _debugLog('App-filter capture is Windows-only');
+      return;
+    }
+    final cleaned = allowedExes.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    if (cleaned.isEmpty) {
+      _debugLog('App-filter capture skipped — no apps selected');
+      return;
+    }
+    _appFilterMode = true;
+    _allowedAppExes = cleaned;
+    await _startCaptureInternal();
+  }
+
+  Future<void> _startCaptureInternal() async {
+    if (_isRunning) await stopCapture();
     if (AppSession.onBreak) {
       _debugLog('Screenshot capture skipped — user is on break');
       return;
@@ -90,8 +115,12 @@ class ScreenshotService {
     _isRunning = true;
 
     final interval = AppConfig.screenshotInterval.clamp(15, 600);
-    _debugLog('Screenshot service started ($platformLabel)');
+    final modeLabel = _appFilterMode ? 'app-window filter' : 'full monitor';
+    _debugLog('Screenshot service started ($platformLabel · $modeLabel)');
     _debugLog('Capture interval: ${interval}s');
+    if (_appFilterMode) {
+      _debugLog('Allowed apps: ${_allowedAppExes.join(', ')}');
+    }
 
     _screenshotTimer = Timer.periodic(Duration(seconds: interval), (_) async {
       await _captureOnce();
@@ -101,7 +130,6 @@ class ScreenshotService {
       _checkActivityStatus();
     });
 
-    // First capture runs in background — must not block clock-in UI.
     unawaited(_captureOnce());
   }
 
@@ -115,6 +143,23 @@ class ScreenshotService {
     try {
       _captureCount++;
       final frames = <Uint8List>[];
+
+      if (Platform.isWindows && _appFilterMode) {
+        final tempDir = await getTemporaryDirectory();
+        final tempFile =
+            '${tempDir.path}${Platform.pathSeparator}app_filter_${DateTime.now().millisecondsSinceEpoch}.png';
+        final frame = await WindowsAppCapture.captureForegroundIfAllowed(
+          _allowedAppExes,
+          tempFile,
+        );
+        if (frame == null || frame.isEmpty) {
+          _debugLog('App-filter capture #$_captureCount skipped (foreground not allowed)');
+          return;
+        }
+        _debugLog('App-filter capture #$_captureCount: window captured');
+        await _uploadImage(frame, screenIndex: 1);
+        return;
+      }
 
       if (Platform.isWindows) {
         frames.addAll(await _captureWindowsPerMonitor());
@@ -497,6 +542,7 @@ try {
   }
 
   bool get isRunning => _isRunning;
+  bool get isAppFilterMode => _appFilterMode;
   bool get isUserActive => _isUserActive;
   int get displayCount => Platform.isWindows ? -1 : 1;
 }

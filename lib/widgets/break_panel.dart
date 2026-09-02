@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../services/screenshot_service.dart';
+import '../services/app_filter_prefs.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
@@ -141,6 +142,18 @@ class _BreakPanelState extends State<BreakPanel> {
   DateTime? _parseDt(dynamic v) {
     if (v == null) return null;
     return DateTime.tryParse(v.toString())?.toLocal();
+  }
+
+  Future<void> _resumeCaptureAfterBreak() async {
+    final svc = widget.screenshotService;
+    if (svc == null) return;
+    final active = await AppFilterPrefs.loadActive();
+    final exes = await AppFilterPrefs.loadAllowedExes();
+    if (active && exes.isNotEmpty) {
+      await svc.startAppFilterCapture(exes);
+    } else {
+      await svc.startCapture();
+    }
   }
 
   Future<void> _startBreakNow() async {
@@ -290,7 +303,7 @@ class _BreakPanelState extends State<BreakPanel> {
     if (r['success'] == true) {
       if (_screenshotsPausedForBreak && widget.isClockedIn) {
         _screenshotsPausedForBreak = false;
-        unawaited(widget.screenshotService?.startCapture());
+        unawaited(_resumeCaptureAfterBreak());
       }
       setState(() {
         _onBreak = false;
