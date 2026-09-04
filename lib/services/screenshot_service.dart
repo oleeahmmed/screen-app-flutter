@@ -269,6 +269,7 @@ try {
           '-ExecutionPolicy',
           'Bypass',
           '-NoProfile',
+          '-NonInteractive',
           '-WindowStyle',
           'Hidden',
           '-File',
@@ -283,38 +284,50 @@ try {
           .map((l) => l.trim())
           .firstWhere((l) => l.startsWith('SUCCESS:'), orElse: () => '');
 
-      if (result.exitCode != 0 || successLine.isEmpty) {
-        _debugLog('Windows multi-monitor capture failed: $out');
-        final legacy = await _captureWindowsVirtualScreen();
-        return legacy == null ? <Uint8List>[] : <Uint8List>[legacy];
+      // Prefer PNG files on disk — PowerShell stdout/exit is unreliable (Add-Type noise).
+      Future<List<Uint8List>> loadFrames(Iterable<int> ids) async {
+        final frames = <Uint8List>[];
+        for (final i in ids) {
+          final file = File('${prefix}_$i.png');
+          if (await file.exists()) {
+            final bytes = await file.readAsBytes();
+            await file.delete().catchError((_) => file);
+            if (bytes.isNotEmpty) frames.add(bytes);
+          }
+        }
+        return frames;
       }
 
-      final ids = successLine
-          .substring('SUCCESS:'.length)
-          .split(',')
-          .map((s) => int.tryParse(s.trim()))
-          .whereType<int>()
-          .toList();
-
-      final frames = <Uint8List>[];
-      for (final i in ids) {
-        final file = File('${prefix}_$i.png');
-        if (await file.exists()) {
-          final bytes = await file.readAsBytes();
-          await file.delete().catchError((_) => file);
-          if (bytes.isNotEmpty) frames.add(bytes);
+      List<int> ids = [];
+      if (successLine.isNotEmpty) {
+        ids = successLine
+            .substring('SUCCESS:'.length)
+            .split(',')
+            .map((s) => int.tryParse(s.trim()))
+            .whereType<int>()
+            .toList();
+      }
+      if (ids.isEmpty) {
+        // Glob whatever was written even if SUCCESS line was missing.
+        for (var i = 1; i <= 16; i++) {
+          if (await File('${prefix}_$i.png').exists()) ids.add(i);
         }
       }
-      if (frames.isEmpty) {
-        final legacy = await _captureWindowsVirtualScreen();
-        return legacy == null ? <Uint8List>[] : <Uint8List>[legacy];
+
+      var frames = await loadFrames(ids);
+      if (frames.isNotEmpty) {
+        _debugLog('Windows captured ${frames.length} monitor(s)');
+        return frames;
       }
-      _debugLog('Windows captured ${frames.length} monitor(s)');
-      return frames;
+
+      _debugLog('Windows multi-monitor capture failed (exit=${result.exitCode}): $out');
+      // Never fall back to VirtualScreen (stitches all monitors into screen1).
+      final primary = await _captureWindowsPrimaryOnly();
+      return primary == null ? <Uint8List>[] : <Uint8List>[primary];
     } catch (e) {
       _debugLog('Windows per-monitor capture error: $e');
-      final legacy = await _captureWindowsVirtualScreen();
-      return legacy == null ? <Uint8List>[] : <Uint8List>[legacy];
+      final primary = await _captureWindowsPrimaryOnly();
+      return primary == null ? <Uint8List>[] : <Uint8List>[primary];
     } finally {
       if (scriptFile != null) {
         await scriptFile.delete().catchError((_) => scriptFile!);
@@ -322,63 +335,82 @@ try {
     }
   }
 
-  Future<Uint8List?> _captureWindowsVirtualScreen() async {
+  /// Capture only the primary monitor — never the virtual desktop spanning all displays.
+  Future<Uint8List?> _captureWindowsPrimaryOnly() async {
+    File? scriptFile;
     try {
       final tempDir = await getTemporaryDirectory();
       final sep = Platform.pathSeparator;
-      final tempFile =
-          '${tempDir.path}${sep}silent_capture_${DateTime.now().millisecondsSinceEpoch}.png';
-
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final tempFile = '${tempDir.path}${sep}aims_primary_$stamp.png';
+      scriptFile = File('${tempDir.path}${sep}aims_primary_$stamp.ps1');
       final psScript = '''
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 try {
-  \$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
-  \$bitmap = New-Object System.Drawing.Bitmap(\$bounds.Width, \$bounds.Height)
+  Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AimsDpi2 {
+  [DllImport("user32.dll")]
+  public static extern bool SetProcessDPIAware();
+}
+"@
+  [AimsDpi2]::SetProcessDPIAware() | Out-Null
+} catch {}
+try {
+  \$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+  \$bitmap = New-Object System.Drawing.Bitmap([int]\$b.Width, [int]\$b.Height)
   \$graphics = [System.Drawing.Graphics]::FromImage(\$bitmap)
-  \$graphics.CopyFromScreen(\$bounds.Location, [System.Drawing.Point]::Empty, \$bounds.Size)
-  \$bitmap.Save('$tempFile', [System.Drawing.Imaging.ImageFormat]::Png)
-  \$graphics.Dispose()
-  \$bitmap.Dispose()
-  if (Test-Path '$tempFile') {
-    \$fileInfo = Get-Item '$tempFile'
-    Write-Output "SUCCESS:\$(\$fileInfo.Length)"
-  } else {
-    Write-Output "ERROR:File not created"
+  try {
+    \$graphics.CopyFromScreen([int]\$b.X, [int]\$b.Y, 0, 0, \$bitmap.Size)
+    \$bitmap.Save('$tempFile', [System.Drawing.Imaging.ImageFormat]::Png)
+  } finally {
+    \$graphics.Dispose()
+    \$bitmap.Dispose()
   }
+  if (Test-Path -LiteralPath '$tempFile') { Write-Output "SUCCESS"; exit 0 }
+  Write-Output "ERROR:missing"; exit 1
 } catch {
   Write-Output "ERROR:\$(\$_.Exception.Message)"
+  exit 1
 }
 ''';
-
-      final result = await Process.run(
+      await scriptFile.writeAsString(psScript, flush: true);
+      await Process.run(
         'powershell',
         [
           '-ExecutionPolicy',
           'Bypass',
           '-NoProfile',
+          '-NonInteractive',
           '-WindowStyle',
           'Hidden',
-          '-Command',
-          psScript,
+          '-File',
+          scriptFile.path,
         ],
         runInShell: false,
       );
-
-      if (result.exitCode == 0 &&
-          result.stdout.toString().startsWith('SUCCESS:')) {
-        final file = File(tempFile);
-        if (await file.exists()) {
-          final bytes = await file.readAsBytes();
-          await file.delete().catchError((_) => file);
-          return bytes;
-        }
+      final file = File(tempFile);
+      if (await file.exists()) {
+        final bytes = await file.readAsBytes();
+        await file.delete().catchError((_) => file);
+        if (bytes.isNotEmpty) return bytes;
       }
       return null;
     } catch (e) {
-      _debugLog('Windows capture error: $e');
+      _debugLog('Windows primary capture error: $e');
       return null;
+    } finally {
+      if (scriptFile != null) {
+        await scriptFile.delete().catchError((_) => scriptFile!);
+      }
     }
+  }
+
+  @Deprecated('Stitches all monitors — do not use for uploads')
+  Future<Uint8List?> _captureWindowsVirtualScreen() async {
+    return _captureWindowsPrimaryOnly();
   }
 
   /// One PNG per macOS display (Display 1 → screen1, …).
