@@ -136,15 +136,38 @@ Map<String, dynamic> vaultEntryWithCategoryPerm(
   return out;
 }
 
-/// Entry edit / delete / attach — Flutter: vault admin or manager only.
-///
-/// Category grants and Shared-with-me never unlock mutate buttons for normal users.
+/// Full entry manage (name / URL / username / password / delete).
+/// Vault admin/manager only — matches backend `can_edit_secrets` / `can_delete`.
 bool vaultEntryCanEdit(
   Map<String, dynamic> entry, {
   bool isVaultAdmin = false,
   int? currentUserId,
 }) {
+  if (entry['can_edit_secrets'] == true || entry['can_delete'] == true) {
+    return true;
+  }
   return isVaultAdmin || entry['category_can_admin'] == true;
+}
+
+/// Notes + attachment add/remove — anyone with view access on entry/category.
+/// Matches backend `can_edit_notes` / `can_edit_attachments`.
+bool vaultEntryCanEditNotesAttachments(
+  Map<String, dynamic> entry, {
+  bool isVaultAdmin = false,
+  int? currentUserId,
+}) {
+  if (isVaultAdmin || entry['category_can_admin'] == true) return true;
+  if (entry['can_edit_notes'] == true || entry['can_edit_attachments'] == true) {
+    return true;
+  }
+  if (entry['can_edit'] == true) return true;
+  final p = (entry['category_my_permission'] ?? '').toString().toLowerCase();
+  if (p == 'view' || p == 'edit' || p == 'admin') return true;
+  // Shared-with-me / loaded entry without category grant still has view access.
+  if (entry.containsKey('can_edit_notes')) {
+    return entry['can_edit_notes'] == true;
+  }
+  return false;
 }
 
 /// Immersive vault context card (project → category breadcrumb).

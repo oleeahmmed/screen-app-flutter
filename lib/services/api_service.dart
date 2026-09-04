@@ -3267,7 +3267,7 @@ class ApiService {
     required Map<String, String> fields,
     required List<Map<String, dynamic>> files,
   }) async {
-    Future<http.MultipartRequest> build() {
+    http.MultipartRequest build() {
       final request = http.MultipartRequest(method, uri);
       request.headers.addAll(_authHeaderOnly());
       request.fields.addAll(fields);

@@ -121,8 +121,15 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
 
   bool get _canManageEntry =>
       _permissionsLoaded &&
-      widget.canEdit &&
       vaultEntryCanEdit(
+        _entry,
+        isVaultAdmin: widget.isAdmin,
+        currentUserId: _currentUserId ?? widget.currentUserId,
+      );
+
+  bool get _canEditNotesFiles =>
+      _permissionsLoaded &&
+      vaultEntryCanEditNotesAttachments(
         _entry,
         isVaultAdmin: widget.isAdmin,
         currentUserId: _currentUserId ?? widget.currentUserId,
@@ -226,11 +233,14 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
     }
   }
 
-  Future<void> _editEntry() async {
-    if (!_canManageEntry) {
+  Future<void> _editEntry({bool notesAndFilesOnly = false}) async {
+    final secretsOk = _canManageEntry;
+    final notesOk = _canEditNotesFiles;
+    if (!secretsOk && !notesOk) {
       _toast('You can view this entry but not edit it', error: true);
       return;
     }
+    final limited = notesAndFilesOnly || !secretsOk;
     final e = _entry;
     final nameCtrl = TextEditingController(text: e['name']?.toString() ?? '');
     final urlCtrl = TextEditingController(text: e['url']?.toString() ?? '');
@@ -266,7 +276,10 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
         builder: (ctx, setD) => AlertDialog(
         backgroundColor: AppTheme.surface2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Edit entry', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700)),
+        title: Text(
+          limited ? 'Edit notes & files' : 'Edit entry',
+          style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700),
+        ),
         content: SizedBox(
           width: 360,
           child: SingleChildScrollView(
@@ -274,31 +287,33 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                TextField(
-                  controller: nameCtrl,
-                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
-                  decoration: deco('Name', Icons.badge_outlined),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: urlCtrl,
-                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
-                  decoration: deco('URL', Icons.language_outlined),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: userCtrl,
-                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
-                  decoration: deco('Username', Icons.person_outline_rounded),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: passCtrl,
-                  obscureText: true,
-                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
-                  decoration: deco('Password (blank = keep)', Icons.lock_outline_rounded),
-                ),
-                const SizedBox(height: 10),
+                if (!limited) ...[
+                  TextField(
+                    controller: nameCtrl,
+                    style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                    decoration: deco('Name', Icons.badge_outlined),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: urlCtrl,
+                    style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                    decoration: deco('URL', Icons.language_outlined),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: userCtrl,
+                    style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                    decoration: deco('Username', Icons.person_outline_rounded),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: passCtrl,
+                    obscureText: true,
+                    style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                    decoration: deco('Password (blank = keep)', Icons.lock_outline_rounded),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 TextField(
                   controller: notesCtrl,
                   maxLines: 3,
@@ -326,7 +341,13 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, nameCtrl.text.trim().isNotEmpty),
+            onPressed: () {
+              if (limited) {
+                Navigator.pop(ctx, true);
+              } else {
+                Navigator.pop(ctx, nameCtrl.text.trim().isNotEmpty);
+              }
+            },
             style: FilledButton.styleFrom(backgroundColor: AppTheme.featureVault),
             child: const Text('Save'),
           ),
@@ -339,23 +360,32 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
     final catId = e['category'] is int
         ? e['category'] as int
         : int.tryParse('${e['category']}');
-    final r = await widget.apiService.updateVaultEntry(
-      widget.projectId,
-      _entryId,
-      categoryId: catId,
-      name: nameCtrl.text.trim(),
-      url: urlCtrl.text.trim(),
-      username: userCtrl.text.trim(),
-      password: passCtrl.text.isEmpty ? null : passCtrl.text,
-      notes: notesCtrl.text.trim(),
-      files: pendingFiles,
-    );
+    final r = limited
+        ? await widget.apiService.updateVaultEntry(
+            widget.projectId,
+            _entryId,
+            notes: notesCtrl.text.trim(),
+            files: pendingFiles,
+          )
+        : await widget.apiService.updateVaultEntry(
+            widget.projectId,
+            _entryId,
+            categoryId: catId,
+            name: nameCtrl.text.trim(),
+            url: urlCtrl.text.trim(),
+            username: userCtrl.text.trim(),
+            password: passCtrl.text.isEmpty ? null : passCtrl.text,
+            notes: notesCtrl.text.trim(),
+            files: pendingFiles,
+          );
     if (!mounted) return;
     if (r['success'] == true) {
       final data = r['data'];
       setState(() {
         if (data is Map) {
           _entry = {..._entry, ...Map<String, dynamic>.from(data)};
+        } else if (limited) {
+          _entry = {..._entry, 'notes': notesCtrl.text.trim()};
         } else {
           _entry = {
             ..._entry,
@@ -470,7 +500,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
   }
 
   Future<void> _deleteAttachment(Map<String, dynamic> a) async {
-    if (!_canManageEntry) return;
+    if (!_canEditNotesFiles) return;
     final id = a['id'] is int ? a['id'] as int : int.tryParse('${a['id']}');
     if (id == null) return;
     final ok = await showDialog<bool>(
@@ -674,7 +704,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
             style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.7), fontSize: 11.5),
           ),
         ],
-        if (_attachments.isNotEmpty) ...[
+        if (_attachments.isNotEmpty || _canEditNotesFiles) ...[
           const SizedBox(height: 22),
           vaultSectionLabel('Files'),
           const SizedBox(height: 10),
@@ -682,6 +712,19 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
             padding: const EdgeInsets.symmetric(vertical: 6),
             child: Column(
               children: [
+                if (_attachments.isEmpty && _canEditNotesFiles)
+                  ListTile(
+                    leading: vaultIconBox(
+                      icon: Icons.upload_file_outlined,
+                      color: AppTheme.featureVault,
+                      size: 40,
+                      iconSize: 20,
+                      radius: 12,
+                    ),
+                    title: const Text('No files yet', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+                    subtitle: Text('Tap to add attachments', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
+                    onTap: () => _editEntry(notesAndFilesOnly: !_canManageEntry),
+                  ),
                 ..._attachments.map((a) {
                   final name = _attachmentName(a);
                   final size = _attachmentSizeLabel(a);
@@ -718,7 +761,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
                             icon: const Icon(Icons.download_outlined, color: AppTheme.textMuted, size: 20),
                             onPressed: () => _openAttachment(a),
                           ),
-                        if (_canManageEntry)
+                        if (_canEditNotesFiles)
                           IconButton(
                             tooltip: 'Delete',
                             icon: const Icon(Icons.delete_outline, color: AppTheme.danger, size: 20),
@@ -732,7 +775,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
             ),
           ),
         ],
-        if (_canManageEntry || _canShareEntry) ...[
+        if (_canManageEntry || _canEditNotesFiles || _canShareEntry) ...[
           const SizedBox(height: 22),
           vaultSectionLabel('Actions'),
           const SizedBox(height: 10),
@@ -751,7 +794,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
                     ),
                     title: const Text('Edit entry', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
                     subtitle: Text('Update name, files, URL, username or password', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
-                    onTap: _editEntry,
+                    onTap: () => _editEntry(),
                   ),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -769,9 +812,22 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
                     subtitle: Text('Remove this credential permanently', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
                     onTap: _deleteEntry,
                   ),
+                ] else if (_canEditNotesFiles) ...[
+                  ListTile(
+                    leading: vaultIconBox(
+                      icon: Icons.note_alt_outlined,
+                      color: AppTheme.primaryBright,
+                      size: 40,
+                      iconSize: 20,
+                      radius: 12,
+                    ),
+                    title: const Text('Edit notes & files', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+                    subtitle: Text('Update notes and upload attachments', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12)),
+                    onTap: () => _editEntry(notesAndFilesOnly: true),
+                  ),
                 ],
                 if (_canShareEntry) ...[
-                  if (_canManageEntry)
+                  if (_canManageEntry || _canEditNotesFiles)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                       child: Divider(height: 1, color: Colors.white.withValues(alpha: 0.06)),
