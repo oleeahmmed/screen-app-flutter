@@ -186,7 +186,7 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
             apiService: widget.apiService,
             projectId: projectId,
             entry: e,
-            canEdit: vaultEntryCanEdit(e, currentUserId: _currentUserId),
+            canEdit: false,
             currentUserId: _currentUserId,
             onLogout: widget.onLogout,
             onChanged: _loadShared,
@@ -480,8 +480,7 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
       if (cat.isNotEmpty) cat,
       if (user.isNotEmpty) user,
     ].join(' · ');
-    final canEdit = vaultEntryCanEdit(e, currentUserId: _currentUserId);
-
+    final canEdit = false; // Shared-with-me is always view-only in Flutter
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
@@ -528,7 +527,7 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
                   ),
                 ),
                 vaultPermissionChip(
-                  canEdit ? 'Can edit' : 'View only',
+                  'View only',
                   edit: canEdit,
                 ),
                 const SizedBox(width: 4),
@@ -690,7 +689,7 @@ class VaultCategoriesPage extends StatelessWidget {
           else
             ...categories.map((cat) {
               final perm = vaultCategoryPermissionLabel(cat);
-              final isEdit = perm == 'Can edit' || perm == 'Admin';
+              final isEdit = perm == 'Admin';
               final count = cat['entry_count'] ?? 0;
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
@@ -780,7 +779,7 @@ class _VaultCategoryPageState extends State<VaultCategoryPage> {
           ? widget.category['id'] as int
           : int.parse('${widget.category['id']}');
 
-  bool get _canAddEntries => vaultCanEditCategory(widget.category, isAdmin: widget.vault['is_admin'] == true);
+  bool get _canAddEntries => _isVaultAdmin;
   bool get _isVaultAdmin => widget.vault['is_admin'] == true;
 
   @override
@@ -822,17 +821,14 @@ class _VaultCategoryPageState extends State<VaultCategoryPage> {
   }
 
   void _openEntry(Map<String, dynamic> e) {
+    final entry = vaultEntryWithCategoryPerm(e, widget.category);
     showVaultEntryDetailSheet(
       context: context,
       apiService: widget.apiService,
       projectId: widget.projectId,
-      entry: e,
+      entry: entry,
       isAdmin: _isVaultAdmin,
-      canEdit: vaultEntryCanEdit(
-        e,
-        isVaultAdmin: _isVaultAdmin,
-        currentUserId: _currentUserId,
-      ),
+      canEdit: _isVaultAdmin,
       currentUserId: _currentUserId,
       onChanged: _load,
     );
@@ -1035,11 +1031,7 @@ class VaultSharedEntryPage extends StatelessWidget {
       if (project.isNotEmpty) project,
       if (cat.isNotEmpty) cat,
     ].join(' · ');
-    final effectiveCanEdit = vaultEntryCanEdit(
-      entry,
-      currentUserId: currentUserId,
-    );
-
+    final effectiveCanEdit = false; // Shared credential page is view-only
     return ToolPageScaffold(
       title: '',
       showHeader: false,

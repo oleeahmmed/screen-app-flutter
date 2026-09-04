@@ -255,9 +255,13 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
               ),
               items: const [
                 DropdownMenuItem(value: 'view', child: Text('View only')),
-                DropdownMenuItem(value: 'edit', child: Text('View & edit entries')),
               ],
               onChanged: (v) => setState(() => _permission = v ?? 'view'),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Granted users can view credentials in the app — they cannot add, edit, or delete.',
+              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 11.5),
             ),
             const SizedBox(height: 8),
             ConstrainedBox(
@@ -342,7 +346,7 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
                                   ),
                                 ),
                                 Text(
-                                  perm == 'edit' ? 'Can edit entries' : 'View only',
+                                  'View only',
                                   style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 11),
                                 ),
                               ],
@@ -352,12 +356,11 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
                             color: AppTheme.surface2,
                             icon: const Icon(Icons.more_horiz, color: AppTheme.textMuted, size: 18),
                             onSelected: (v) {
-                              if (v == 'view' || v == 'edit') _setPermission(a, v);
+                              if (v == 'view') _setPermission(a, v);
                               if (v == 'revoke') _revoke(a);
                             },
                             itemBuilder: (_) => const [
-                              PopupMenuItem(value: 'view', child: Text('Set view')),
-                              PopupMenuItem(value: 'edit', child: Text('Set edit')),
+                              PopupMenuItem(value: 'view', child: Text('Set view only')),
                               PopupMenuItem(
                                 value: 'revoke',
                                 child: Text('Remove', style: TextStyle(color: AppTheme.danger)),

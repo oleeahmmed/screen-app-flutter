@@ -10,6 +10,8 @@ class AppTheme {
   static const Color bgDeep = Color(0xFF0A1628);  // Deep ocean blue
   static const Color surface = Color(0xFF0F172A);  // Glass surface
   static const Color surface2 = Color(0xFF1E3A8A);  // Accent surface
+  /// Dialogs / sheets — darker than surface2 so primary buttons stay readable.
+  static const Color dialogBg = Color(0xFF12263F);
   static const Color border = Color(0x1E93C5FD);  // Cyan glass border
   static const Color primary = Color(0xFF3B82F6);  // Primary blue
   static const Color primaryBright = Color(0xFF60A5FA);  // Sky blue
@@ -35,11 +37,14 @@ class AppTheme {
     final base = ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
-      colorScheme: ColorScheme.dark(
+      colorScheme: const ColorScheme.dark(
         surface: surface,
         primary: primary,
+        onPrimary: Colors.white,
         secondary: accent,
+        onSecondary: Colors.white,
         error: danger,
+        onError: Colors.white,
         onSurface: textPrimary,
       ),
     );
@@ -77,9 +82,27 @@ class AppTheme {
         style: FilledButton.styleFrom(
           backgroundColor: primary,
           foregroundColor: Colors.white,
+          disabledForegroundColor: Colors.white70,
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: primary,
+          foregroundColor: Colors.white,
+          disabledForegroundColor: Colors.white70,
+          disabledBackgroundColor: primary.withValues(alpha: 0.35),
+          elevation: 0,
+          shadowColor: Colors.transparent,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          textStyle: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+          ),
         ),
       ),
       textButtonTheme: TextButtonThemeData(
@@ -98,7 +121,7 @@ class AppTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: surface2.withValues(alpha: 0.5),
+        fillColor: surface.withValues(alpha: 0.85),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: const BorderSide(color: border),
@@ -112,19 +135,36 @@ class AppTheme {
           borderSide: const BorderSide(color: primary, width: 1.5),
         ),
         labelStyle: const TextStyle(color: textMuted),
+        hintStyle: TextStyle(color: textMuted.withValues(alpha: 0.85)),
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: surface2,
+        backgroundColor: dialogBg,
+        contentTextStyle: const TextStyle(color: textPrimary),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       dialogTheme: DialogThemeData(
-        backgroundColor: surface2,
+        backgroundColor: dialogBg,
         surfaceTintColor: Colors.transparent,
         elevation: 16,
         shadowColor: Colors.black.withValues(alpha: 0.5),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+        ),
         insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        titleTextStyle: const TextStyle(
+          color: textPrimary,
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+        contentTextStyle: TextStyle(color: textMuted.withValues(alpha: 0.95), fontSize: 14),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: dialogBg,
+        surfaceTintColor: Colors.transparent,
+        modalBackgroundColor: dialogBg,
       ),
     );
   }
@@ -258,9 +298,29 @@ class AppTheme {
     return FilledButton.styleFrom(
       backgroundColor: primary,
       foregroundColor: Colors.white,
+      disabledForegroundColor: Colors.white70,
       padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
       elevation: 0,
+    );
+  }
+
+  /// Elevated / dialog primary actions — white label on primary fill.
+  static ButtonStyle primaryElevatedButton({double radius = 12}) {
+    return ElevatedButton.styleFrom(
+      backgroundColor: primary,
+      foregroundColor: Colors.white,
+      disabledForegroundColor: Colors.white70,
+      disabledBackgroundColor: primary.withValues(alpha: 0.35),
+      elevation: 0,
+      shadowColor: Colors.transparent,
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 18),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
+      textStyle: const TextStyle(
+        color: Colors.white,
+        fontWeight: FontWeight.w600,
+        fontSize: 14,
+      ),
     );
   }
 

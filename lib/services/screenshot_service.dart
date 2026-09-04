@@ -32,7 +32,10 @@ class ScreenshotService {
   DateTime _lastActivityTime = DateTime.now();
   bool _isUserActive = true;
   bool _appFilterMode = false;
-  List<String> _allowedAppExes = const [];
+  bool _captureInFlight = false;
+  List<WindowsAppInfo> _allowedApps = const [];
+  /// Last content hash successfully stored on the server, per screen.
+  final Map<int, String> _lastUploadedHashByScreen = {};
   static const int idleThresholdSeconds = 60;
   static const bool enableDebugLogs = true;
 
@@ -71,24 +74,33 @@ class ScreenshotService {
 
   Future<void> startCapture() async {
     _appFilterMode = false;
-    _allowedAppExes = const [];
+    _allowedApps = const [];
     await _startCaptureInternal();
   }
 
-  /// Option B — capture only the foreground window when it matches [allowedExes].
-  Future<void> startAppFilterCapture(List<String> allowedExes) async {
+  /// Capture only the foreground window when it matches [allowedApps] (Windows).
+  Future<void> startAppFilterCapture(List<WindowsAppInfo> allowedApps) async {
     if (!Platform.isWindows) {
       _debugLog('App-filter capture is Windows-only');
       return;
     }
-    final cleaned = allowedExes.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    final cleaned = allowedApps.where((a) => a.exe.trim().isNotEmpty).toList();
     if (cleaned.isEmpty) {
       _debugLog('App-filter capture skipped — no apps selected');
       return;
     }
     _appFilterMode = true;
-    _allowedAppExes = cleaned;
+    _allowedApps = cleaned;
     await _startCaptureInternal();
+  }
+
+  /// Backward-compatible entry when only exe names are known.
+  Future<void> startAppFilterCaptureByExe(List<String> allowedExes) async {
+    await startAppFilterCapture(
+      allowedExes
+          .map((e) => WindowsAppInfo(name: e, exe: e, title: ''))
+          .toList(),
+    );
   }
 
   Future<void> _startCaptureInternal() async {
@@ -119,7 +131,7 @@ class ScreenshotService {
     _debugLog('Screenshot service started ($platformLabel · $modeLabel)');
     _debugLog('Capture interval: ${interval}s');
     if (_appFilterMode) {
-      _debugLog('Allowed apps: ${_allowedAppExes.join(', ')}');
+      _debugLog('Allowed apps: ${_allowedApps.map((a) => a.exe).join(', ')}');
     }
 
     _screenshotTimer = Timer.periodic(Duration(seconds: interval), (_) async {
@@ -134,12 +146,13 @@ class ScreenshotService {
   }
 
   Future<void> _captureOnce() async {
-    if (!_isRunning) return;
+    if (!_isRunning || _captureInFlight) return;
     if (!AppSession.mayCaptureScreenshots) {
       _debugLog('Screenshot skipped (no consent)');
       return;
     }
 
+    _captureInFlight = true;
     try {
       _captureCount++;
       final frames = <Uint8List>[];
@@ -148,16 +161,16 @@ class ScreenshotService {
         final tempDir = await getTemporaryDirectory();
         final tempFile =
             '${tempDir.path}${Platform.pathSeparator}app_filter_${DateTime.now().millisecondsSinceEpoch}.png';
-        final frame = await WindowsAppCapture.captureForegroundIfAllowed(
-          _allowedAppExes,
+        final result = await WindowsAppCapture.captureForegroundIfAllowed(
+          _allowedApps,
           tempFile,
         );
-        if (frame == null || frame.isEmpty) {
-          _debugLog('App-filter capture #$_captureCount skipped (foreground not allowed)');
+        if (result == null || result.bytes.isEmpty) {
+          _debugLog('App-filter capture #$_captureCount skipped (foreground not in selected apps)');
           return;
         }
-        _debugLog('App-filter capture #$_captureCount: window captured');
-        await _uploadImage(frame, screenIndex: 1);
+        _debugLog('App-filter capture #$_captureCount: ${result.exe} · ${result.windowTitle}');
+        await _uploadImage(result.bytes, screenIndex: 1);
         return;
       }
 
@@ -167,8 +180,7 @@ class ScreenshotService {
         final one = await _captureLinuxNative();
         if (one != null && one.isNotEmpty) frames.add(one);
       } else if (Platform.isMacOS) {
-        final one = await _captureMacOS();
-        if (one != null && one.isNotEmpty) frames.add(one);
+        frames.addAll(await _captureMacOSPerDisplay());
       }
 
       if (frames.isEmpty) {
@@ -177,48 +189,79 @@ class ScreenshotService {
       }
 
       _debugLog('Capture #$_captureCount: ${frames.length} screen(s)');
+      // Upload each monitor as its own backend slot (date/screenN/…).
       for (var i = 0; i < frames.length; i++) {
         await _uploadImage(frames[i], screenIndex: i + 1);
       }
     } catch (e) {
       _debugLog('Capture error: $e');
+    } finally {
+      _captureInFlight = false;
     }
   }
 
   /// Capture each Windows monitor as its own image (not one stitched VirtualScreen).
   Future<List<Uint8List>> _captureWindowsPerMonitor() async {
+    File? scriptFile;
     try {
       final tempDir = await getTemporaryDirectory();
       final sep = Platform.pathSeparator;
       final stamp = DateTime.now().millisecondsSinceEpoch;
       final prefix = '${tempDir.path}${sep}aims_cap_$stamp';
+      scriptFile = File('${tempDir.path}${sep}aims_cap_$stamp.ps1');
 
+      // Primary first, then left→right. Backend slots: screen1, screen2, …
       final psScript = '''
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 try {
-  \$screens = [System.Windows.Forms.Screen]::AllScreens
+  Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AimsDpi {
+  [DllImport("user32.dll")]
+  public static extern bool SetProcessDPIAware();
+}
+"@
+  [AimsDpi]::SetProcessDPIAware() | Out-Null
+} catch {}
+try {
+  \$screens = [System.Windows.Forms.Screen]::AllScreens |
+    Sort-Object { -not \$_.Primary }, { \$_.Bounds.X }, { \$_.Bounds.Y }
   if (-not \$screens -or \$screens.Count -lt 1) {
     Write-Output "ERROR:No screens"
     exit 1
   }
   \$i = 0
+  \$saved = New-Object System.Collections.Generic.List[int]
   foreach (\$screen in \$screens) {
     \$i++
     \$b = \$screen.Bounds
-    \$bitmap = New-Object System.Drawing.Bitmap(\$b.Width, \$b.Height)
+    if (\$b.Width -lt 1 -or \$b.Height -lt 1) { continue }
+    \$bitmap = New-Object System.Drawing.Bitmap([int]\$b.Width, [int]\$b.Height)
     \$graphics = [System.Drawing.Graphics]::FromImage(\$bitmap)
-    \$graphics.CopyFromScreen(\$b.Location, [System.Drawing.Point]::Empty, \$b.Size)
-    \$out = '${prefix}_' + \$i + '.png'
-    \$bitmap.Save(\$out, [System.Drawing.Imaging.ImageFormat]::Png)
-    \$graphics.Dispose()
-    \$bitmap.Dispose()
+    try {
+      \$graphics.CopyFromScreen([int]\$b.X, [int]\$b.Y, 0, 0, \$bitmap.Size)
+      \$out = "${prefix}_\$i.png"
+      \$bitmap.Save(\$out, [System.Drawing.Imaging.ImageFormat]::Png)
+      if (Test-Path -LiteralPath \$out) { [void]\$saved.Add(\$i) }
+    } finally {
+      \$graphics.Dispose()
+      \$bitmap.Dispose()
+    }
   }
-  Write-Output "SUCCESS:\$i"
+  if (\$saved.Count -lt 1) {
+    Write-Output "ERROR:No frames saved"
+    exit 1
+  }
+  Write-Output ("SUCCESS:" + ([string]::Join(",", \$saved)))
 } catch {
   Write-Output "ERROR:\$(\$_.Exception.Message)"
+  exit 1
 }
 ''';
+
+      await scriptFile.writeAsString(psScript, flush: true);
 
       final result = await Process.run(
         'powershell',
@@ -228,23 +271,33 @@ try {
           '-NoProfile',
           '-WindowStyle',
           'Hidden',
-          '-Command',
-          psScript,
+          '-File',
+          scriptFile.path,
         ],
         runInShell: false,
       );
 
       final out = result.stdout.toString().trim();
-      if (result.exitCode != 0 || !out.startsWith('SUCCESS:')) {
+      final successLine = out
+          .split(RegExp(r'[\r\n]+'))
+          .map((l) => l.trim())
+          .firstWhere((l) => l.startsWith('SUCCESS:'), orElse: () => '');
+
+      if (result.exitCode != 0 || successLine.isEmpty) {
         _debugLog('Windows multi-monitor capture failed: $out');
-        // Fallback: legacy virtual-desktop capture
         final legacy = await _captureWindowsVirtualScreen();
         return legacy == null ? <Uint8List>[] : <Uint8List>[legacy];
       }
 
-      final count = int.tryParse(out.split(':').last.trim()) ?? 0;
+      final ids = successLine
+          .substring('SUCCESS:'.length)
+          .split(',')
+          .map((s) => int.tryParse(s.trim()))
+          .whereType<int>()
+          .toList();
+
       final frames = <Uint8List>[];
-      for (var i = 1; i <= count; i++) {
+      for (final i in ids) {
         final file = File('${prefix}_$i.png');
         if (await file.exists()) {
           final bytes = await file.readAsBytes();
@@ -256,11 +309,16 @@ try {
         final legacy = await _captureWindowsVirtualScreen();
         return legacy == null ? <Uint8List>[] : <Uint8List>[legacy];
       }
+      _debugLog('Windows captured ${frames.length} monitor(s)');
       return frames;
     } catch (e) {
       _debugLog('Windows per-monitor capture error: $e');
       final legacy = await _captureWindowsVirtualScreen();
       return legacy == null ? <Uint8List>[] : <Uint8List>[legacy];
+    } finally {
+      if (scriptFile != null) {
+        await scriptFile.delete().catchError((_) => scriptFile!);
+      }
     }
   }
 
@@ -320,6 +378,51 @@ try {
     } catch (e) {
       _debugLog('Windows capture error: $e');
       return null;
+    }
+  }
+
+  /// One PNG per macOS display (Display 1 → screen1, …).
+  Future<List<Uint8List>> _captureMacOSPerDisplay() async {
+    final frames = <Uint8List>[];
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final sep = Platform.pathSeparator;
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+
+      for (var display = 1; display <= 8; display++) {
+        final tempFile =
+            '${tempDir.path}${sep}mac_cap_${stamp}_d$display.png';
+        final result = await Process.run(
+          'screencapture',
+          ['-x', '-D', '$display', tempFile],
+          runInShell: false,
+        ).timeout(const Duration(seconds: 12));
+        final file = File(tempFile);
+        if (result.exitCode != 0 || !await file.exists()) {
+          await file.delete().catchError((_) => file);
+          if (display == 1) {
+            // Fallback: whole desktop as a single frame
+            final one = await _captureMacOS();
+            return one == null ? <Uint8List>[] : <Uint8List>[one];
+          }
+          break;
+        }
+        final bytes = await file.readAsBytes();
+        await file.delete().catchError((_) => file);
+        if (bytes.isEmpty) {
+          if (display == 1) {
+            final one = await _captureMacOS();
+            return one == null ? <Uint8List>[] : <Uint8List>[one];
+          }
+          break;
+        }
+        frames.add(bytes);
+      }
+      return frames;
+    } catch (e) {
+      _debugLog('macOS multi-display capture error: $e');
+      final one = await _captureMacOS();
+      return one == null ? <Uint8List>[] : <Uint8List>[one];
     }
   }
 
@@ -487,24 +590,57 @@ try {
 
   Future<void> _uploadImage(Uint8List imageBytes, {int screenIndex = 1}) async {
     try {
-      final uploadBytes = compressToJpeg(imageBytes, maxWidth: 1280, quality: 72);
+      final activityStatus = activityDetection.analyzeScreenshot(
+        imageBytes,
+        screenIndex: screenIndex,
+      );
+      final unchanged = activityStatus['unchanged'] == true;
+      final contentHash = (activityStatus['content_hash'] ?? '').toString();
+      final isIdle = activityStatus['is_idle'] == true;
+      final idleDuration = activityStatus['idle_duration'] as int? ?? 0;
+      final lastActivityAt = activityStatus['last_activity_at']?.toString();
 
-      final activityStatus = activityDetection.analyzeScreenshot(imageBytes);
-      if (activityStatus['is_idle'] == true) {
+      if (isIdle) {
         _isUserActive = false;
       } else {
         _isUserActive = true;
       }
 
+      // Same pixels as last successful upload → heartbeat only (no duplicate file).
+      if (unchanged &&
+          contentHash.isNotEmpty &&
+          _lastUploadedHashByScreen[screenIndex] == contentHash) {
+        final beat = await apiService.screenshotHeartbeat(
+          isIdle: isIdle,
+          idleDuration: idleDuration,
+          lastActivityAt: lastActivityAt,
+          screenIndex: screenIndex,
+        );
+        if (beat['success'] == true) {
+          _debugLog(
+            'Heartbeat screen $screenIndex (unchanged · ${isIdle ? "idle" : "active"})',
+          );
+          return;
+        }
+        // No prior shot on server — fall through to real upload.
+        if ((beat['code'] ?? '').toString() != 'NO_SCREENSHOT') {
+          _debugLog('Heartbeat failed (screen $screenIndex): ${beat['error']} — uploading frame');
+        }
+      }
+
+      final uploadBytes = compressToJpeg(imageBytes, maxWidth: 1280, quality: 72);
       final result = await apiService.uploadScreenshot(
         uploadBytes,
-        isIdle: activityStatus['is_idle'] == true,
-        idleDuration: activityStatus['idle_duration'] as int? ?? 0,
-        lastActivityAt: activityStatus['last_activity_at']?.toString(),
+        isIdle: isIdle,
+        idleDuration: idleDuration,
+        lastActivityAt: lastActivityAt,
         screenIndex: screenIndex,
       );
 
       if (result['success'] == true) {
+        if (contentHash.isNotEmpty) {
+          _lastUploadedHashByScreen[screenIndex] = contentHash;
+        }
         _debugLog(
           'Uploaded screen $screenIndex ${(uploadBytes.length / 1024).toStringAsFixed(0)}KB',
         );
@@ -518,6 +654,11 @@ try {
 
   Future<void> stopCapture() async {
     _isRunning = false;
+    _captureInFlight = false;
+    _appFilterMode = false;
+    _allowedApps = const [];
+    _lastUploadedHashByScreen.clear();
+    activityDetection.reset();
     _screenshotTimer?.cancel();
     _activityCheckTimer?.cancel();
     _debugLog('Screenshot service stopped');

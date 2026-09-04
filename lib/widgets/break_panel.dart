@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../app_session.dart';
 import '../services/api_service.dart';
 import '../services/screenshot_service.dart';
 import '../services/app_filter_prefs.dart';
@@ -147,13 +148,16 @@ class _BreakPanelState extends State<BreakPanel> {
   Future<void> _resumeCaptureAfterBreak() async {
     final svc = widget.screenshotService;
     if (svc == null) return;
-    final active = await AppFilterPrefs.loadActive();
-    final exes = await AppFilterPrefs.loadAllowedExes();
-    if (active && exes.isNotEmpty) {
-      await svc.startAppFilterCapture(exes);
-    } else {
-      await svc.startCapture();
+    if (AppSession.usesAppWindowCapture) {
+      final apps = await AppFilterPrefs.loadAllowedApps();
+      if (apps.isNotEmpty) {
+        await svc.startAppFilterCapture(apps);
+        return;
+      }
+      // App-window policy but no allowlist yet — do not fall back to full screen.
+      return;
     }
+    await svc.startCapture();
   }
 
   Future<void> _startBreakNow() async {

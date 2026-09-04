@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../app_session.dart';
 import '../config.dart';
 import '../services/api_service.dart';
+import '../services/app_filter_prefs.dart';
 import '../services/user_data_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
@@ -125,6 +126,11 @@ class _LoginPageState extends State<LoginPage> {
       final consent = emp?['screenshot_monitoring_consent'] == true;
       await prefs.setBool('screenshot_monitoring_consent', consent);
       AppSession.setConsent(consent);
+      if (emp is Map) {
+        await AppFilterPrefs.applyServerCaptureMode(emp['screenshot_capture_mode']);
+      } else {
+        await AppFilterPrefs.applyServerCaptureMode(null);
+      }
 
       int intVal(dynamic v, int d) {
         if (v is int) return v;

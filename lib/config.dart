@@ -81,6 +81,7 @@ class AppConfig {
       _wsUri('/ws/p2p/$sessionId/', {'token': token});
 
   static String get screenshotUploadUrl => '$apiBaseUrl/screenshots/upload/';
+  static String get screenshotHeartbeatUrl => '$apiBaseUrl/screenshots/heartbeat/';
   static String get checkInUrl => '$apiBaseUrl/attendance/checkin/';
   static String get checkOutUrl => '$apiBaseUrl/attendance/checkout/';
   static String get tasksUrl => '$apiBaseUrl/tasks/';
@@ -172,6 +173,8 @@ class AppConfig {
   // Project vault (credentials per project)
   static String get vaultMyHubUrl => '$apiBaseUrl/projects/vault/my/';
   static String get vaultSharedWithMeUrl => '$apiBaseUrl/projects/vault/shared-with-me/';
+  static String vaultProjectSharedWithMeUrl(int projectId) =>
+      '$apiBaseUrl/projects/$projectId/vault/shared-with-me/';
   static String vaultCategoriesUrl(int projectId) =>
       '$apiBaseUrl/projects/$projectId/vault/categories/';
   static String vaultCategoryUrl(int projectId, int categoryId) =>

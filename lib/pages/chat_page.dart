@@ -1,8 +1,9 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
@@ -18,6 +19,8 @@ import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../widgets/app_logo.dart';
+import '../widgets/chat_details_panel.dart';
+import '../widgets/chat_image_viewer.dart';
 import '../widgets/empty_state.dart';
 import '../utils/responsive.dart';
 import '../utils/platform_capabilities.dart';
@@ -83,11 +86,17 @@ class _ChatPageState extends State<ChatPage> {
   Map<String, dynamic>? _replyTo;
   /// Keep quote visible even if API refresh omits `reply` (migration lag / race).
   final Map<int, Map<String, dynamic>> _replyQuotesByMsgId = {};
-  /// peerUserId / groupId → display name while typing
+  /// peerUserId / groupId â†’ display name while typing
   final Map<String, String> _typingPeers = {};
   final _imagePicker = ImagePicker();
   bool _emojiOpen = false;
   double _emojiPanelHeight = 280;
+  /// Latest chat thread pane width (from LayoutBuilder) for bubble sizing.
+  double _chatThreadWidth = 400;
+  /// WhatsApp-style contact/group details (right pane on wide desktop).
+  bool _detailsOpen = false;
+  /// Filter messages in the open thread (from details Search).
+  String _inChatQuery = '';
 
   bool get _supportsNativeAudio => PlatformCapabilities.nativeAudio;
 
@@ -177,7 +186,7 @@ class _ChatPageState extends State<ChatPage> {
     super.dispose();
   }
 
-  // ─── Data Loading ───
+  // â”€â”€â”€ Data Loading â”€â”€â”€
   Future<void> _loadUsers({bool silent = false}) async {
     if (!silent && mounted) setState(() => _isLoadingUsers = true);
     final result = await widget.apiService.getChatUsers();
@@ -240,8 +249,15 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _formatChatListTime(dynamic iso) {
-    final dt = DateTime.tryParse('${iso ?? ''}');
+    DateTime? dt;
+    if (iso is DateTime) {
+      dt = iso;
+    } else {
+      dt = DateTime.tryParse('${iso ?? ''}');
+    }
     if (dt == null) return '';
+    // Epoch / missing timestamps (shown as 1/1/70) â€” hide instead of showing junk.
+    if (dt.year < 2000) return '';
     final local = dt.toLocal();
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -258,7 +274,7 @@ class _ChatPageState extends State<ChatPage> {
 
   String _chatPreviewText(Map user) {
     final key = 'u:${user['id']}';
-    if (_typingPeers.containsKey(key)) return 'typing…';
+    if (_typingPeers.containsKey(key)) return 'typingâ€¦';
     final raw = (user['last_message'] ?? '').toString().trim();
     if (raw.isNotEmpty) return raw;
     final designation = (user['designation'] ?? '').toString().trim();
@@ -295,7 +311,7 @@ class _ChatPageState extends State<ChatPage> {
 
     final preview = text.trim().isEmpty
         ? _chatPreviewText({'last_message': data['message_type']})
-        : (text.length > 80 ? '${text.substring(0, 80)}…' : text);
+        : (text.length > 80 ? '${text.substring(0, 80)}â€¦' : text);
     final nowIso = DateTime.now().toUtc().toIso8601String();
 
     setState(() {
@@ -418,7 +434,7 @@ class _ChatPageState extends State<ChatPage> {
   String? _activeTypingLabel() {
     if (_selectedUser != null) {
       final key = 'u:${_selectedUser['id']}';
-      if (_typingPeers.containsKey(key)) return 'typing…';
+      if (_typingPeers.containsKey(key)) return 'typingâ€¦';
       return null;
     }
     if (_selectedGroup != null) {
@@ -428,8 +444,8 @@ class _ChatPageState extends State<ChatPage> {
           .map((e) => e.value)
           .toList();
       if (names.isEmpty) return null;
-      if (names.length == 1) return '${names.first} is typing…';
-      return '${names.length} people typing…';
+      if (names.length == 1) return '${names.first} is typingâ€¦';
+      return '${names.length} people typingâ€¦';
     }
     return null;
   }
@@ -501,13 +517,15 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> _selectUser(dynamic user, {bool resetQuotes = true}) async {
+  Future<void> _selectUser(dynamic user, {bool resetQuotes = true, bool openDetails = false}) async {
     _stopTypingSignal();
     setState(() {
       _selectedUser = user;
       _selectedGroup = null;
       _messages = [];
       _replyTo = null;
+      _inChatQuery = '';
+      if (openDetails) _detailsOpen = true;
       if (resetQuotes) _replyQuotesByMsgId.clear();
       _typingPeers.removeWhere((k, _) => k.startsWith('g:'));
     });
@@ -518,15 +536,18 @@ class _ChatPageState extends State<ChatPage> {
       _scrollToBottom();
       unawaited(widget.apiService.markMessagesRead(user['id']));
     }
+    if (openDetails && mounted) await _revealDetailsPanel();
   }
 
-  Future<void> _selectGroup(dynamic group, {bool resetQuotes = true}) async {
+  Future<void> _selectGroup(dynamic group, {bool resetQuotes = true, bool openDetails = false}) async {
     _stopTypingSignal();
     setState(() {
       _selectedGroup = group;
       _selectedUser = null;
       _messages = [];
       _replyTo = null;
+      _inChatQuery = '';
+      if (openDetails) _detailsOpen = true;
       if (resetQuotes) _replyQuotesByMsgId.clear();
       _typingPeers.removeWhere((k, _) => k.startsWith('u:'));
     });
@@ -536,6 +557,214 @@ class _ChatPageState extends State<ChatPage> {
       setState(() => _messages = _hydrateMessages(result['data'] ?? []));
       _scrollToBottom();
     }
+    if (openDetails && mounted) await _revealDetailsPanel();
+  }
+
+  Future<void> _revealDetailsPanel() async {
+    if (!_detailsOpen) setState(() => _detailsOpen = true);
+    if (!Responsive.useChatDetailsPane(context)) {
+      await _showDetailsSheet();
+    }
+  }
+
+  Future<void> _toggleDetails() async {
+    if (_selectedUser == null && _selectedGroup == null) return;
+    if (_detailsOpen && Responsive.useChatDetailsPane(context)) {
+      setState(() => _detailsOpen = false);
+      return;
+    }
+    setState(() => _detailsOpen = true);
+    if (!Responsive.useChatDetailsPane(context)) {
+      await _showDetailsSheet();
+    }
+  }
+
+  Future<void> _showDetailsSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0B141A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.88,
+        maxChildSize: 0.95,
+        minChildSize: 0.45,
+        expand: false,
+        builder: (ctx, scroll) => ChatDetailsPanel(
+          isGroup: _selectedGroup != null,
+          name: _detailsName,
+          subtitle: _detailsSubtitle,
+          avatarColor: _avatarColor(_detailsAvatarKey),
+          initials: _initials(_detailsName),
+          isOnline: _detailsOnline,
+          mediaItems: _sharedMediaItems(),
+          fileItems: _sharedFileItems(),
+          voiceItems: _sharedVoiceItems(),
+          username: _selectedUser?['username']?.toString(),
+          email: _selectedUser?['email']?.toString(),
+          description: _selectedGroup?['description']?.toString(),
+          memberCount: _asInt(_selectedGroup?['member_count']) ?? 0,
+          scrollController: scroll,
+          onClose: () => Navigator.pop(ctx),
+          onVideoCall: () {
+            Navigator.pop(ctx);
+            unawaited(_startCall(CallKind.video));
+          },
+          onVoiceCall: () {
+            Navigator.pop(ctx);
+            unawaited(_startCall(CallKind.audio));
+          },
+          onOpenGroupSettings: _selectedGroup == null
+              ? null
+              : () {
+                  Navigator.pop(ctx);
+                  _showGroupSettings(_selectedGroup);
+                },
+          onSearchInChat: () {
+            Navigator.pop(ctx);
+            _promptInChatSearch();
+          },
+          onOpenMediaUrl: (url) => unawaited(_openSharedMediaUrl(url)),
+        ),
+      ),
+    );
+    if (mounted && !Responsive.useChatDetailsPane(context)) {
+      setState(() => _detailsOpen = false);
+    }
+  }
+
+  String get _detailsName {
+    if (_selectedGroup != null) return (_selectedGroup['name'] ?? 'Group').toString();
+    return (_selectedUser?['full_name'] ?? _selectedUser?['username'] ?? 'Chat').toString();
+  }
+
+  String get _detailsSubtitle {
+    if (_selectedGroup != null) {
+      final members = '${_selectedGroup['member_count'] ?? 0} members';
+      if (_isPersonalGroup) return '$members Â· personal inbox';
+      return members;
+    }
+    final online = _parseOnline(_selectedUser?['is_online']);
+    return online ? 'online' : _formatLastSeen(_selectedUser?['last_seen']);
+  }
+
+  bool get _detailsOnline =>
+      _selectedGroup == null && _parseOnline(_selectedUser?['is_online']);
+
+  int get _detailsAvatarKey {
+    if (_selectedUser != null) return _asInt(_selectedUser['id']) ?? 0;
+    return _asInt(_selectedGroup?['id']) ?? 0;
+  }
+
+  List<Map<String, dynamic>> _sharedMediaItems() {
+    return _messages
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
+        .where((m) {
+          final url = (m['image_url'] ?? '').toString();
+          final type = (m['message_type'] ?? '').toString();
+          return url.isNotEmpty || type == 'image';
+        })
+        .where((m) => (m['image_url'] ?? '').toString().isNotEmpty)
+        .toList()
+        .reversed
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _sharedFileItems() {
+    return _messages
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
+        .where((m) => (m['file_url'] ?? '').toString().isNotEmpty)
+        .toList()
+        .reversed
+        .toList();
+  }
+
+  List<Map<String, dynamic>> _sharedVoiceItems() {
+    return _messages
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
+        .where((m) => (m['voice_url'] ?? '').toString().isNotEmpty)
+        .toList()
+        .reversed
+        .toList();
+  }
+
+  void _promptInChatSearch() {
+    final ctrl = TextEditingController(text: _inChatQuery);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.dialogBg,
+        title: const Text('Search in chat', style: TextStyle(color: AppTheme.textPrimary)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: AppTheme.textPrimary),
+          decoration: _dialogInputDecor('Type to filter messagesâ€¦'),
+          onSubmitted: (v) {
+            setState(() => _inChatQuery = v.trim());
+            Navigator.pop(ctx);
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              setState(() => _inChatQuery = '');
+              Navigator.pop(ctx);
+            },
+            child: const Text('Clear'),
+          ),
+          TextButton(
+            onPressed: () {
+              setState(() => _inChatQuery = ctrl.text.trim());
+              Navigator.pop(ctx);
+            },
+            child: const Text('Search'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<dynamic> get _visibleMessages {
+    final q = _inChatQuery.trim().toLowerCase();
+    if (q.isEmpty) return _messages;
+    return _messages.where((m) {
+      if (m is! Map) return false;
+      final text = (m['message'] ?? '').toString().toLowerCase();
+      final type = (m['message_type'] ?? '').toString().toLowerCase();
+      final sender = (m['sender_name'] ?? m['sender_username'] ?? '').toString().toLowerCase();
+      return text.contains(q) || type.contains(q) || sender.contains(q);
+    }).toList();
+  }
+
+  Widget _buildDetailsPane() {
+    return ChatDetailsPanel(
+      isGroup: _selectedGroup != null,
+      name: _detailsName,
+      subtitle: _detailsSubtitle,
+      avatarColor: _avatarColor(_detailsAvatarKey),
+      initials: _initials(_detailsName),
+      isOnline: _detailsOnline,
+      mediaItems: _sharedMediaItems(),
+      fileItems: _sharedFileItems(),
+      voiceItems: _sharedVoiceItems(),
+      username: _selectedUser?['username']?.toString(),
+      email: _selectedUser?['email']?.toString(),
+      description: _selectedGroup?['description']?.toString(),
+      memberCount: _asInt(_selectedGroup?['member_count']) ?? 0,
+      onClose: () => setState(() => _detailsOpen = false),
+      onVideoCall: () => unawaited(_startCall(CallKind.video)),
+      onVoiceCall: () => unawaited(_startCall(CallKind.audio)),
+      onOpenGroupSettings:
+          _selectedGroup == null ? null : () => _showGroupSettings(_selectedGroup),
+      onSearchInChat: _promptInChatSearch,
+      onOpenMediaUrl: (url) => unawaited(_openSharedMediaUrl(url)),
+    );
   }
 
   void _startRefresh() {
@@ -651,7 +880,12 @@ class _ChatPageState extends State<ChatPage> {
     if (_selectedUser != null) {
       result = await widget.apiService.sendMessage(_selectedUser['id'], text, replyToId: replyId);
     } else {
-      result = await widget.apiService.sendGroupMessage(_selectedGroup['id'], text, replyToId: replyId);
+      result = await widget.apiService.sendGroupMessage(
+        _selectedGroup['id'],
+        text,
+        replyToId: replyId,
+        recipientIds: _personalRecipientIds(replySnapshot),
+      );
     }
 
     if (!mounted) return;
@@ -728,6 +962,7 @@ class _ChatPageState extends State<ChatPage> {
       _emojiOpen = false;
       _replyTo = {
         'id': id,
+        'sender_id': map['sender_id'] ?? map['sender'],
         'sender_name': map['is_own'] == true
             ? 'You'
             : (map['sender_name'] ??
@@ -739,6 +974,52 @@ class _ChatPageState extends State<ChatPage> {
       };
     });
     _msgFocus.requestFocus();
+  }
+
+  List<Map<String, dynamic>> _chatImageMessages() {
+    return _messages
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
+        .where((m) {
+          if (m['is_deleted'] == true) return false;
+          return (m['image_url'] ?? '').toString().trim().isNotEmpty;
+        })
+        .toList();
+  }
+
+  Future<void> _openChatImageViewer(Map msg, {String? preferUrl}) async {
+    final images = _chatImageMessages();
+    if (images.isEmpty) {
+      final url = preferUrl ?? (msg['image_url'] ?? '').toString();
+      if (url.isNotEmpty) await _openFileUrl(url);
+      return;
+    }
+    var initial = images.indexWhere((m) => _asInt(m['id']) == _asInt(msg['id']));
+    if (initial < 0 && preferUrl != null && preferUrl.isNotEmpty) {
+      initial = images.indexWhere((m) => (m['image_url'] ?? '').toString() == preferUrl);
+    }
+    if (initial < 0) initial = 0;
+
+    await ChatImageViewer.open(
+      context,
+      images: images,
+      initialIndex: initial,
+      onReply: (m) async => _setReplyTo(m),
+      onForward: (m) async => _forwardMessage(m),
+      onDelete: (m) async => _deleteMessage(m),
+      onInfo: (m) => _showMessageInfo(m),
+      onOpenExternal: (url) => _openFileUrl(url),
+    );
+  }
+
+  Future<void> _openSharedMediaUrl(String url) async {
+    final images = _chatImageMessages();
+    final idx = images.indexWhere((m) => (m['image_url'] ?? '').toString() == url);
+    if (idx >= 0) {
+      await _openChatImageViewer(images[idx], preferUrl: url);
+      return;
+    }
+    await openChatMediaUrl(url);
   }
 
   void _toggleEmojiPanel() {
@@ -782,7 +1063,7 @@ class _ChatPageState extends State<ChatPage> {
     }
     final text = (msg['message'] ?? '').toString().trim();
     if (text.isEmpty) return 'Message';
-    return text.length > 100 ? '${text.substring(0, 100)}…' : text;
+    return text.length > 100 ? '${text.substring(0, 100)}â€¦' : text;
   }
 
   Future<void> _startCall(CallKind kind) async {
@@ -834,7 +1115,7 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  // ─── Voice recording (Android/iOS: record package, Windows: PowerShell) ───
+  // â”€â”€â”€ Voice recording (Android/iOS: record package, Windows: PowerShell) â”€â”€â”€
   Future<void> _toggleRecording() async {
     if (_isRecording) {
       await _stopAndSendRecording();
@@ -935,7 +1216,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     if (mounted) setState(() => _recordSeconds = 0);
   }
 
-  // ─── Attach (WhatsApp paperclip sheet) ───
+  // â”€â”€â”€ Attach (WhatsApp paperclip sheet) â”€â”€â”€
   Future<void> _showAttachSheet() async {
     if (_selectedUser == null && _selectedGroup == null) return;
     final mobile = Responsive.isMobile(context);
@@ -978,7 +1259,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   Expanded(
                     child: _attachTile(
                       icon: Icons.photo_library_rounded,
-                      label: 'Gallery',
+                      label: mobile ? 'Gallery' : 'Photo',
                       color: const Color(0xFFA855F7),
                       onTap: () {
                         Navigator.pop(ctx);
@@ -1118,6 +1399,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         bytes,
         name.isNotEmpty ? name : 'photo.jpg',
         replyToId: replyId,
+        recipientIds: _personalRecipientIds(replySnapshot),
       );
     }
     if (!mounted) return;
@@ -1171,6 +1453,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         bytes,
         pf.name,
         replyToId: replyId,
+        recipientIds: _personalRecipientIds(replySnapshot),
       );
     }
     if (!mounted) return;
@@ -1192,7 +1475,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     }
   }
 
-  // ─── Play Voice ───
+  // â”€â”€â”€ Play Voice â”€â”€â”€
   Future<void> _playVoice(String url) async {
     final player = _player;
     if (player == null) {
@@ -1219,8 +1502,18 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     }
   }
 
-  Future<void> _createGroup(String name, String desc, List<int> memberIds) async {
-    final result = await widget.apiService.createGroup(name, desc, memberIds);
+  Future<void> _createGroup(
+    String name,
+    String desc,
+    List<int> memberIds, {
+    String visibilityMode = 'shared',
+  }) async {
+    final result = await widget.apiService.createGroup(
+      name,
+      desc,
+      memberIds,
+      visibilityMode: visibilityMode,
+    );
     if (result['success'] == true) {
       _loadGroups();
       _showSuccess('Group created');
@@ -1228,6 +1521,25 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       _showError(result['error']?.toString() ?? 'Failed to create group');
     }
   }
+
+  /// Personal groups: reply targets the other person so only they (+ admins) see it.
+  List<int>? _personalRecipientIds(Map<String, dynamic>? replySnapshot) {
+    final mode =
+        (_selectedGroup is Map ? _selectedGroup['visibility_mode'] : null)?.toString() ??
+            'shared';
+    if (mode != 'personal') return null;
+    final replySender = _chatInt(
+      replySnapshot?['sender_id'] ?? replySnapshot?['sender'],
+    );
+    if (replySender != null && replySender != _myUserId) {
+      return [replySender];
+    }
+    return null;
+  }
+
+  bool get _isPersonalGroup =>
+      (_selectedGroup is Map ? _selectedGroup['visibility_mode'] : null)?.toString() ==
+      'personal';
 
   void _scrollToBottom() {
     Future.delayed(Duration(milliseconds: 150), () {
@@ -1265,8 +1577,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     } catch (_) { return ''; }
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  /// Logo → dashboard (home tab). Used when immersive chrome hides the main top bar.
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  /// Logo â†’ dashboard (home tab). Used when immersive chrome hides the main top bar.
   Widget _dashboardLogoButton() {
     return Tooltip(
       message: 'Dashboard',
@@ -1285,12 +1597,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   }
 
   // BUILD
-  // ═══════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   @override
   Widget build(BuildContext context) {
-    final isWide = Responsive.useChatSplit(context);
-    final hasChat = _selectedUser != null || _selectedGroup != null;
-    final listWidth = isWide ? Responsive.chatListPaneWidth(context) : double.infinity;
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final immersive = PlatformCapabilities.immersiveChatChrome;
     final bottomInset = keyboard > 0
@@ -1304,27 +1613,67 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       child: SafeArea(
         top: immersive,
         bottom: false,
-        child: isWide
-            ? Row(children: [
-                SizedBox(width: listWidth, child: _buildSidebar()),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final totalW = constraints.maxWidth;
+            final isWide = totalW >= Responsive.chatSplitMinWidth;
+            final hasChat = _selectedUser != null || _selectedGroup != null;
+            if (!isWide) {
+              return hasChat ? _buildChatArea() : _buildSidebar();
+            }
+
+            final showDetails = hasChat &&
+                _detailsOpen &&
+                totalW >= Responsive.chatDetailsMinWidth;
+            final detailsW = showDetails
+                ? Responsive.chatDetailsPaneWidthFor(totalW)
+                : 0.0;
+            final listW = Responsive.chatListPaneWidthFor(totalW, reserved: detailsW);
+            // Keep chat pane from collapsing under list + details.
+            final minChat = 280.0;
+            final cappedList = listW.clamp(
+              200.0,
+              (totalW - detailsW - minChat - 2).clamp(200.0, listW),
+            );
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  width: cappedList,
+                  child: ClipRect(child: _buildSidebar()),
+                ),
                 Container(width: 1, color: Colors.white.withValues(alpha: 0.08)),
-                Expanded(child: hasChat ? _buildChatArea() : _buildEmptyState()),
-              ])
-            : hasChat ? _buildChatArea() : _buildSidebar(),
+                Expanded(
+                  child: hasChat ? _buildChatArea() : _buildEmptyState(),
+                ),
+                if (showDetails) ...[
+                  Container(width: 1, color: Colors.white.withValues(alpha: 0.08)),
+                  SizedBox(
+                    width: detailsW,
+                    child: ClipRect(child: _buildDetailsPane()),
+                  ),
+                ],
+              ],
+            );
+          },
+        ),
       ),
     );
   }
 
-  // ─── LEFT SIDEBAR (WhatsApp-style unified inbox) ───
+  // â”€â”€â”€ LEFT SIDEBAR (WhatsApp-style unified inbox) â”€â”€â”€
   Widget _buildSidebar() {
     final immersive = PlatformCapabilities.immersiveChatChrome;
+    // Sidebar-local padding â€” never use full-window pagePadding (that squeezes search).
+    const sidePad = 12.0;
     return Column(
       children: [
         Padding(
           padding: EdgeInsets.fromLTRB(
-            immersive ? 4 : Responsive.pagePadding(context),
+            immersive ? 4 : sidePad,
             immersive ? 4 : 8,
-            8,
+            immersive ? 4 : 8,
             4,
           ),
           child: Row(
@@ -1339,6 +1688,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                 child: Text(
                   'Chats',
                   textAlign: TextAlign.left,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 22,
@@ -1350,6 +1701,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               IconButton(
                 tooltip: 'New group',
                 onPressed: _showCreateGroupDialog,
+                visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.group_add_rounded, color: AppTheme.primaryBright, size: 22),
               ),
               if (immersive) _dashboardLogoButton(),
@@ -1357,28 +1709,30 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           ),
         ),
         Padding(
-          padding: EdgeInsets.fromLTRB(Responsive.pagePadding(context), 6, Responsive.pagePadding(context), 8),
+          padding: const EdgeInsets.fromLTRB(sidePad, 4, sidePad, 8),
           child: TextField(
             controller: _searchController,
             onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
-            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
             decoration: InputDecoration(
-              hintText: 'Search…',
-              hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 15),
-              prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9), size: 22),
+              hintText: 'Searchâ€¦',
+              hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 14),
+              prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9), size: 20),
+              prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+              isDense: true,
               filled: true,
               fillColor: Colors.white.withValues(alpha: 0.07),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(22),
                 borderSide: BorderSide.none,
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(22),
                 borderSide: BorderSide.none,
               ),
               focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(22),
                 borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.45)),
               ),
             ),
@@ -1451,20 +1805,20 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         final typingKey = isGroup ? 'g:$id' : 'u:$id';
         final isTyping = _typingPeers.containsKey(typingKey);
         final preview = isTyping
-            ? 'typing…'
+            ? 'typingâ€¦'
             : (isGroup
                 ? ((data['last_message'] ?? '').toString().trim().isEmpty
                     ? '${data['member_count'] ?? 0} members'
                     : data['last_message'].toString())
                 : _chatPreviewText(Map<String, dynamic>.from(data)));
-        final timeLabel = _formatChatListTime(data['last_message_at'] ?? row['at']);
+        final timeLabel = _formatChatListTime(data['last_message_at']);
 
         return Material(
           color: Colors.transparent,
           child: InkWell(
             onTap: () => isGroup ? _selectGroup(data) : _selectUser(data),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
               color: isSelected ? AppTheme.primary.withValues(alpha: 0.14) : Colors.transparent,
               child: Row(
                 children: [
@@ -1472,13 +1826,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     clipBehavior: Clip.none,
                     children: [
                       CircleAvatar(
-                        radius: 24,
+                        radius: 20,
                         backgroundColor: isGroup ? AppTheme.primary : _avatarColor(id),
                         child: isGroup
-                            ? const Icon(Icons.group_rounded, color: Colors.white, size: 22)
+                            ? const Icon(Icons.group_rounded, color: Colors.white, size: 18)
                             : Text(
                                 _initials(name),
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13),
                               ),
                       ),
                       if (!isGroup)
@@ -1497,7 +1851,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                         ),
                     ],
                   ),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1507,23 +1861,26 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                             Expanded(
                               child: Text(
                                 name,
+                                maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
-                                  fontSize: 16,
+                                  fontSize: 14.5,
                                   fontWeight: FontWeight.w600,
                                   color: AppTheme.textPrimary,
                                 ),
                               ),
                             ),
-                            if (timeLabel.isNotEmpty)
+                            if (timeLabel.isNotEmpty) ...[
+                              const SizedBox(width: 6),
                               Text(
                                 timeLabel,
                                 style: TextStyle(
-                                  fontSize: 12,
+                                  fontSize: 11,
                                   color: unread > 0 ? AppTheme.accent : AppTheme.textMuted,
                                   fontWeight: unread > 0 ? FontWeight.w600 : FontWeight.w400,
                                 ),
                               ),
+                            ],
                           ],
                         ),
                         const SizedBox(height: 2),
@@ -1535,7 +1892,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 14,
+                                  fontSize: 13,
                                   color: isTyping
                                       ? AppTheme.accent
                                       : unread > 0
@@ -1547,20 +1904,20 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                               ),
                             ),
                             if (unread > 0) ...[
-                              const SizedBox(width: 8),
+                              const SizedBox(width: 6),
                               Container(
-                                constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
-                                padding: const EdgeInsets.symmetric(horizontal: 6),
+                                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                                padding: const EdgeInsets.symmetric(horizontal: 5),
                                 decoration: const BoxDecoration(
                                   color: AppTheme.accent,
-                                  borderRadius: BorderRadius.all(Radius.circular(11)),
+                                  borderRadius: BorderRadius.all(Radius.circular(9)),
                                 ),
                                 alignment: Alignment.center,
                                 child: Text(
                                   unread > 99 ? '99+' : '$unread',
                                   style: const TextStyle(
                                     color: Color(0xFF0A1628),
-                                    fontSize: 11,
+                                    fontSize: 10,
                                     fontWeight: FontWeight.w800,
                                   ),
                                 ),
@@ -1569,6 +1926,24 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                           ],
                         ),
                       ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Details',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                    onPressed: () {
+                      if (isGroup) {
+                        unawaited(_selectGroup(data, openDetails: true));
+                      } else {
+                        unawaited(_selectUser(data, openDetails: true));
+                      }
+                    },
+                    icon: Icon(
+                      Icons.info_outline_rounded,
+                      size: 18,
+                      color: isSelected ? AppTheme.primaryBright : AppTheme.textMuted,
                     ),
                   ),
                 ],
@@ -1611,7 +1986,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
-  // ─── Users List ───
+  // â”€â”€â”€ Users List â”€â”€â”€
   Widget _buildUsersList() {
     if (_isLoadingUsers) return _buildLoader('Loading users...');
     if (_users.isEmpty) return _buildEmpty('No users available');
@@ -1776,7 +2151,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
-  // ─── Groups List ───
+  // â”€â”€â”€ Groups List â”€â”€â”€
   Widget _buildGroupsList() {
     final immersive = PlatformCapabilities.immersiveChatChrome;
     return Column(
@@ -1813,8 +2188,11 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                         final unread = group['unread_count'] ?? 0;
                         final name = group['name'] ?? 'Group';
                         final members = group['member_count'] ?? 0;
+                        final isPersonal = (group['visibility_mode'] ?? '').toString() == 'personal';
                         final preview = (group['last_message'] ?? '').toString().trim();
-                        final subtitle = preview.isNotEmpty ? preview : '$members members';
+                        final subtitle = preview.isNotEmpty
+                            ? preview
+                            : (isPersonal ? '$members members Â· personal' : '$members members');
                         final timeLabel = _formatChatListTime(group['last_message_at'] ?? group['updated_at']);
 
                         return GestureDetector(
@@ -1903,7 +2281,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     ).toList();
   }
 
-  // ─── Chat Area (Right Side) ───
+  // â”€â”€â”€ Chat Area (Right Side) â”€â”€â”€
   Widget _buildChatArea() {
     final isWide = Responsive.useChatSplit(context);
     final isGroup = _selectedGroup != null;
@@ -1914,7 +2292,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final typingLabel = _activeTypingLabel();
     final subtitle = typingLabel ??
         (isGroup
-            ? '${_selectedGroup['member_count'] ?? 0} members'
+            ? (_isPersonalGroup
+                ? '${_selectedGroup['member_count'] ?? 0} members Â· personal inbox'
+                : '${_selectedGroup['member_count'] ?? 0} members')
             : (isOnline ? 'online' : _formatLastSeen(_selectedUser?['last_seen'])));
     final subtitleColor = typingLabel != null
         ? const Color(0xFF34D399)
@@ -1925,125 +2305,200 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
     return Column(
       children: [
-        Container(
-          height: PlatformCapabilities.immersiveChatChrome ? 66 : 74,
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          decoration: BoxDecoration(
-            color: const Color(0xF20B1220),
-            border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
-          ),
-          child: Row(
-            children: [
-              if (!isWide)
-                IconButton(
-                  tooltip: 'Back',
-                  onPressed: () {
-                    _stopTypingSignal();
-                    setState(() {
-                      _selectedUser = null;
-                      _selectedGroup = null;
-                      _replyTo = null;
-                      _emojiOpen = false;
-                      _refreshTimer?.cancel();
-                    });
-                  },
-                  icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppTheme.textPrimary, size: 20),
-                ),
-              if (isGroup)
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+        LayoutBuilder(
+          builder: (context, headerConstraints) {
+            final headerW = headerConstraints.maxWidth;
+            final compact = headerW < 420;
+            final veryCompact = headerW < 340;
+            final avatarSize = compact ? 36.0 : 44.0;
+            final showCalls = !isGroup &&
+                PlatformCapabilities.voiceVideoCall &&
+                !veryCompact;
+            final showLogo = PlatformCapabilities.immersiveChatChrome && !compact;
+            final showSettings = isGroup && !veryCompact;
+
+            return Container(
+              height: PlatformCapabilities.immersiveChatChrome ? 66 : 74,
+              padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 6),
+              decoration: BoxDecoration(
+                color: const Color(0xF20B1220),
+                border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
+              ),
+              child: Row(
+                children: [
+                  if (!isWide)
+                    IconButton(
+                      tooltip: 'Back',
+                      onPressed: () {
+                        _stopTypingSignal();
+                        setState(() {
+                          _selectedUser = null;
+                          _selectedGroup = null;
+                          _replyTo = null;
+                          _emojiOpen = false;
+                          _detailsOpen = false;
+                          _inChatQuery = '';
+                          _refreshTimer?.cancel();
+                        });
+                      },
+                      icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppTheme.textPrimary, size: 20),
                     ),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-                  ),
-                  child: const Center(child: Icon(Icons.group_rounded, color: Colors.white, size: 22)),
-                )
-              else
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    CircleAvatar(
-                      radius: 22,
-                      backgroundColor: _avatarColor(headerUid),
-                      child: Text(
-                        _initials(name),
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: Container(
-                        width: 13,
-                        height: 13,
-                        decoration: BoxDecoration(
-                          color: isOnline ? const Color(0xFF34D399) : const Color(0xFF64748B),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0xFF0B1220), width: 2),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => unawaited(_toggleDetails()),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                        child: Row(
+                          children: [
+                            if (isGroup)
+                              Container(
+                                width: avatarSize,
+                                height: avatarSize,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: const LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+                                  ),
+                                  border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                                ),
+                                child: Center(
+                                  child: Icon(Icons.group_rounded, color: Colors.white, size: compact ? 18 : 22),
+                                ),
+                              )
+                            else
+                              Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  CircleAvatar(
+                                    radius: avatarSize / 2,
+                                    backgroundColor: _avatarColor(headerUid),
+                                    child: Text(
+                                      _initials(name),
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: compact ? 13 : 15,
+                                      ),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    bottom: 0,
+                                    right: 0,
+                                    child: Container(
+                                      width: 13,
+                                      height: 13,
+                                      decoration: BoxDecoration(
+                                        color: isOnline ? const Color(0xFF34D399) : const Color(0xFF64748B),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(color: const Color(0xFF0B1220), width: 2),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            SizedBox(width: compact ? 8 : 12),
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    name,
+                                    maxLines: 1,
+                                    softWrap: false,
+                                    style: TextStyle(
+                                      fontSize: compact ? 15 : 16.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                      letterSpacing: -0.2,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    subtitle,
+                                    maxLines: 1,
+                                    softWrap: false,
+                                    style: TextStyle(
+                                      fontSize: compact ? 11.5 : 12.5,
+                                      fontWeight: typingLabel != null ? FontWeight.w600 : FontWeight.w400,
+                                      fontStyle: typingLabel != null ? FontStyle.italic : FontStyle.normal,
+                                      color: subtitleColor,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                  ],
-                ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        fontSize: 16.5,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        letterSpacing: -0.2,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                  ),
+                  if (showCalls) ...[
+                    IconButton(
+                      tooltip: 'Video call',
+                      onPressed: _selectedUser == null ? null : () => _startCall(CallKind.video),
+                      icon: const Icon(Icons.videocam_rounded, color: Color(0xFFE9EDEF), size: 24),
+                      visualDensity: VisualDensity.compact,
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: typingLabel != null ? FontWeight.w600 : FontWeight.w400,
-                        fontStyle: typingLabel != null ? FontStyle.italic : FontStyle.normal,
-                        color: subtitleColor,
-                      ),
-                      overflow: TextOverflow.ellipsis,
+                    IconButton(
+                      tooltip: 'Voice call',
+                      onPressed: _selectedUser == null ? null : () => _startCall(CallKind.audio),
+                      icon: const Icon(Icons.call_rounded, color: Color(0xFFE9EDEF), size: 22),
+                      visualDensity: VisualDensity.compact,
                     ),
                   ],
-                ),
+                  IconButton(
+                    tooltip: 'Search in chat',
+                    onPressed: _promptInChatSearch,
+                    icon: const Icon(Icons.search_rounded, color: Color(0xFFE9EDEF), size: 22),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  IconButton(
+                    tooltip: 'Contact info',
+                    onPressed: () => unawaited(_toggleDetails()),
+                    icon: Icon(
+                      _detailsOpen ? Icons.info_rounded : Icons.info_outline_rounded,
+                      color: _detailsOpen ? AppTheme.primaryBright : const Color(0xFFE9EDEF),
+                      size: 22,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  if (showSettings)
+                    IconButton(
+                      tooltip: 'Group settings',
+                      onPressed: () => _showGroupSettings(_selectedGroup),
+                      icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted, size: 22),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  if (showLogo) _dashboardLogoButton(),
+                  if (veryCompact && (isGroup || (!isGroup && PlatformCapabilities.voiceVideoCall)))
+                    PopupMenuButton<String>(
+                      tooltip: 'More',
+                      icon: const Icon(Icons.more_vert_rounded, color: Color(0xFFE9EDEF), size: 22),
+                      color: AppTheme.surface2,
+                      onSelected: (v) {
+                        if (v == 'settings') _showGroupSettings(_selectedGroup);
+                        if (v == 'video') _startCall(CallKind.video);
+                        if (v == 'audio') _startCall(CallKind.audio);
+                      },
+                      itemBuilder: (_) => [
+                        if (!isGroup && PlatformCapabilities.voiceVideoCall) ...[
+                          const PopupMenuItem(value: 'video', child: Text('Video call')),
+                          const PopupMenuItem(value: 'audio', child: Text('Voice call')),
+                        ],
+                        if (isGroup)
+                          const PopupMenuItem(value: 'settings', child: Text('Group settings')),
+                      ],
+                    ),
+                ],
               ),
-              if (!isGroup && PlatformCapabilities.voiceVideoCall) ...[
-                IconButton(
-                  tooltip: 'Video call',
-                  onPressed: _selectedUser == null ? null : () => _startCall(CallKind.video),
-                  icon: const Icon(Icons.videocam_rounded, color: Color(0xFFE9EDEF), size: 24),
-                  visualDensity: VisualDensity.compact,
-                ),
-                IconButton(
-                  tooltip: 'Voice call',
-                  onPressed: _selectedUser == null ? null : () => _startCall(CallKind.audio),
-                  icon: const Icon(Icons.call_rounded, color: Color(0xFFE9EDEF), size: 22),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ],
-              if (isGroup)
-                IconButton(
-                  tooltip: 'Group settings',
-                  onPressed: () => _showGroupSettings(_selectedGroup),
-                  icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted, size: 22),
-                ),
-              if (PlatformCapabilities.immersiveChatChrome) _dashboardLogoButton(),
-            ],
-          ),
+            );
+          },
         ),
 
         Expanded(
@@ -2053,14 +2508,45 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               fit: StackFit.expand,
               children: [
                 const CustomPaint(painter: _ChatWallpaperPainter()),
-                _messages.isEmpty
-                    ? _buildEmpty('No messages yet\nStart the conversation!')
-                    : ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                        itemCount: _messages.length,
-                        itemBuilder: (_, i) => _buildMessageBubble(_messages[i]),
+                Column(
+                  children: [
+                    if (_inChatQuery.isNotEmpty)
+                      Material(
+                        color: const Color(0xFF1F2C34),
+                        child: ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.search_rounded, color: AppTheme.primaryBright, size: 20),
+                          title: Text(
+                            'Filter: $_inChatQuery',
+                            style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+                          ),
+                          trailing: IconButton(
+                            tooltip: 'Clear',
+                            onPressed: () => setState(() => _inChatQuery = ''),
+                            icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted, size: 18),
+                          ),
+                        ),
                       ),
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          _chatThreadWidth = constraints.maxWidth;
+                          if (_visibleMessages.isEmpty) {
+                            return _buildEmpty(_inChatQuery.isNotEmpty
+                                ? 'No messages match\nâ€œ$_inChatQueryâ€'
+                                : 'No messages yet\nStart the conversation!');
+                          }
+                          return ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+                            itemCount: _visibleMessages.length,
+                            itemBuilder: (_, i) => _buildMessageBubble(_visibleMessages[i]),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -2095,28 +2581,29 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   }
 
   static const _emojiList = [
-    '😀', '😁', '😂', '🤣', '😊', '😇', '🙂', '😉', '😍', '😘',
-    '😗', '😚', '😋', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫',
-    '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬',
-    '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮',
-    '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐',
-    '😕', '😟', '🙁', '😮', '😯', '😲', '😳', '🥺', '😦', '😧',
-    '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓',
-    '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀',
-    '👍', '👎', '👌', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉',
-    '👆', '👇', '☝️', '✋', '🤚', '🖐', '🖖', '👏', '🙌', '🤲',
-    '🤝', '🙏', '💪', '🦾', '🧠', '👀', '👁️', '👅', '👄', '💋',
-    '💘', '💝', '💖', '💗', '💓', '💞', '💕', '❣️', '💔', '❤️',
-    '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💯', '💢',
-    '💥', '💫', '💦', '💨', '🕳', '💣', '💬', '👁‍🗨', '🗨', '🗯',
-    '💭', '💤', '🔥', '⭐', '🌟', '✨', '⚡', '☀️', '🌈', '☁️',
-    '🎉', '🎊', '🎈', '🎁', '🏆', '🥇', '🎯', '⚽', '🏀', '🎮',
-    '✅', '❌', '❓', '❗', '💬', '📝', '📌', '📎', '🔗', '🔒',
+    'ðŸ˜€', 'ðŸ˜', 'ðŸ˜‚', 'ðŸ¤£', 'ðŸ˜Š', 'ðŸ˜‡', 'ðŸ™‚', 'ðŸ˜‰', 'ðŸ˜', 'ðŸ˜˜',
+    'ðŸ˜—', 'ðŸ˜š', 'ðŸ˜‹', 'ðŸ˜œ', 'ðŸ¤ª', 'ðŸ˜', 'ðŸ¤‘', 'ðŸ¤—', 'ðŸ¤­', 'ðŸ¤«',
+    'ðŸ¤”', 'ðŸ¤', 'ðŸ¤¨', 'ðŸ˜', 'ðŸ˜‘', 'ðŸ˜¶', 'ðŸ˜', 'ðŸ˜’', 'ðŸ™„', 'ðŸ˜¬',
+    'ðŸ˜Œ', 'ðŸ˜”', 'ðŸ˜ª', 'ðŸ¤¤', 'ðŸ˜´', 'ðŸ˜·', 'ðŸ¤’', 'ðŸ¤•', 'ðŸ¤¢', 'ðŸ¤®',
+    'ðŸ¥µ', 'ðŸ¥¶', 'ðŸ¥´', 'ðŸ˜µ', 'ðŸ¤¯', 'ðŸ¤ ', 'ðŸ¥³', 'ðŸ˜Ž', 'ðŸ¤“', 'ðŸ§',
+    'ðŸ˜•', 'ðŸ˜Ÿ', 'ðŸ™', 'ðŸ˜®', 'ðŸ˜¯', 'ðŸ˜²', 'ðŸ˜³', 'ðŸ¥º', 'ðŸ˜¦', 'ðŸ˜§',
+    'ðŸ˜¨', 'ðŸ˜°', 'ðŸ˜¥', 'ðŸ˜¢', 'ðŸ˜­', 'ðŸ˜±', 'ðŸ˜–', 'ðŸ˜£', 'ðŸ˜ž', 'ðŸ˜“',
+    'ðŸ˜©', 'ðŸ˜«', 'ðŸ¥±', 'ðŸ˜¤', 'ðŸ˜¡', 'ðŸ˜ ', 'ðŸ¤¬', 'ðŸ˜ˆ', 'ðŸ‘¿', 'ðŸ’€',
+    'ðŸ‘', 'ðŸ‘Ž', 'ðŸ‘Œ', 'âœŒï¸', 'ðŸ¤ž', 'ðŸ¤Ÿ', 'ðŸ¤˜', 'ðŸ¤™', 'ðŸ‘ˆ', 'ðŸ‘‰',
+    'ðŸ‘†', 'ðŸ‘‡', 'â˜ï¸', 'âœ‹', 'ðŸ¤š', 'ðŸ–', 'ðŸ––', 'ðŸ‘', 'ðŸ™Œ', 'ðŸ¤²',
+    'ðŸ¤', 'ðŸ™', 'ðŸ’ª', 'ðŸ¦¾', 'ðŸ§ ', 'ðŸ‘€', 'ðŸ‘ï¸', 'ðŸ‘…', 'ðŸ‘„', 'ðŸ’‹',
+    'ðŸ’˜', 'ðŸ’', 'ðŸ’–', 'ðŸ’—', 'ðŸ’“', 'ðŸ’ž', 'ðŸ’•', 'â£ï¸', 'ðŸ’”', 'â¤ï¸',
+    'ðŸ§¡', 'ðŸ’›', 'ðŸ’š', 'ðŸ’™', 'ðŸ’œ', 'ðŸ–¤', 'ðŸ¤', 'ðŸ¤Ž', 'ðŸ’¯', 'ðŸ’¢',
+    'ðŸ’¥', 'ðŸ’«', 'ðŸ’¦', 'ðŸ’¨', 'ðŸ•³', 'ðŸ’£', 'ðŸ’¬', 'ðŸ‘â€ðŸ—¨', 'ðŸ—¨', 'ðŸ—¯',
+    'ðŸ’­', 'ðŸ’¤', 'ðŸ”¥', 'â­', 'ðŸŒŸ', 'âœ¨', 'âš¡', 'â˜€ï¸', 'ðŸŒˆ', 'â˜ï¸',
+    'ðŸŽ‰', 'ðŸŽŠ', 'ðŸŽˆ', 'ðŸŽ', 'ðŸ†', 'ðŸ¥‡', 'ðŸŽ¯', 'âš½', 'ðŸ€', 'ðŸŽ®',
+    'âœ…', 'âŒ', 'â“', 'â—', 'ðŸ’¬', 'ðŸ“', 'ðŸ“Œ', 'ðŸ“Ž', 'ðŸ”—', 'ðŸ”’',
   ];
 
   /// WhatsApp-style: input stays visible; emoji panel replaces the keyboard below.
   Widget _buildMessageComposer() {
     final mobile = Responsive.isMobile(context);
+    final desktop = PlatformCapabilities.isDesktop;
     final hasText = _hasDraft;
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     if (keyboard > 120) {
@@ -2131,123 +2618,152 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Padding(
-            padding: EdgeInsets.fromLTRB(mobile ? 6 : 12, 6, mobile ? 6 : 12, 6),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_replyTo != null) _buildReplyComposerBar(),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final narrow = constraints.maxWidth < 420;
+              final padH = mobile || narrow ? 6.0 : 12.0;
+              final hint = desktop
+                  ? (narrow ? 'Message' : 'Message  Â·  Enter to send')
+                  : 'Message';
+              return Padding(
+                padding: EdgeInsets.fromLTRB(padH, 6, padH, 6),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: Container(
-                        constraints: const BoxConstraints(minHeight: 48, maxHeight: 140),
-                        decoration: BoxDecoration(
-                          color: inputBg,
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            IconButton(
-                              tooltip: _emojiOpen ? 'Keyboard' : 'Emoji',
-                              onPressed: _isSending ? null : _toggleEmojiPanel,
-                              icon: Icon(
-                                _emojiOpen ? Icons.keyboard_alt_outlined : Icons.emoji_emotions_outlined,
-                                color: iconGrey,
-                                size: 26,
-                              ),
+                    if (_replyTo != null) _buildReplyComposerBar(),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: Container(
+                            constraints: const BoxConstraints(minHeight: 48, maxHeight: 140),
+                            decoration: BoxDecoration(
+                              color: inputBg,
+                              borderRadius: BorderRadius.circular(24),
                             ),
-                            Expanded(
-                              child: CallbackShortcuts(
-                                bindings: {
-                                  const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
-                                  const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
-                                },
-                                child: TextField(
-                                  controller: _msgController,
-                                  focusNode: _msgFocus,
-                                  enabled: !_isSending,
-                                  minLines: 1,
-                                  maxLines: 6,
-                                  keyboardType: TextInputType.multiline,
-                                  textInputAction: TextInputAction.newline,
-                                  textCapitalization: TextCapitalization.sentences,
-                                  style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 16, height: 1.35),
-                                  cursorColor: AppTheme.accent,
-                                  onTap: () {
-                                    if (_emojiOpen) setState(() => _emojiOpen = false);
-                                  },
-                                  decoration: const InputDecoration(
-                                    isDense: true,
-                                    hintText: 'Message',
-                                    hintStyle: TextStyle(color: iconGrey, fontSize: 16),
-                                    border: InputBorder.none,
-                                    contentPadding: EdgeInsets.symmetric(vertical: 12),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                IconButton(
+                                  tooltip: _emojiOpen ? 'Keyboard' : 'Emoji',
+                                  onPressed: _isSending ? null : _toggleEmojiPanel,
+                                  visualDensity: VisualDensity.compact,
+                                  icon: Icon(
+                                    _emojiOpen ? Icons.keyboard_alt_outlined : Icons.emoji_emotions_outlined,
+                                    color: iconGrey,
+                                    size: narrow ? 22 : 26,
                                   ),
                                 ),
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: 'Attach',
-                              onPressed: _isSending
-                                  ? null
-                                  : () {
-                                      if (_emojiOpen) setState(() => _emojiOpen = false);
-                                      unawaited(_showAttachSheet());
+                                Expanded(
+                                  child: CallbackShortcuts(
+                                    bindings: {
+                                      const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
+                                      const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
                                     },
-                              icon: const Icon(Icons.attach_file_rounded, color: iconGrey, size: 24),
-                            ),
-                            if (!hasText)
-                              IconButton(
-                                tooltip: 'Camera',
-                                onPressed: _isSending
-                                    ? null
-                                    : () {
-                                        if (_emojiOpen) setState(() => _emojiOpen = false);
-                                        unawaited(_takePhoto());
-                                      },
-                                icon: const Icon(Icons.photo_camera_outlined, color: iconGrey, size: 24),
-                              ),
-                            const SizedBox(width: 2),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 1),
-                      child: Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          customBorder: const CircleBorder(),
-                          onTap: _isSending ? null : (hasText ? _sendMessage : _toggleRecording),
-                          child: Ink(
-                            width: 48,
-                            height: 48,
-                            decoration: const BoxDecoration(
-                              color: sendColor,
-                              shape: BoxShape.circle,
-                            ),
-                            child: _isSending
-                                ? const Padding(
-                                    padding: EdgeInsets.all(14),
-                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                  )
-                                : Icon(
-                                    hasText ? Icons.send_rounded : Icons.mic_rounded,
-                                    color: Colors.white,
-                                    size: 22,
+                                    child: Focus(
+                                      onKeyEvent: desktop
+                                          ? (node, event) {
+                                              if (event is! KeyDownEvent ||
+                                                  event.logicalKey != LogicalKeyboardKey.enter) {
+                                                return KeyEventResult.ignored;
+                                              }
+                                              if (HardwareKeyboard.instance.isShiftPressed) {
+                                                return KeyEventResult.ignored;
+                                              }
+                                              _sendMessage();
+                                              return KeyEventResult.handled;
+                                            }
+                                          : null,
+                                      child: TextField(
+                                        controller: _msgController,
+                                        focusNode: _msgFocus,
+                                        enabled: !_isSending,
+                                        minLines: 1,
+                                        maxLines: 6,
+                                        keyboardType: TextInputType.multiline,
+                                        textInputAction: desktop
+                                            ? TextInputAction.send
+                                            : TextInputAction.newline,
+                                        textCapitalization: TextCapitalization.sentences,
+                                        style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 16, height: 1.35),
+                                        cursorColor: AppTheme.accent,
+                                        onTap: () {
+                                          if (_emojiOpen) setState(() => _emojiOpen = false);
+                                        },
+                                        decoration: InputDecoration(
+                                          isDense: true,
+                                          hintText: hint,
+                                          hintStyle: const TextStyle(color: iconGrey, fontSize: 15),
+                                          border: InputBorder.none,
+                                          contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                                        ),
+                                      ),
+                                    ),
                                   ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Attach',
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: _isSending
+                                      ? null
+                                      : () {
+                                          if (_emojiOpen) setState(() => _emojiOpen = false);
+                                          unawaited(_showAttachSheet());
+                                        },
+                                  icon: Icon(Icons.attach_file_rounded, color: iconGrey, size: narrow ? 22 : 24),
+                                ),
+                                if (!hasText && !desktop)
+                                  IconButton(
+                                    tooltip: 'Camera',
+                                    visualDensity: VisualDensity.compact,
+                                    onPressed: _isSending
+                                        ? null
+                                        : () {
+                                            if (_emojiOpen) setState(() => _emojiOpen = false);
+                                            unawaited(_takePhoto());
+                                          },
+                                    icon: const Icon(Icons.photo_camera_outlined, color: iconGrey, size: 24),
+                                  ),
+                                const SizedBox(width: 2),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
+                        const SizedBox(width: 6),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 1),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              customBorder: const CircleBorder(),
+                              onTap: _isSending ? null : (hasText ? _sendMessage : _toggleRecording),
+                              child: Ink(
+                                width: 48,
+                                height: 48,
+                                decoration: const BoxDecoration(
+                                  color: sendColor,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: _isSending
+                                    ? const Padding(
+                                        padding: EdgeInsets.all(14),
+                                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                      )
+                                    : Icon(
+                                        hasText ? Icons.send_rounded : Icons.mic_rounded,
+                                        color: Colors.white,
+                                        size: 22,
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ],
-            ),
+              );
+            },
           ),
           if (_emojiOpen)
             SizedBox(
@@ -2366,7 +2882,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
-  // ─── Message Bubble ───
+  /// Max bubble width relative to the chat pane (not the full window).
+  double _bubbleMaxWidth(BuildContext context) {
+    final chatW = _chatThreadWidth.clamp(200.0, 2000.0);
+    return (chatW * 0.72).clamp(120.0, 420.0);
+  }
+
+  // â”€â”€â”€ Message Bubble (WhatsApp: shrink-wrap, sent right / received left) â”€â”€â”€
   Widget _buildMessageBubble(dynamic msg) {
     final isOwn = msg['is_own'] == true;
     final isGroup = _selectedGroup != null;
@@ -2401,218 +2923,318 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         }
       }
     }
-    // Skip empty quotes (looks like "only reply text, no parent").
     if (reply != null &&
         (reply['preview'] ?? '').toString().trim().isEmpty &&
         (reply['sender_name'] ?? '').toString().trim().isEmpty) {
       reply = null;
     }
-    const ownBubble = Color(0xFF1D4ED8);
-    const otherBubble = Color(0xFF1E293B);
 
-    Widget metaRow({required bool light}) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 2),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (isEdited)
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Text(
-                  'edited',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontStyle: FontStyle.italic,
-                    color: light ? Colors.white.withValues(alpha: 0.55) : const Color(0xFF8696A0),
-                  ),
+    const ownBubble = Color(0xFF005C4B);
+    const otherBubble = Color(0xFF202C33);
+    final maxW = _bubbleMaxWidth(context);
+
+    Widget metaRow() {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (isEdited)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Text(
+                'edited',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontStyle: FontStyle.italic,
+                  color: Colors.white.withValues(alpha: 0.55),
                 ),
               ),
-            Text(
-              time,
-              style: TextStyle(
-                fontSize: 11,
-                color: light ? Colors.white.withValues(alpha: 0.65) : const Color(0xFF8696A0),
-              ),
             ),
-            if (isOwn && !isGroup && !isDeleted) ...[
-              const SizedBox(width: 3),
-              Icon(
-                Icons.done_all_rounded,
-                size: 16,
-                color: msg['is_read'] == true
-                    ? AppTheme.accent
-                    : Colors.white.withValues(alpha: 0.55),
-              ),
-            ],
+          Text(
+            time,
+            style: TextStyle(
+              fontSize: 11,
+              height: 1,
+              color: Colors.white.withValues(alpha: 0.65),
+            ),
+          ),
+          if (isOwn && !isGroup && !isDeleted) ...[
+            const SizedBox(width: 3),
+            Icon(
+              Icons.done_all_rounded,
+              size: 15,
+              color: msg['is_read'] == true
+                  ? const Color(0xFF53BDEB)
+                  : Colors.white.withValues(alpha: 0.55),
+            ),
           ],
-        ),
+        ],
       );
     }
 
-    return Align(
-      alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 4),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-        child: GestureDetector(
-          onLongPress: !isDeleted ? () => _showMessageOptions(msg) : null,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(9, 6, 9, 5),
-            decoration: BoxDecoration(
-              color: isOwn ? ownBubble : otherBubble,
-              borderRadius: BorderRadius.only(
-                topLeft: const Radius.circular(12),
-                topRight: const Radius.circular(12),
-                bottomLeft: Radius.circular(isOwn ? 12 : 2),
-                bottomRight: Radius.circular(isOwn ? 2 : 12),
+    Widget bodyContent() {
+      if (isDeleted) {
+        return Text(
+          'This message was deleted',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.55),
+            fontSize: 14,
+            fontStyle: FontStyle.italic,
+          ),
+        );
+      }
+      if (msgType == 'voice' && voiceUrl != null) {
+        return GestureDetector(
+          onTap: () => _playVoice(voiceUrl),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _playingUrl == voiceUrl ? Icons.stop_circle : Icons.play_circle_fill,
+                color: isOwn ? const Color(0xFF06CF9C) : AppTheme.accent,
+                size: 28,
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Voice message',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.92),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    _playingUrl == voiceUrl ? 'Playingâ€¦' : 'Tap to play',
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      }
+      if (msgType == 'image' && imageUrl != null) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GestureDetector(
+              onTap: () => unawaited(_openChatImageViewer(Map<String, dynamic>.from(msg as Map))),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.network(
+                  imageUrl,
+                  width: (maxW - 18).clamp(120.0, 260.0),
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    width: 180,
+                    height: 100,
+                    color: Colors.white10,
+                    child: const Icon(Icons.broken_image, color: Colors.white38),
+                  ),
+                ),
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (!isOwn && isGroup)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 3, left: 2),
-                    child: Text(
-                      senderName,
+            if (text.toString().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                text.toString(),
+                style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 14.5, height: 1.35),
+              ),
+            ],
+          ],
+        );
+      }
+      if (msgType == 'file' && fileUrl != null) {
+        return GestureDetector(
+          onTap: () => _openFileUrl(fileUrl),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.insert_drive_file_rounded, color: Color(0xFF53BDEB), size: 24),
+              const SizedBox(width: 8),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxW - 70),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      fileName.toString(),
                       style: const TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF53BDEB),
+                        color: Color(0xFFE9EDEF),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
+                    Text(
+                      PlatformCapabilities.isDesktop ? 'Click to open' : 'Tap to open',
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+      return Text(
+        text.toString(),
+        softWrap: true,
+        style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 14.8, height: 1.35),
+      );
+    }
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: isOwn ? 48 : 8,
+        right: isOwn ? 8 : 48,
+        bottom: 3,
+        top: 1,
+      ),
+      child: Align(
+        alignment: isOwn ? Alignment.centerRight : Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxW),
+          child: Builder(
+            builder: (bubbleCtx) {
+              void openOptions([Offset? globalPos]) {
+                if (isDeleted) return;
+                unawaited(_showMessageOptions(
+                  msg,
+                  globalPosition: globalPos,
+                  anchorContext: bubbleCtx,
+                ));
+              }
+
+              return Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onLongPress: !isDeleted ? () => openOptions() : null,
+                  onSecondaryTapDown: !isDeleted
+                      ? (details) => openOptions(details.globalPosition)
+                      : null,
+                  onDoubleTap: !isDeleted ? () => _setReplyTo(msg) : null,
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(10),
+                    topRight: const Radius.circular(10),
+                    bottomLeft: Radius.circular(isOwn ? 10 : 2),
+                    bottomRight: Radius.circular(isOwn ? 2 : 10),
                   ),
-                if (reply != null) ...[
-                  _buildQuotedReply(reply, isOwn: isOwn),
-                  const SizedBox(height: 4),
-                ],
-                if (isDeleted)
-                  Text(
-                    'This message was deleted',
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.55),
-                      fontSize: 14,
-                      fontStyle: FontStyle.italic,
-                    ),
-                  )
-                else if (msgType == 'voice' && voiceUrl != null)
-                  GestureDetector(
-                    onTap: () => _playVoice(voiceUrl),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(
-                        _playingUrl == voiceUrl ? Icons.stop_circle : Icons.play_circle_fill,
-                        color: isOwn ? Colors.white : AppTheme.accent,
-                        size: 28,
+                  child: Ink(
+                    decoration: BoxDecoration(
+                      color: isOwn ? ownBubble : otherBubble,
+                      borderRadius: BorderRadius.only(
+                        topLeft: const Radius.circular(10),
+                        topRight: const Radius.circular(10),
+                        bottomLeft: Radius.circular(isOwn ? 10 : 2),
+                        bottomRight: Radius.circular(isOwn ? 2 : 10),
                       ),
-                      const SizedBox(width: 8),
-                      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(
-                          'Voice message',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.92),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.18),
+                          blurRadius: 2,
+                          offset: const Offset(0, 1),
                         ),
-                        Text(
-                          _playingUrl == voiceUrl ? 'Playing…' : 'Tap to play',
-                          style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11),
-                        ),
-                      ]),
-                    ]),
-                  )
-                else if (msgType == 'image' && imageUrl != null)
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.network(
-                        imageUrl,
-                        width: 220,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) => Container(
-                          width: 220,
-                          height: 100,
-                          color: Colors.white10,
-                          child: const Icon(Icons.broken_image, color: Colors.white38),
-                        ),
-                      ),
+                      ],
                     ),
-                    if (text.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(text, style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 14.5, height: 1.35)),
-                    ],
-                  ])
-                else if (msgType == 'file' && fileUrl != null)
-                  GestureDetector(
-                    onTap: () => _openFileUrl(fileUrl),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.insert_drive_file_rounded, color: Color(0xFF53BDEB), size: 24),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(
-                            fileName,
-                            style: const TextStyle(
-                              color: Color(0xFFE9EDEF),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+                      // Hug content width (short "hi" stays small). No Align/infinity
+                      // children â€” those previously stretched bubbles to full pane width.
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (!isOwn && isGroup)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 2, left: 1),
+                              child: Text(
+                                senderName.toString(),
+                                style: const TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF53BDEB),
+                                ),
+                              ),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          if (reply != null) ...[
+                            _buildQuotedReply(reply, isOwn: isOwn, maxWidth: maxW - 20),
+                            const SizedBox(height: 4),
+                          ],
+                          bodyContent(),
+                          const SizedBox(height: 2),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (!isDeleted && PlatformCapabilities.isDesktop)
+                                GestureDetector(
+                                  onTap: () => openOptions(),
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(right: 4),
+                                    child: Icon(
+                                      Icons.expand_more_rounded,
+                                      size: 16,
+                                      color: Colors.white.withValues(alpha: 0.4),
+                                    ),
+                                  ),
+                                ),
+                              metaRow(),
+                            ],
                           ),
-                          Text('Tap to open', style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11)),
-                        ]),
+                        ],
                       ),
-                    ]),
-                  )
-                else
-                  Text(
-                    text.toString(),
-                    softWrap: true,
-                    style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 15, height: 1.35),
+                    ),
                   ),
-                Align(alignment: Alignment.bottomRight, child: metaRow(light: true)),
-              ],
-            ),
+                ),
+              );
+            },
           ),
         ),
       ),
     );
   }
 
-  Widget _buildQuotedReply(Map<String, dynamic> reply, {required bool isOwn}) {
+  Widget _buildQuotedReply(Map<String, dynamic> reply, {required bool isOwn, double maxWidth = 240}) {
     final accent = isOwn ? const Color(0xFF06CF9C) : const Color(0xFF53BDEB);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(0, 0, 0, 0),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.22),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: IntrinsicHeight(
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.22),
+          borderRadius: BorderRadius.circular(6),
+        ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 4,
+              width: 3.5,
+              height: 36,
               decoration: BoxDecoration(
                 color: accent,
-                borderRadius: const BorderRadius.horizontal(left: Radius.circular(8)),
+                borderRadius: const BorderRadius.horizontal(left: Radius.circular(6)),
               ),
             ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(7, 5, 7, 5),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: (maxWidth - 20).clamp(80.0, maxWidth)),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       '${reply['sender_name'] ?? 'Message'}',
                       style: TextStyle(
                         color: accent,
                         fontWeight: FontWeight.w700,
-                        fontSize: 12.5,
+                        fontSize: 12,
                       ),
                     ),
                     const SizedBox(height: 1),
@@ -2622,7 +3244,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.72),
-                        fontSize: 12.5,
+                        fontSize: 12,
                       ),
                     ),
                   ],
@@ -2643,12 +3265,179 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     }
   }
 
-  // ─── Message Options (Reply / Edit / Delete) ───
-  void _showMessageOptions(dynamic msg) {
+  // â”€â”€â”€ Message Options (Reply / Copy / Forward / Open / Info / Edit / Delete) â”€â”€â”€
+  Future<void> _showMessageOptions(
+    dynamic msg, {
+    Offset? globalPosition,
+    BuildContext? anchorContext,
+  }) async {
+    if (msg is! Map) return;
     final isOwn = msg['is_own'] == true;
-    showModalBottomSheet(
+    final msgType = (msg['message_type'] ?? 'text').toString();
+    final text = (msg['message'] ?? '').toString();
+    final imageUrl = (msg['image_url'] ?? '').toString();
+    final fileUrl = (msg['file_url'] ?? '').toString();
+    final voiceUrl = (msg['voice_url'] ?? '').toString();
+    final openUrl = imageUrl.isNotEmpty
+        ? imageUrl
+        : (fileUrl.isNotEmpty ? fileUrl : (voiceUrl.isNotEmpty ? voiceUrl : ''));
+    final canCopy = text.trim().isNotEmpty && (msgType == 'text' || msgType.isEmpty);
+    final canEdit = isOwn && (msgType == 'text' || msg['message_type'] == null);
+    final canForward = text.trim().isNotEmpty || openUrl.isNotEmpty;
+    final desktop = PlatformCapabilities.isDesktop;
+
+    Future<void> runAction(String action) async {
+      switch (action) {
+        case 'reply':
+          _setReplyTo(msg);
+          break;
+        case 'copy':
+          await Clipboard.setData(ClipboardData(text: text));
+          if (mounted) _showSuccess('Copied');
+          break;
+        case 'forward':
+          await _forwardMessage(msg);
+          break;
+        case 'view':
+          if (imageUrl.isNotEmpty) {
+            await _openChatImageViewer(Map<String, dynamic>.from(msg));
+          }
+          break;
+        case 'open':
+          if (openUrl.isNotEmpty) await _openFileUrl(openUrl);
+          break;
+        case 'info':
+          _showMessageInfo(msg);
+          break;
+        case 'edit':
+          _showEditDialog(msg);
+          break;
+        case 'delete':
+          await _deleteMessage(msg);
+          break;
+      }
+    }
+
+    final menuItems = <PopupMenuEntry<String>>[
+      const PopupMenuItem(
+        value: 'reply',
+        child: ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.reply_rounded, color: AppTheme.primaryBright),
+          title: Text('Reply', style: TextStyle(color: AppTheme.textPrimary)),
+        ),
+      ),
+      if (canCopy)
+        const PopupMenuItem(
+          value: 'copy',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.copy_rounded, color: AppTheme.textMuted),
+            title: Text('Copy', style: TextStyle(color: AppTheme.textPrimary)),
+          ),
+        ),
+      if (canForward)
+        const PopupMenuItem(
+          value: 'forward',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.shortcut_rounded, color: AppTheme.accent),
+            title: Text('Forward', style: TextStyle(color: AppTheme.textPrimary)),
+          ),
+        ),
+      if (imageUrl.isNotEmpty)
+        const PopupMenuItem(
+          value: 'view',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.fullscreen_rounded, color: AppTheme.primaryBright),
+            title: Text('View', style: TextStyle(color: AppTheme.textPrimary)),
+          ),
+        ),
+      if (openUrl.isNotEmpty)
+        const PopupMenuItem(
+          value: 'open',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.open_in_new_rounded, color: AppTheme.primary),
+            title: Text('Open externally', style: TextStyle(color: AppTheme.textPrimary)),
+          ),
+        ),
+      const PopupMenuItem(
+        value: 'info',
+        child: ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.info_outline_rounded, color: AppTheme.textMuted),
+          title: Text('Message info', style: TextStyle(color: AppTheme.textPrimary)),
+        ),
+      ),
+      if (canEdit)
+        const PopupMenuItem(
+          value: 'edit',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.edit, color: AppTheme.primary),
+            title: Text('Edit', style: TextStyle(color: AppTheme.textPrimary)),
+          ),
+        ),
+      if (isOwn)
+        const PopupMenuItem(
+          value: 'delete',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.delete, color: AppTheme.danger),
+            title: Text('Delete', style: TextStyle(color: AppTheme.textPrimary)),
+          ),
+        ),
+    ];
+
+    if (desktop) {
+      final overlay = Overlay.maybeOf(context)?.context.findRenderObject() as RenderBox?;
+      RelativeRect position;
+      if (globalPosition != null && overlay != null) {
+        position = RelativeRect.fromRect(
+          Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 0, 0),
+          Offset.zero & overlay.size,
+        );
+      } else if (anchorContext != null) {
+        final box = anchorContext.findRenderObject() as RenderBox?;
+        if (box != null && overlay != null) {
+          final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+          position = RelativeRect.fromLTRB(
+            topLeft.dx,
+            topLeft.dy + box.size.height,
+            overlay.size.width - topLeft.dx - box.size.width,
+            overlay.size.height - topLeft.dy - box.size.height,
+          );
+        } else {
+          position = const RelativeRect.fromLTRB(80, 120, 80, 120);
+        }
+      } else {
+        position = const RelativeRect.fromLTRB(80, 120, 80, 120);
+      }
+
+      final selected = await showMenu<String>(
+        context: context,
+        position: position,
+        color: AppTheme.surface2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        items: menuItems,
+      );
+      if (selected != null) await runAction(selected);
+      return;
+    }
+
+    await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: AppTheme.surface2,
+      backgroundColor: AppTheme.dialogBg,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (_) => SafeArea(
         child: Column(
@@ -2665,16 +3454,60 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               title: const Text('Reply', style: TextStyle(color: AppTheme.textPrimary)),
               onTap: () {
                 Navigator.pop(context);
-                _setReplyTo(msg);
+                unawaited(runAction('reply'));
               },
             ),
-            if (isOwn && (msg['message_type'] == 'text' || msg['message_type'] == null))
+            if (canCopy)
+              ListTile(
+                leading: const Icon(Icons.copy_rounded, color: AppTheme.textMuted),
+                title: const Text('Copy', style: TextStyle(color: AppTheme.textPrimary)),
+                onTap: () {
+                  Navigator.pop(context);
+                  unawaited(runAction('copy'));
+                },
+              ),
+            if (canForward)
+              ListTile(
+                leading: const Icon(Icons.shortcut_rounded, color: AppTheme.accent),
+                title: const Text('Forward', style: TextStyle(color: AppTheme.textPrimary)),
+                onTap: () {
+                  Navigator.pop(context);
+                  unawaited(runAction('forward'));
+                },
+              ),
+            if (imageUrl.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.fullscreen_rounded, color: AppTheme.primaryBright),
+                title: const Text('View', style: TextStyle(color: AppTheme.textPrimary)),
+                onTap: () {
+                  Navigator.pop(context);
+                  unawaited(runAction('view'));
+                },
+              ),
+            if (openUrl.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.open_in_new_rounded, color: AppTheme.primary),
+                title: const Text('Open externally', style: TextStyle(color: AppTheme.textPrimary)),
+                onTap: () {
+                  Navigator.pop(context);
+                  unawaited(runAction('open'));
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.info_outline_rounded, color: AppTheme.textMuted),
+              title: const Text('Message info', style: TextStyle(color: AppTheme.textPrimary)),
+              onTap: () {
+                Navigator.pop(context);
+                unawaited(runAction('info'));
+              },
+            ),
+            if (canEdit)
               ListTile(
                 leading: const Icon(Icons.edit, color: AppTheme.primary),
                 title: const Text('Edit Message', style: TextStyle(color: AppTheme.textPrimary)),
                 onTap: () {
                   Navigator.pop(context);
-                  _showEditDialog(msg);
+                  unawaited(runAction('edit'));
                 },
               ),
             if (isOwn)
@@ -2683,7 +3516,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                 title: const Text('Delete Message', style: TextStyle(color: AppTheme.textPrimary)),
                 onTap: () {
                   Navigator.pop(context);
-                  _deleteMessage(msg);
+                  unawaited(runAction('delete'));
                 },
               ),
             const SizedBox(height: 8),
@@ -2693,12 +3526,186 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
+  void _showMessageInfo(dynamic msg) {
+    if (msg is! Map) return;
+    final type = (msg['message_type'] ?? 'text').toString();
+    final when = (msg['created_at'] ?? msg['timestamp'] ?? '').toString();
+    final sender = msg['is_own'] == true
+        ? 'You'
+        : (msg['sender_name'] ?? msg['sender_full_name'] ?? msg['sender_username'] ?? 'User').toString();
+    final read = msg['is_read'] == true ? 'Read' : 'Delivered';
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppTheme.dialogBg,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Message info', style: TextStyle(color: AppTheme.textPrimary)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _dialogInfoLine('From', sender),
+            _dialogInfoLine('Type', type),
+            _dialogInfoLine('Time', when),
+            if (msg['is_own'] == true) _dialogInfoLine('Status', read),
+            if ((msg['message'] ?? '').toString().trim().isNotEmpty)
+              _dialogInfoLine('Text', msg['message'].toString()),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  Widget _dialogInfoLine(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+          const SizedBox(height: 2),
+          Text(value, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _forwardMessage(dynamic msg) async {
+    if (msg is! Map) return;
+    final text = (msg['message'] ?? '').toString().trim();
+    final imageUrl = (msg['image_url'] ?? '').toString();
+    final fileUrl = (msg['file_url'] ?? '').toString();
+    final voiceUrl = (msg['voice_url'] ?? '').toString();
+    final isImageForward = imageUrl.isNotEmpty;
+
+    var forwardBody = text;
+    if (!isImageForward) {
+      if (forwardBody.isEmpty) {
+        if (fileUrl.isNotEmpty) {
+          forwardBody = 'Forwarded file: $fileUrl';
+        } else if (voiceUrl.isNotEmpty) {
+          forwardBody = 'Forwarded voice: $voiceUrl';
+        }
+      } else {
+        forwardBody = 'Forwarded:\n$forwardBody';
+      }
+      if (forwardBody.isEmpty) {
+        _showError('Nothing to forward');
+        return;
+      }
+    }
+
+    final contacts = _users.whereType<Map>().toList();
+    if (contacts.isEmpty) {
+      _showError('No contacts to forward to');
+      return;
+    }
+
+    final selected = await showDialog<Map>(
+      context: context,
+      builder: (ctx) {
+        final filter = TextEditingController();
+        var q = '';
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            final filtered = contacts.where((u) {
+              final name = '${u['full_name'] ?? ''} ${u['username'] ?? ''}'.toLowerCase();
+              return q.isEmpty || name.contains(q);
+            }).toList();
+            return AlertDialog(
+              backgroundColor: AppTheme.dialogBg,
+              title: const Text('Forward to…', style: TextStyle(color: AppTheme.textPrimary)),
+              content: SizedBox(
+                width: 360,
+                height: 420,
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: filter,
+                      style: const TextStyle(color: AppTheme.textPrimary),
+                      decoration: _dialogInputDecor('Search contacts…'),
+                      onChanged: (v) => setLocal(() => q = v.toLowerCase()),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: filtered.length,
+                        itemBuilder: (_, i) {
+                          final u = filtered[i];
+                          final name = (u['full_name'] ?? u['username'] ?? 'User').toString();
+                          return ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: _avatarColor(_asInt(u['id']) ?? 0),
+                              child: Text(_initials(name), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                            ),
+                            title: Text(name, style: const TextStyle(color: AppTheme.textPrimary)),
+                            onTap: () => Navigator.pop(ctx, u),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (selected == null) return;
+    final peerId = _asInt(selected['id']);
+    if (peerId == null) return;
+
+    if (isImageForward) {
+      try {
+        final resp = await http.get(Uri.parse(imageUrl)).timeout(const Duration(seconds: 45));
+        if (resp.statusCode < 200 || resp.statusCode >= 300) {
+          _showError('Could not download image to forward');
+          return;
+        }
+        final lower = imageUrl.toLowerCase();
+        final filename = lower.contains('.png')
+            ? 'forwarded.png'
+            : (lower.contains('.webp') ? 'forwarded.webp' : 'forwarded.jpg');
+        final result = await widget.apiService.sendImageMessage(
+          peerId,
+          resp.bodyBytes,
+          filename,
+          message: text,
+        );
+        if (!mounted) return;
+        if (result['success'] == true) {
+          _showSuccess('Photo forwarded');
+        } else {
+          _showError(result['error']?.toString() ?? 'Forward failed');
+        }
+      } catch (e) {
+        if (mounted) _showError('Forward failed: $e');
+      }
+      return;
+    }
+
+    final result = await widget.apiService.sendMessage(peerId, forwardBody);
+    if (!mounted) return;
+    if (result['success'] == true) {
+      _showSuccess('Forwarded');
+    } else {
+      _showError(result['error']?.toString() ?? 'Forward failed');
+    }
+  }
+
   void _showEditDialog(dynamic msg) {
     final controller = TextEditingController(text: msg['message'] ?? '');
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: AppTheme.surface2,
+        backgroundColor: AppTheme.dialogBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text('Edit Message', style: TextStyle(color: AppTheme.textPrimary)),
         content: TextField(
@@ -2710,7 +3717,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           textCapitalization: TextCapitalization.sentences,
           style: const TextStyle(color: AppTheme.textPrimary, height: 1.35),
           decoration: InputDecoration(
-            filled: true, fillColor: AppTheme.surface2.withValues(alpha: 0.5),
+            filled: true, fillColor: AppTheme.surface.withValues(alpha: 0.85),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
             enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
             focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.primary)),
@@ -2726,8 +3733,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               if (result['success']) { _silentRefresh(); _showSuccess('Message edited'); }
               else { _showError('Failed to edit'); }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
-            child: Text('Save'),
+            style: AppTheme.primaryElevatedButton(),
+            child: const Text('Save', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -2740,18 +3747,22 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     else { _showError('Failed to delete'); }
   }
 
-  // ─── Create Group Dialog ───
+  // â”€â”€â”€ Create Group Dialog â”€â”€â”€
   void _showCreateGroupDialog() {
     final nameCtrl = TextEditingController();
     final descCtrl = TextEditingController();
     final selectedIds = <int>{};
+    var personalInbox = false;
 
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: AppTheme.surface2,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: AppTheme.dialogBg,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
           title: Text('Create New Group', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
           content: SizedBox(
             width: double.maxFinite,
@@ -2776,14 +3787,30 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     maxLines: 3,
                     decoration: _dialogInputDecor("What's this group about?"),
                   ),
-                  SizedBox(height: 16),
+                  SizedBox(height: 12),
+                    SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: personalInbox,
+                    onChanged: (v) => setDialogState(() => personalInbox = v),
+                    activeThumbColor: AppTheme.primary,
+                    title: Text(
+                      'Personal inbox',
+                      style: TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      'Members only see messages they sent or received. Creator/admins/managers see everything.',
+                      style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                    ),
+                  ),
+                  SizedBox(height: 8),
                   Text('Add Members', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.w600)),
                   SizedBox(height: 8),
                   Container(
                     constraints: BoxConstraints(maxHeight: 200),
                     decoration: BoxDecoration(
-                      color: AppTheme.surface2.withValues(alpha: 0.5),
+                      color: AppTheme.surface.withValues(alpha: 0.7),
                       borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
                     ),
                     child: ListView.builder(
                       shrinkWrap: true,
@@ -2816,14 +3843,19 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               onPressed: () => Navigator.pop(context),
               child: Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
             ),
-            ElevatedButton(
+            FilledButton(
               onPressed: () {
                 if (nameCtrl.text.trim().isEmpty) { _showError('Group name is required'); return; }
                 Navigator.pop(context);
-                _createGroup(nameCtrl.text.trim(), descCtrl.text.trim(), selectedIds.toList());
+                _createGroup(
+                  nameCtrl.text.trim(),
+                  descCtrl.text.trim(),
+                  selectedIds.toList(),
+                  visibilityMode: personalInbox ? 'personal' : 'shared',
+                );
               },
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-              child: Text('Create Group'),
+              style: AppTheme.primaryButton(radius: 12),
+              child: const Text('Create Group'),
             ),
           ],
         ),
@@ -2834,19 +3866,19 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   InputDecoration _dialogInputDecor(String hint) => InputDecoration(
     hintText: hint,
     hintStyle: TextStyle(color: AppTheme.textMuted, fontSize: 14),
-    filled: true, fillColor: AppTheme.surface2.withValues(alpha: 0.5),
+    filled: true, fillColor: AppTheme.surface.withValues(alpha: 0.85),
     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
     enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
     focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.primary)),
   );
 
-  // ─── Group Settings ───
+  // â”€â”€â”€ Group Settings â”€â”€â”€
   void _showGroupSettings(dynamic group) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppTheme.surface2,
+      backgroundColor: AppTheme.dialogBg,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (_) => DraggableScrollableSheet(
         initialChildSize: 0.7,
@@ -2861,14 +3893,19 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           onGroupUpdated: () { _loadGroups(); _silentRefresh(); },
           onGroupDeleted: () {
             _loadGroups();
-            setState(() { _selectedGroup = null; _messages = []; _refreshTimer?.cancel(); });
+            setState(() {
+              _selectedGroup = null;
+              _messages = [];
+              _detailsOpen = false;
+              _refreshTimer?.cancel();
+            });
           },
         ),
       ),
     );
   }
 
-  // ─── Helpers ───
+  // â”€â”€â”€ Helpers â”€â”€â”€
   Widget _buildLoader(String text) => Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -2924,9 +3961,9 @@ class _ChatWallpaperPainter extends CustomPainter {
 }
 
 
-// ═══════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // Group Settings Bottom Sheet
-// ═══════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _GroupSettingsSheet extends StatefulWidget {
   final dynamic group;
   final ApiService apiService;
@@ -3033,7 +4070,7 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
         Text('Group Settings', style: TextStyle(color: AppTheme.textPrimary, fontSize: 20, fontWeight: FontWeight.bold)),
         SizedBox(height: 20),
 
-        // ─── Group Info ───
+        // â”€â”€â”€ Group Info â”€â”€â”€
         _settingsCard([
           _infoRow('Group Name', group['name'] ?? ''),
           _infoRow('Description', group['description'] ?? 'No description'),
@@ -3049,7 +4086,7 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
             : null),
         SizedBox(height: 16),
 
-        // ─── Members ───
+        // â”€â”€â”€ Members â”€â”€â”€
         _settingsCard([
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -3070,7 +4107,7 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
         ]),
         SizedBox(height: 16),
 
-        // ─── Danger Zone ───
+        // â”€â”€â”€ Danger Zone â”€â”€â”€
         Container(
           padding: EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -3139,7 +4176,7 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
         children: [
           CircleAvatar(
             radius: 16,
-            backgroundColor: AppTheme.surface2,
+            backgroundColor: AppTheme.primary.withValues(alpha: 0.35),
             child: Text(initial, style: const TextStyle(color: Colors.white, fontSize: 12)),
           ),
           const SizedBox(width: 12),
@@ -3199,7 +4236,7 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface2,
+        backgroundColor: AppTheme.dialogBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Edit Group', style: TextStyle(color: AppTheme.textPrimary)),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -3250,8 +4287,8 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
                 AppToast.error(context, r['error']?.toString() ?? 'Could not update group');
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
-            child: const Text('Save'),
+            style: AppTheme.primaryElevatedButton(),
+            child: const Text('Save', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -3275,7 +4312,7 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
       context: context,
       builder: (dialogCtx) => StatefulBuilder(
         builder: (ctx, setDState) => AlertDialog(
-          backgroundColor: AppTheme.surface2,
+          backgroundColor: AppTheme.dialogBg,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text('Add Members', style: TextStyle(color: AppTheme.textPrimary)),
           content: SizedBox(
@@ -3335,8 +4372,11 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
                   AppToast.error(context, r['error']?.toString() ?? 'Could not add members');
                 }
               },
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
-              child: const Text('Add Members'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.success,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Add Members', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
             ),
           ],
         ),
@@ -3370,13 +4410,16 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface2,
+        backgroundColor: AppTheme.dialogBg,
         title: const Text('Remove member?', style: TextStyle(color: AppTheme.textPrimary)),
         content: Text('Remove $name from this group?', style: const TextStyle(color: AppTheme.textMuted)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTheme.danger,
+              foregroundColor: Colors.white,
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Remove'),
           ),
@@ -3405,7 +4448,7 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface2,
+        backgroundColor: AppTheme.dialogBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Delete Group?', style: TextStyle(color: AppTheme.danger)),
         content: const Text('This action cannot be undone.', style: TextStyle(color: AppTheme.textMuted)),
@@ -3426,8 +4469,11 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
                 AppToast.error(context, r['error']?.toString() ?? 'Could not delete group');
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            child: const Text('Delete'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.danger,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Delete', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
           ),
         ],
       ),

@@ -6,22 +6,29 @@ import '../services/windows_app_capture.dart';
 import '../theme/app_theme.dart';
 
 class AppFilterPickerSheet extends StatefulWidget {
-  final List<String> initialSelectedExes;
+  final List<WindowsAppInfo> initialSelectedApps;
 
   const AppFilterPickerSheet({
     super.key,
-    required this.initialSelectedExes,
+    required this.initialSelectedApps,
   });
 
-  static Future<List<String>?> show(
+  static Future<List<WindowsAppInfo>?> show(
     BuildContext context, {
-    required List<String> initialSelectedExes,
+    List<WindowsAppInfo> initialSelectedApps = const [],
+    @Deprecated('Use initialSelectedApps') List<String>? initialSelectedExes,
   }) {
-    return showModalBottomSheet<List<String>>(
+    var seed = initialSelectedApps;
+    if (seed.isEmpty && initialSelectedExes != null && initialSelectedExes.isNotEmpty) {
+      seed = initialSelectedExes
+          .map((e) => WindowsAppInfo(name: e, exe: e, title: ''))
+          .toList();
+    }
+    return showModalBottomSheet<List<WindowsAppInfo>>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => AppFilterPickerSheet(initialSelectedExes: initialSelectedExes),
+      builder: (_) => AppFilterPickerSheet(initialSelectedApps: seed),
     );
   }
 
@@ -31,6 +38,8 @@ class AppFilterPickerSheet extends StatefulWidget {
 
 class _AppFilterPickerSheetState extends State<AppFilterPickerSheet> {
   final _selected = <String>{};
+  final _savedByExe = <String, WindowsAppInfo>{};
+  final _runningKeys = <String>{};
   List<WindowsAppInfo> _apps = const [];
   bool _loading = true;
   String? _error;
@@ -38,7 +47,12 @@ class _AppFilterPickerSheetState extends State<AppFilterPickerSheet> {
   @override
   void initState() {
     super.initState();
-    _selected.addAll(widget.initialSelectedExes.map((e) => e.toLowerCase()));
+    for (final a in widget.initialSelectedApps) {
+      final key = a.exe.toLowerCase();
+      if (key.isEmpty) continue;
+      _selected.add(key);
+      _savedByExe[key] = a;
+    }
     _loadApps();
   }
 
@@ -50,8 +64,16 @@ class _AppFilterPickerSheetState extends State<AppFilterPickerSheet> {
     try {
       final apps = await WindowsAppCapture.listRunningApps();
       if (!mounted) return;
+      final runningKeys = apps.map((a) => a.exe.toLowerCase()).toSet();
+      final offline = _savedByExe.entries
+          .where((e) => !runningKeys.contains(e.key))
+          .map((e) => e.value)
+          .toList();
       setState(() {
-        _apps = apps;
+        _runningKeys
+          ..clear()
+          ..addAll(runningKeys);
+        _apps = [...offline, ...apps];
         _loading = false;
       });
     } catch (e) {
@@ -70,8 +92,22 @@ class _AppFilterPickerSheetState extends State<AppFilterPickerSheet> {
         _selected.remove(key);
       } else {
         _selected.add(key);
+        _savedByExe[key] = app;
       }
     });
+  }
+
+  List<WindowsAppInfo> _buildSelection() {
+    final byExe = <String, WindowsAppInfo>{
+      ..._savedByExe,
+      for (final a in _apps) a.exe.toLowerCase(): a,
+    };
+    final out = <WindowsAppInfo>[];
+    for (final key in _selected) {
+      final app = byExe[key];
+      if (app != null && app.exe.trim().isNotEmpty) out.add(app);
+    }
+    return out;
   }
 
   @override
@@ -104,7 +140,7 @@ class _AppFilterPickerSheetState extends State<AppFilterPickerSheet> {
                 children: [
                   const Expanded(
                     child: Text(
-                      'Select Apps to Monitor',
+                      'Select Apps',
                       style: TextStyle(
                         color: AppTheme.textPrimary,
                         fontSize: 16,
@@ -123,7 +159,7 @@ class _AppFilterPickerSheetState extends State<AppFilterPickerSheet> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 18),
               child: Text(
-                'Screenshot only when a selected app is the top window.',
+                'While clocked in, only these apps are captured when they are on top.',
                 style: TextStyle(
                   color: AppTheme.textMuted.withValues(alpha: 0.9),
                   fontSize: 12,
@@ -156,7 +192,9 @@ class _AppFilterPickerSheetState extends State<AppFilterPickerSheet> {
                   itemCount: _apps.length,
                   itemBuilder: (context, index) {
                     final app = _apps[index];
-                    final checked = _selected.contains(app.exe.toLowerCase());
+                    final key = app.exe.toLowerCase();
+                    final checked = _selected.contains(key);
+                    final offline = !_runningKeys.contains(key);
                     return CheckboxListTile(
                       value: checked,
                       onChanged: (_) => _toggle(app),
@@ -169,13 +207,16 @@ class _AppFilterPickerSheetState extends State<AppFilterPickerSheet> {
                         ),
                       ),
                       subtitle: Text(
-                        app.exe,
+                        offline ? '${app.exe} · not running now' : app.exe,
                         style: TextStyle(
                           color: AppTheme.textMuted.withValues(alpha: 0.85),
                           fontSize: 11,
                         ),
                       ),
-                      secondary: const Icon(Icons.apps_rounded, color: AppTheme.accent),
+                      secondary: Icon(
+                        offline ? Icons.desktop_access_disabled_rounded : Icons.apps_rounded,
+                        color: offline ? AppTheme.textMuted : AppTheme.accent,
+                      ),
                     );
                   },
                 ),
@@ -193,9 +234,7 @@ class _AppFilterPickerSheetState extends State<AppFilterPickerSheet> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: FilledButton(
-                      onPressed: _selected.isEmpty
-                          ? null
-                          : () => Navigator.pop(context, _selected.toList()),
+                      onPressed: () => Navigator.pop(context, _buildSelection()),
                       child: Text('Save (${_selected.length})'),
                     ),
                   ),

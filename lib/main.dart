@@ -13,6 +13,7 @@ import 'theme/app_theme.dart';
 import 'services/api_service.dart';
 import 'services/user_data_service.dart';
 import 'services/screenshot_service.dart';
+import 'services/app_filter_prefs.dart';
 import 'services/notification_service.dart';
 import 'services/call_service.dart';
 import 'services/call_navigation.dart';
@@ -328,6 +329,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       final c = emp['screenshot_monitoring_consent'] == true;
       await prefs.setBool('screenshot_monitoring_consent', c);
       AppSession.setConsent(c);
+      await AppFilterPrefs.applyServerCaptureMode(emp['screenshot_capture_mode']);
       await prefs.setInt(
         'data_privacy_notice_accepted_version',
         _intFromDynamic(emp['data_privacy_notice_accepted_version'], 0),

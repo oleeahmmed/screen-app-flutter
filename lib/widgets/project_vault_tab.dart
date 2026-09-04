@@ -260,16 +260,16 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
 
   Future<void> _editEntry({Map<String, dynamic>? existing}) async {
     final cat = _selectedCat;
-    if (!_canEditCat(cat)) {
-      _toast(
-        _categories.isEmpty
-            ? (_isAdmin ? 'Create a category first' : 'No access yet — ask admin')
-            : 'No edit permission on this category',
-        error: true,
-      );
+    // Flutter: only vault admin / manager may add or edit entries.
+    if (!_isAdmin) {
+      _toast('Only vault admins can add or edit entries', error: true);
       return;
     }
-    final catId = cat!['id'] as int;
+    if (cat == null) {
+      _toast('Create a category first', error: true);
+      return;
+    }
+    final catId = cat['id'] as int;
     final nameCtrl = TextEditingController(text: existing?['name']?.toString() ?? '');
     final urlCtrl = TextEditingController(text: existing?['url']?.toString() ?? '');
     final userCtrl = TextEditingController(text: existing?['username']?.toString() ?? '');
@@ -382,17 +382,14 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   }
 
   void _openEntryDetail(Map<String, dynamic> e) {
+    final entry = vaultEntryWithCategoryPerm(e, _selectedCat);
     showVaultEntryDetailSheet(
       context: context,
       apiService: widget.apiService,
       projectId: widget.projectId,
-      entry: e,
+      entry: entry,
       isAdmin: _isAdmin,
-      canEdit: vaultEntryCanEdit(
-        e,
-        isVaultAdmin: _isAdmin,
-        currentUserId: _currentUserId,
-      ),
+      canEdit: _isAdmin,
       currentUserId: _currentUserId,
       onChanged: () {
         if (_categoryId != null) _selectCategory(_categoryId!);
@@ -449,7 +446,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
     final id = c['id'] as int;
     final selected = id == _categoryId;
     final permLabel = _isAdmin ? '' : vaultCategoryPermissionLabel(c);
-    final isEdit = permLabel == 'Can edit' || permLabel == 'Admin';
+    final isEdit = false;
 
     return Material(
       color: selected
@@ -569,7 +566,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
       return const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright));
     }
 
-    final canEdit = _canEditCat(_selectedCat);
+    final canEdit = _isAdmin;
     final cat = _selectedCat;
 
     return Column(
@@ -707,7 +704,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
                   const SizedBox(width: 8),
                   vaultPermissionChip(
                     vaultCategoryPermissionLabel(cat),
-                    edit: vaultCategoryPermissionLabel(cat) == 'Can edit',
+                    edit: false,
                   ),
                 ],
               ],

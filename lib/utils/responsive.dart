@@ -79,15 +79,38 @@ class Responsive {
   /// Minimum card width so 2-column My Tasks fits typical desktop windows.
   static const double taskCardMinWidth = 248;
 
-  /// Chat list | thread split (also used when window is moderately narrow).
-  static const double chatSplitMinWidth = 560;
+  /// Chat list | thread split — lower so typical desktop windows keep both panes.
+  static const double chatSplitMinWidth = 640;
 
+  /// Right-hand contact/group details pane (list | chat | details).
+  static const double chatDetailsMinWidth = 1100;
+
+  /// Two-pane chat whenever the window is wide enough (including immersive desktop).
   static bool useChatSplit(BuildContext context) =>
       widthOf(context) >= chatSplitMinWidth;
 
-  static double chatListPaneWidth(BuildContext context) {
-    final w = widthOf(context);
-    return (w * 0.28).clamp(220.0, 340.0);
+  /// Three-pane chat when details is open and width allows.
+  static bool useChatDetailsPane(BuildContext context) =>
+      widthOf(context) >= chatDetailsMinWidth;
+
+  /// Narrow WhatsApp-Web-style chat list — scales with window, stays readable.
+  static double chatListPaneWidth(BuildContext context, {double reserved = 0}) {
+    return chatListPaneWidthFor(widthOf(context), reserved: reserved);
+  }
+
+  static double chatListPaneWidthFor(double totalWidth, {double reserved = 0}) {
+    final available = (totalWidth - reserved).clamp(0.0, totalWidth);
+    if (available < 800) return (available * 0.40).clamp(200.0, 300.0);
+    if (available < 1200) return (available * 0.32).clamp(260.0, 340.0);
+    return (available * 0.28).clamp(280.0, 400.0);
+  }
+
+  static double chatDetailsPaneWidth(BuildContext context) {
+    return chatDetailsPaneWidthFor(widthOf(context));
+  }
+
+  static double chatDetailsPaneWidthFor(double totalWidth) {
+    return (totalWidth * 0.22).clamp(260.0, 360.0);
   }
 
   /// My Task grid columns from available content width (resize-safe).

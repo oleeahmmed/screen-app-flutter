@@ -119,15 +119,9 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
     return raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
   }
 
-  bool get _canManageEntry =>
-      _permissionsLoaded &&
-      vaultEntryCanEdit(
-        _entry,
-        isVaultAdmin: widget.isAdmin,
-        currentUserId: _currentUserId ?? widget.currentUserId,
-      );
+  bool get _canManageEntry => widget.isAdmin;
 
-  bool get _canShareEntry => _permissionsLoaded && widget.isAdmin;
+  bool get _canShareEntry => widget.isAdmin;
 
   @override
   void initState() {
@@ -144,7 +138,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
     if (uid != null) {
       setState(() => _currentUserId = uid);
     }
-    // Refresh can_edit from server so category-grant users never keep stale true.
+    // Refresh can_edit from server so category-grant / shared users never keep stale true.
     final r = await widget.apiService.getVaultEntry(widget.projectId, _entryId);
     if (!mounted) return;
     if (r['success'] == true && r['data'] is Map) {
@@ -153,6 +147,12 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
         _entry = {
           ..._entry,
           ...fresh,
+          // Preserve share / category view-only markers from the opener.
+          if (_entry.containsKey('share_permission'))
+            'share_permission': _entry['share_permission'],
+          if (_entry.containsKey('shared_by')) 'shared_by': _entry['shared_by'],
+          if (_entry.containsKey('category_my_permission'))
+            'category_my_permission': _entry['category_my_permission'],
           if ((_entry['url']?.toString() ?? '').isNotEmpty && (fresh['url']?.toString() ?? '').isEmpty)
             'url': _entry['url'],
           if ((_entry['username']?.toString() ?? '').isNotEmpty &&
@@ -162,7 +162,15 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
         _permissionsLoaded = true;
       });
     } else {
-      setState(() => _permissionsLoaded = true);
+      // Failed refresh — force view-only (never show edit/delete on stale flags).
+      setState(() {
+        _entry = {
+          ..._entry,
+          'can_edit': false,
+          'can_delete': false,
+        };
+        _permissionsLoaded = true;
+      });
     }
   }
 
@@ -199,10 +207,22 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
     final r = await widget.apiService.revealVaultEntry(widget.projectId, _entryId);
     if (!mounted) return;
     if (r['success'] == true) {
+      final data = r['data'];
+      final map = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+      final pwd = map['password']?.toString() ?? '';
+      // Also refresh username/url if server returned them.
+      final nextUrl = map['url']?.toString();
+      final nextUser = map['username']?.toString();
       setState(() {
-        _revealedPassword = (r['data'] as Map? ?? {})['password']?.toString() ?? '';
+        _revealedPassword = pwd;
+        if (nextUrl != null && nextUrl.isNotEmpty) _entry['url'] = nextUrl;
+        if (nextUser != null && nextUser.isNotEmpty) _entry['username'] = nextUser;
       });
-      _scheduleAutoHide();
+      if (pwd.isEmpty) {
+        _toast('No password stored for this entry', error: true);
+      } else {
+        _scheduleAutoHide();
+      }
     } else {
       _toast(r['error']?.toString() ?? 'Reveal failed', error: true);
     }
@@ -218,11 +238,38 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
     final r = await widget.apiService.copyVaultField(widget.projectId, _entryId, field);
     if (!mounted) return;
     if (r['success'] == true) {
-      await Clipboard.setData(ClipboardData(text: r['data']?['value']?.toString() ?? ''));
+      final data = r['data'];
+      final map = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+      var value = map['value']?.toString() ?? '';
+      // Local fallback for url/username already shown on screen.
+      if (value.isEmpty && field == 'url') value = _entry['url']?.toString() ?? '';
+      if (value.isEmpty && field == 'username') value = _entry['username']?.toString() ?? '';
+      if (value.isEmpty && field == 'password' && _revealedPassword != null) {
+        value = _revealedPassword!;
+      }
+      if (value.isEmpty) {
+        _toast('Nothing to copy for $field', error: true);
+        return;
+      }
+      await Clipboard.setData(ClipboardData(text: value));
       _toast('Copied $field');
-    } else {
-      _toast(r['error']?.toString() ?? 'Copy failed', error: true);
+      return;
     }
+    // Offline/API fallback for visible non-secret fields.
+    if (field == 'url' || field == 'username') {
+      final local = _entry[field]?.toString() ?? '';
+      if (local.isNotEmpty) {
+        await Clipboard.setData(ClipboardData(text: local));
+        _toast('Copied $field');
+        return;
+      }
+    }
+    if (field == 'password' && (_revealedPassword?.isNotEmpty ?? false)) {
+      await Clipboard.setData(ClipboardData(text: _revealedPassword!));
+      _toast('Copied password');
+      return;
+    }
+    _toast(r['error']?.toString() ?? 'Copy failed', error: true);
   }
 
   Future<void> _editEntry() async {

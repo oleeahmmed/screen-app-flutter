@@ -1,9 +1,10 @@
 // api_service.dart - API Service
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
-import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'user_data_service.dart';
@@ -1244,7 +1245,12 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> createGroup(String name, String description, List<int> memberIds) async {
+  Future<Map<String, dynamic>> createGroup(
+    String name,
+    String description,
+    List<int> memberIds, {
+    String visibilityMode = 'shared',
+  }) async {
     try {
       await ensureAuth();
       final response = await _authorizedPost(
@@ -1253,6 +1259,7 @@ class ApiService {
           'name': name,
           'description': description,
           'member_ids': memberIds,
+          'visibility_mode': visibilityMode,
         }),
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
@@ -1288,10 +1295,18 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> sendGroupMessage(int groupId, String message, {int? replyToId}) async {
+  Future<Map<String, dynamic>> sendGroupMessage(
+    int groupId,
+    String message, {
+    int? replyToId,
+    List<int>? recipientIds,
+  }) async {
     try {
       final body = <String, dynamic>{'message': message};
       if (replyToId != null) body['reply_to_id'] = replyToId;
+      if (recipientIds != null && recipientIds.isNotEmpty) {
+        body['recipient_ids'] = recipientIds;
+      }
       final response = await http
           .post(
             Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
@@ -1313,6 +1328,7 @@ class ApiService {
     List<int> imageBytes,
     String filename, {
     int? replyToId,
+    List<int>? recipientIds,
   }) async {
     try {
       final request = http.MultipartRequest(
@@ -1324,6 +1340,9 @@ class ApiService {
       request.headers.addAll(headers);
       request.fields['message'] = '';
       if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
+      if (recipientIds != null && recipientIds.isNotEmpty) {
+        request.fields['recipient_ids'] = recipientIds.join(',');
+      }
       request.files.add(http.MultipartFile.fromBytes(
         'image',
         imageBytes,
@@ -1346,6 +1365,7 @@ class ApiService {
     List<int> fileBytes,
     String filename, {
     int? replyToId,
+    List<int>? recipientIds,
   }) async {
     try {
       final request = http.MultipartRequest(
@@ -1357,6 +1377,9 @@ class ApiService {
       request.headers.addAll(headers);
       request.fields['message'] = '';
       if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
+      if (recipientIds != null && recipientIds.isNotEmpty) {
+        request.fields['recipient_ids'] = recipientIds.join(',');
+      }
       request.files.add(http.MultipartFile.fromBytes('file', fileBytes, filename: filename));
       final response = await request.send().timeout(const Duration(seconds: 60));
       final body = await response.stream.bytesToString();
@@ -1374,6 +1397,7 @@ class ApiService {
     List<int> audioBytes,
     String filename, {
     int? replyToId,
+    List<int>? recipientIds,
   }) async {
     try {
       final request = http.MultipartRequest(
@@ -1385,6 +1409,9 @@ class ApiService {
       request.headers.addAll(headers);
       request.fields['message'] = '';
       if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
+      if (recipientIds != null && recipientIds.isNotEmpty) {
+        request.fields['recipient_ids'] = recipientIds.join(',');
+      }
       request.files.add(http.MultipartFile.fromBytes(
         'voice_message',
         audioBytes,
@@ -2586,8 +2613,12 @@ class ApiService {
       final now = DateTime.now();
       final date = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
       final time = '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}-${now.millisecond.toString().padLeft(3, '0')}';
-      final screen = 'screen${screenIndex.clamp(1, 16)}';
-      final relativePath = '$date/$screen/$time.png';
+      final screenNum = screenIndex.clamp(1, 16);
+      final screenSlot = 'screen$screenNum';
+      final isJpeg = imageBytes.length > 2 && imageBytes[0] == 0xFF && imageBytes[1] == 0xD8;
+      final ext = isJpeg ? 'jpg' : 'png';
+      // Backend LiveMonitorManager groups by date/screenN/… — must match per monitor.
+      final relativePath = '$date/$screenSlot/$time.$ext';
 
       Future<http.StreamedResponse> sendUpload() async {
         final request = http.MultipartRequest(
@@ -2598,8 +2629,6 @@ class ApiService {
         headers.remove('Content-Type');
         request.headers.addAll(headers);
 
-        final isJpeg = imageBytes.length > 2 && imageBytes[0] == 0xFF && imageBytes[1] == 0xD8;
-        final ext = isJpeg ? 'jpg' : 'png';
         request.files.add(
           http.MultipartFile.fromBytes(
             'file',
@@ -2610,6 +2639,7 @@ class ApiService {
         );
 
         request.fields['relative_path'] = relativePath;
+        request.fields['screen'] = screenNum.toString();
         request.fields['is_idle'] = isIdle.toString();
         request.fields['idle_duration'] = idleDuration.toString();
         if (lastActivityAt != null) {
@@ -2642,6 +2672,50 @@ class ApiService {
     } catch (e) {
       print('❌ Upload error: $e');
       return {'success': false, 'error': 'Upload error: $e'};
+    }
+  }
+
+  /// Lightweight presence refresh when the screen has not changed (no duplicate image).
+  Future<Map<String, dynamic>> screenshotHeartbeat({
+    bool isIdle = false,
+    int idleDuration = 0,
+    String? lastActivityAt,
+    int screenIndex = 1,
+  }) async {
+    try {
+      await ensureAuth();
+      final body = <String, dynamic>{
+        'is_idle': isIdle,
+        'idle_duration': idleDuration,
+        'screen': screenIndex.clamp(1, 16),
+      };
+      if (lastActivityAt != null && lastActivityAt.isNotEmpty) {
+        body['last_activity_at'] = lastActivityAt;
+      }
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.screenshotHeartbeatUrl),
+        body: jsonEncode(body),
+      );
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final decoded = response.body.isNotEmpty ? jsonDecode(response.body) : null;
+        return {
+          'success': true,
+          'skipped_upload': true,
+          'data': decoded is Map ? Map<String, dynamic>.from(decoded) : decoded,
+        };
+      }
+      String code = '';
+      String errorMsg = 'Heartbeat failed (${response.statusCode})';
+      try {
+        final json = jsonDecode(response.body);
+        if (json is Map) {
+          errorMsg = (json['error'] ?? errorMsg).toString();
+          code = (json['code'] ?? '').toString();
+        }
+      } catch (_) {}
+      return {'success': false, 'error': errorMsg, 'code': code};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
     }
   }
 
@@ -3075,9 +3149,12 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getVaultSharedWithMe() async {
+  Future<Map<String, dynamic>> getVaultSharedWithMe({int? projectId}) async {
     try {
-      final response = await _authorizedGet(Uri.parse(AppConfig.vaultSharedWithMeUrl));
+      final uri = projectId != null
+          ? Uri.parse(AppConfig.vaultProjectSharedWithMeUrl(projectId))
+          : Uri.parse(AppConfig.vaultSharedWithMeUrl);
+      final response = await _authorizedGet(uri);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is Map) {
@@ -3299,15 +3376,26 @@ class ApiService {
     required Map<String, String> fields,
     required List<Map<String, dynamic>> files,
   }) async {
-    Future<http.MultipartRequest> build() {
+    http.MultipartRequest build() {
       final request = http.MultipartRequest(method, uri);
       request.headers.addAll(_authHeaderOnly());
       request.fields.addAll(fields);
       for (final f in files) {
-        final bytes = f['bytes'];
+        final raw = f['bytes'];
+        List<int>? bytes;
+        if (raw is Uint8List) {
+          bytes = raw;
+        } else if (raw is List<int>) {
+          bytes = raw;
+        } else if (raw is List) {
+          bytes = raw.whereType<int>().toList();
+        }
         final filename = f['filename']?.toString() ?? 'attachment';
-        if (bytes is List<int> && bytes.isNotEmpty) {
-          request.files.add(http.MultipartFile.fromBytes('files', bytes, filename: filename));
+        if (bytes != null && bytes.isNotEmpty) {
+          // Repeated field name "files" — Django request.FILES.getlist("files").
+          request.files.add(
+            http.MultipartFile.fromBytes('files', bytes, filename: filename),
+          );
         }
       }
       return request;
@@ -3480,14 +3568,22 @@ class ApiService {
 
   Future<Map<String, dynamic>> revealVaultEntry(int projectId, int entryId) async {
     try {
+      await ensureAuth();
       final response = await _authorizedPost(
         Uri.parse(AppConfig.vaultEntryRevealUrl(projectId, entryId)),
         body: '{}',
       );
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final raw = jsonDecode(response.body);
+        if (raw is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+        }
+        return {'success': false, 'error': 'Invalid reveal response'};
       }
-      return {'success': false, 'error': 'Reveal failed (${response.statusCode})'};
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -3495,14 +3591,22 @@ class ApiService {
 
   Future<Map<String, dynamic>> copyVaultField(int projectId, int entryId, String field) async {
     try {
+      await ensureAuth();
       final response = await _authorizedPost(
         Uri.parse(AppConfig.vaultEntryCopyFieldUrl(projectId, entryId)),
         body: jsonEncode({'field': field}),
       );
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        final raw = jsonDecode(response.body);
+        if (raw is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(raw)};
+        }
+        return {'success': false, 'error': 'Invalid copy response'};
       }
-      return {'success': false, 'error': 'Copy failed (${response.statusCode})'};
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -3510,14 +3614,18 @@ class ApiService {
 
   Future<Map<String, dynamic>> hideVaultPassword(int projectId, int entryId) async {
     try {
+      await ensureAuth();
       final response = await _authorizedPost(
         Uri.parse(AppConfig.vaultEntryHidePasswordUrl(projectId, entryId)),
         body: '{}',
       );
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        return {'success': true};
       }
-      return {'success': false, 'error': 'Hide failed (${response.statusCode})'};
+      return {
+        'success': false,
+        'error': _parseApiErrorBody(response.body, response.statusCode),
+      };
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
