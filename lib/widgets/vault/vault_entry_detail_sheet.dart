@@ -121,6 +121,7 @@ class _VaultEntryDetailFormState extends State<VaultEntryDetailForm> {
 
   bool get _canManageEntry =>
       _permissionsLoaded &&
+      widget.canEdit &&
       vaultEntryCanEdit(
         _entry,
         isVaultAdmin: widget.isAdmin,

@@ -382,17 +382,14 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   }
 
   void _openEntryDetail(Map<String, dynamic> e) {
+    final entry = vaultEntryWithCategoryPerm(e, _selectedCat);
     showVaultEntryDetailSheet(
       context: context,
       apiService: widget.apiService,
       projectId: widget.projectId,
-      entry: e,
+      entry: entry,
       isAdmin: _isAdmin,
-      canEdit: vaultEntryCanEdit(
-        e,
-        isVaultAdmin: _isAdmin,
-        currentUserId: _currentUserId,
-      ),
+      canEdit: _isAdmin,
       currentUserId: _currentUserId,
       onChanged: () {
         if (_categoryId != null) _selectCategory(_categoryId!);
@@ -449,7 +446,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
     final id = c['id'] as int;
     final selected = id == _categoryId;
     final permLabel = _isAdmin ? '' : vaultCategoryPermissionLabel(c);
-    final isEdit = permLabel == 'Can edit' || permLabel == 'Admin';
+    final isEdit = permLabel == 'Admin';
 
     return Material(
       color: selected

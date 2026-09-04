@@ -98,18 +98,16 @@ Widget vaultPendingFilesPicker({
 
 String vaultCategoryPermissionLabel(Map<String, dynamic> cat) {
   if (cat['can_admin'] == true) return 'Admin';
+  // Normal users (any category grant) are view-only in the Flutter app.
   final p = (cat['my_permission'] ?? '').toString().toLowerCase();
-  if (p == 'edit' || p == 'admin' || cat['can_manage_entries'] == true) return 'Can edit';
-  if (p == 'view') return 'View only';
+  if (p.isNotEmpty || cat['can_manage_entries'] == true) return 'View only';
   return '';
 }
 
+/// Add / rename / mutate category content — Flutter: vault admin/manager only.
 bool vaultCanEditCategory(Map<String, dynamic>? cat, {required bool isAdmin}) {
   if (cat == null) return false;
-  if (isAdmin || cat['can_admin'] == true) return true;
-  if (cat['can_manage_entries'] == true) return true;
-  final p = (cat['my_permission'] ?? '').toString().toLowerCase();
-  return p == 'edit' || p == 'admin';
+  return isAdmin || cat['can_admin'] == true;
 }
 
 /// Parse API int ids that may arrive as int or string.
@@ -123,17 +121,30 @@ int? vaultParseId(dynamic value) {
 bool vaultApiFlag(dynamic value) =>
     value == true || value == 1 || value?.toString().toLowerCase() == 'true';
 
-/// Entry edit/delete — API `can_edit` / `can_delete` only (never category grant).
+/// Merge category grant onto an entry map (view markers for UI).
+Map<String, dynamic> vaultEntryWithCategoryPerm(
+  Map<String, dynamic> entry,
+  Map<String, dynamic>? category,
+) {
+  if (category == null) return Map<String, dynamic>.from(entry);
+  final out = Map<String, dynamic>.from(entry);
+  final p = (category['my_permission'] ?? '').toString().toLowerCase();
+  if (p.isNotEmpty) out['category_my_permission'] = p;
+  if (category['can_admin'] == true) {
+    out['category_can_admin'] = true;
+  }
+  return out;
+}
+
+/// Entry edit / delete / attach — Flutter: vault admin or manager only.
+///
+/// Category grants and Shared-with-me never unlock mutate buttons for normal users.
 bool vaultEntryCanEdit(
   Map<String, dynamic> entry, {
   bool isVaultAdmin = false,
   int? currentUserId,
 }) {
-  if (entry.containsKey('can_edit') || entry.containsKey('can_delete')) {
-    return vaultApiFlag(entry['can_edit']) || vaultApiFlag(entry['can_delete']);
-  }
-  // No flags yet — hide actions until detail fetch returns permissions.
-  return false;
+  return isVaultAdmin || entry['category_can_admin'] == true;
 }
 
 /// Immersive vault context card (project → category breadcrumb).

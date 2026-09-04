@@ -186,9 +186,13 @@ class _VaultShareSheetState extends State<_VaultShareSheet> {
               items: const [
                 DropdownMenuItem(value: 'view', child: Text('View only')),
                 DropdownMenuItem(value: 'copy', child: Text('View & copy')),
-                DropdownMenuItem(value: 'edit', child: Text('Edit')),
               ],
               onChanged: (v) => setState(() => _permission = v ?? 'view'),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Shared people can view credentials — they cannot edit or delete entries.',
+              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 11.5),
             ),
             const SizedBox(height: 8),
             ConstrainedBox(
