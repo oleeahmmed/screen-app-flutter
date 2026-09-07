@@ -27,8 +27,8 @@ class LocalNotificationService {
   static String? pendingPayload;
   static String? pendingInput;
 
-  static const messageChannelId = 'aims_messages_v3';
-  static const callChannelId = 'aims_calls_v3';
+  static const messageChannelId = 'aims_messages_v4';
+  static const callChannelId = 'aims_calls_v4';
   static const keepaliveChannelId = 'aims_keepalive';
 
   static const _me = Person(name: 'You', key: 'me');
@@ -40,7 +40,7 @@ class LocalNotificationService {
   static Future<void> initialize() async {
     if (_initialized || !supported) return;
 
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const android = AndroidInitializationSettings('@drawable/ic_stat_message');
     const ios = DarwinInitializationSettings(
       requestAlertPermission: false,
       requestBadgePermission: false,
@@ -240,6 +240,15 @@ class LocalNotificationService {
     final id = conversationKey.hashCode & 0x7fffffff;
     final title = isGroup ? (groupTitle?.trim().isNotEmpty == true ? groupTitle!.trim() : name) : name;
 
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      sound: 'msg_pop.mp3',
+      interruptionLevel: InterruptionLevel.active,
+    );
+
+    try {
     final androidDetails = AndroidNotificationDetails(
       messageChannelId,
       'Messages',
@@ -251,7 +260,6 @@ class LocalNotificationService {
       enableVibration: true,
       vibrationPattern: Int64List.fromList(<int>[0, 40, 80, 50]),
       category: AndroidNotificationCategory.message,
-      icon: 'ic_stat_message',
       color: const Color(0xFF25D366),
       largeIcon: avatar == null ? null : ByteArrayAndroidBitmap(avatar),
       styleInformation: MessagingStyleInformation(
@@ -282,14 +290,6 @@ class LocalNotificationService {
         ),
       ],
     );
-    const iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: true,
-      sound: 'msg_pop.wav',
-      interruptionLevel: InterruptionLevel.active,
-    );
-
     await _plugin.show(
       id,
       title,
@@ -297,7 +297,59 @@ class LocalNotificationService {
       NotificationDetails(android: androidDetails, iOS: iosDetails),
       payload: payload,
     );
+  } catch (e) {
+    if (kDebugMode) debugPrint('[LocalNotification] showChat failed: $e');
+    try {
+      await _plugin.show(
+        id,
+        title,
+        text,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            messageChannelId,
+            'Messages',
+            channelDescription: 'Chat and app alerts',
+            importance: Importance.max,
+            priority: Priority.max,
+            playSound: true,
+            enableVibration: true,
+            category: AndroidNotificationCategory.message,
+            color: const Color(0xFF25D366),
+            styleInformation: BigTextStyleInformation(text, contentTitle: title),
+          ),
+          iOS: iosDetails,
+        ),
+        payload: payload,
+      );
+    } catch (e2) {
+      if (kDebugMode) debugPrint('[LocalNotification] showChat fallback failed: $e2');
+      try {
+        await _plugin.show(
+          id,
+          title,
+          text,
+          NotificationDetails(
+            android: AndroidNotificationDetails(
+              messageChannelId,
+              'Messages',
+              channelDescription: 'Chat and app alerts',
+              importance: Importance.max,
+              priority: Priority.max,
+              playSound: true,
+              sound: const RawResourceAndroidNotificationSound('msg_pop'),
+              enableVibration: true,
+              icon: '@mipmap/ic_launcher',
+            ),
+            iOS: iosDetails,
+          ),
+          payload: payload,
+        );
+      } catch (e3) {
+        if (kDebugMode) debugPrint('[LocalNotification] showChat last-resort failed: $e3');
+      }
+    }
   }
+}
 
   static Future<void> _showGeneric({
     required int id,
@@ -320,7 +372,6 @@ class LocalNotificationService {
       enableVibration: true,
       vibrationPattern: Int64List.fromList(<int>[0, 40, 80, 50]),
       category: AndroidNotificationCategory.message,
-      icon: 'ic_stat_message',
       color: const Color(0xFF25D366),
       largeIcon: avatar == null ? null : ByteArrayAndroidBitmap(avatar),
       styleInformation: BigTextStyleInformation(body, contentTitle: title),

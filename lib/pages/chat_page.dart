@@ -23,6 +23,8 @@ import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../widgets/app_logo.dart';
+import '../services/chat_wallpaper_prefs.dart';
+import '../widgets/chat_wallpaper_background.dart';
 import '../widgets/chat_details_panel.dart';
 import '../widgets/chat_image_viewer.dart';
 import '../widgets/empty_state.dart';
@@ -104,6 +106,9 @@ class _ChatPageState extends State<ChatPage> {
   String _inChatQuery = '';
   static const _quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
   bool _chatDragOver = false;
+  ChatWallpaperKind _wallpaperKind = ChatWallpaperKind.doodle;
+  int _wallpaperSolid = 0xFF0B141A;
+  String? _wallpaperImagePath;
 
   static const TextStyle _bubbleTextStyle = TextStyle(
     color: Color(0xFFE9EDEF),
@@ -158,6 +163,7 @@ class _ChatPageState extends State<ChatPage> {
     _loadUsers();
     _loadGroups(silent: true);
     _loadMyUserId();
+    unawaited(_loadWallpaper());
     _usersPollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       _loadUsers(silent: true);
       _loadGroups(silent: true);
@@ -177,6 +183,178 @@ class _ChatPageState extends State<ChatPage> {
         CallNavigation.openCallPageIfNeeded();
       }
     });
+  }
+
+  Future<void> _loadWallpaper() async {
+    final w = await ChatWallpaperPrefs.load();
+    if (!mounted) return;
+    setState(() {
+      _wallpaperKind = w.kind;
+      _wallpaperSolid = w.solidColor;
+      _wallpaperImagePath = w.imagePath;
+    });
+  }
+
+  Future<void> _showWallpaperPicker() async {
+    const presets = <int>[
+      0xFF0B141A,
+      0xFF111B21,
+      0xFF1A2E2A,
+      0xFF1F2937,
+      0xFF2D1B2E,
+      0xFF1B2533,
+    ];
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1F2C34),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Chat wallpaper',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'WhatsApp-style background for all chats',
+                style: TextStyle(color: Color(0xFF8696A0), fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _wallpaperSwatch(
+                    label: 'Default',
+                    selected: _wallpaperKind == ChatWallpaperKind.doodle,
+                    child: const SizedBox(
+                      width: 56,
+                      height: 56,
+                      child: CustomPaint(painter: WhatsAppDoodleWallpaperPainter()),
+                    ),
+                    onTap: () async {
+                      await ChatWallpaperPrefs.setDoodle();
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      await _loadWallpaper();
+                    },
+                  ),
+                  for (final c in presets)
+                    _wallpaperSwatch(
+                      label: null,
+                      selected: _wallpaperKind == ChatWallpaperKind.solid && _wallpaperSolid == c,
+                      child: Container(
+                        width: 56,
+                        height: 56,
+                        decoration: BoxDecoration(
+                          color: Color(c),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      onTap: () async {
+                        await ChatWallpaperPrefs.setSolid(c);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        await _loadWallpaper();
+                      },
+                    ),
+                  _wallpaperSwatch(
+                    label: 'Gallery',
+                    selected: _wallpaperKind == ChatWallpaperKind.image,
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2A3942),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.photo_library_rounded, color: Color(0xFF00A884)),
+                    ),
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      await _pickChatWallpaper();
+                    },
+                  ),
+                ],
+              ),
+              if (_wallpaperKind == ChatWallpaperKind.image) ...[
+                const SizedBox(height: 14),
+                TextButton.icon(
+                  onPressed: () async {
+                    await ChatWallpaperPrefs.clearImage();
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    await _loadWallpaper();
+                  },
+                  icon: const Icon(Icons.restore_rounded, color: Color(0xFF8696A0)),
+                  label: const Text('Reset to default', style: TextStyle(color: Color(0xFF8696A0))),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _wallpaperSwatch({
+    required Widget child,
+    required bool selected,
+    required VoidCallback onTap,
+    String? label,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected ? const Color(0xFF00A884) : Colors.white.withValues(alpha: 0.08),
+                width: selected ? 2.5 : 1,
+              ),
+            ),
+            child: ClipRRect(borderRadius: BorderRadius.circular(10), child: child),
+          ),
+          if (label != null) ...[
+            const SizedBox(height: 4),
+            Text(label, style: const TextStyle(color: Color(0xFF8696A0), fontSize: 11)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickChatWallpaper() async {
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+        maxWidth: 1920,
+      );
+      if (picked == null) return;
+      final path = await ChatWallpaperPrefs.setImageFile(File(picked.path));
+      if (!mounted) return;
+      setState(() {
+        _wallpaperKind = ChatWallpaperKind.image;
+        _wallpaperImagePath = path;
+      });
+    } catch (e) {
+      if (mounted) {
+        AppToast.show(context, message: 'Could not set wallpaper', type: AppToastType.error);
+      }
+    }
   }
 
   Future<void> _loadMyUserId() async {
@@ -1239,6 +1417,10 @@ class _ChatPageState extends State<ChatPage> {
       onSearchInChat: () {
         maybePopSheet();
         _promptInChatSearch();
+      },
+      onChangeWallpaper: () {
+        maybePopSheet();
+        unawaited(_showWallpaperPicker());
       },
       onEditName: group == null ? null : () => unawaited(_promptEditGroupName()),
       onEditDescription: group == null ? null : () => unawaited(_promptEditGroupDescription()),
@@ -3244,6 +3426,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     ),
                   ],
                   IconButton(
+                    tooltip: 'Wallpaper',
+                    onPressed: () => unawaited(_showWallpaperPicker()),
+                    icon: const Icon(Icons.wallpaper_rounded, color: Color(0xFFE9EDEF), size: 22),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  IconButton(
                     tooltip: 'Search in chat',
                     onPressed: _promptInChatSearch,
                     icon: const Icon(Icons.search_rounded, color: Color(0xFFE9EDEF), size: 22),
@@ -3276,8 +3464,10 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                         if (v == 'settings') _showGroupSettings(_selectedGroup);
                         if (v == 'video') _startCall(CallKind.video);
                         if (v == 'audio') _startCall(CallKind.audio);
+                        if (v == 'wallpaper') unawaited(_showWallpaperPicker());
                       },
                       itemBuilder: (_) => [
+                        const PopupMenuItem(value: 'wallpaper', child: Text('Wallpaper')),
                         if (!isGroup && PlatformCapabilities.voiceVideoCall) ...[
                           const PopupMenuItem(value: 'video', child: Text('Video call')),
                           const PopupMenuItem(value: 'audio', child: Text('Voice call')),
@@ -3293,13 +3483,15 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         ),
 
         Expanded(
-          child: ColoredBox(
-            color: AppTheme.bgDeep,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                const CustomPaint(painter: _ChatWallpaperPainter()),
-                Column(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ChatWallpaperBackground(
+                kind: _wallpaperKind,
+                solidColor: _wallpaperSolid,
+                imagePath: _wallpaperImagePath,
+              ),
+              Column(
                   children: [
                     if (_inChatQuery.isNotEmpty)
                       Material(
@@ -3340,7 +3532,6 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                 ),
               ],
             ),
-          ),
         ),
 
         if (_isRecording)
@@ -3700,8 +3891,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     }
 
     const ownBubble = Color(0xFF005C4B);
-    const otherBubble = Color(0xFF202C33);
+    const otherBubble = Color(0xFF1F2C33);
     final maxW = _bubbleMaxWidth(context);
+    final bubbleShape = chatBubbleRadius(isOwn: isOwn);
 
     Widget metaRow() {
       return Row(
@@ -3892,21 +4084,11 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       ? (details) => openOptions(details.globalPosition)
                       : null,
                   onDoubleTap: !isDeleted ? () => _setReplyTo(msg) : null,
-                  borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(10),
-                    topRight: const Radius.circular(10),
-                    bottomLeft: Radius.circular(isOwn ? 10 : 2),
-                    bottomRight: Radius.circular(isOwn ? 2 : 10),
-                  ),
+                  borderRadius: bubbleShape,
                   child: Ink(
                     decoration: BoxDecoration(
                       color: isOwn ? ownBubble : otherBubble,
-                      borderRadius: BorderRadius.only(
-                        topLeft: const Radius.circular(10),
-                        topRight: const Radius.circular(10),
-                        bottomLeft: Radius.circular(isOwn ? 10 : 2),
-                        bottomRight: Radius.circular(isOwn ? 2 : 10),
-                      ),
+                      borderRadius: bubbleShape,
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withValues(alpha: 0.18),
@@ -4725,27 +4907,6 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           iconColor: AppTheme.featureChat,
         ),
       );
-}
-
-
-class _ChatWallpaperPainter extends CustomPainter {
-  const _ChatWallpaperPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final bg = Paint()..color = AppTheme.bgDeep;
-    canvas.drawRect(Offset.zero & size, bg);
-    final dot = Paint()..color = AppTheme.primary.withValues(alpha: 0.06);
-    const step = 22.0;
-    for (double y = 8; y < size.height; y += step) {
-      for (double x = 8; x < size.width; x += step) {
-        canvas.drawCircle(Offset(x, y), 1.15, dot);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 

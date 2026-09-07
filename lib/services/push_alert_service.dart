@@ -89,7 +89,6 @@ abstract final class PushAlertService {
         groupTitle: chat.isGroup ? chat.name : null,
         personKey: chat.peerId ?? chat.groupId,
       );
-      if (playSound) unawaited(NotificationSound.playNotification());
       return;
     }
 
@@ -108,7 +107,6 @@ abstract final class PushAlertService {
       body: body.isNotEmpty ? body : 'Tap to open Aims',
       payload: NotificationLaunchRouter.encodePayloadFromData(data),
     );
-    if (playSound) unawaited(NotificationSound.playNotification());
   }
 
   static Future<void> _showChatFromWs(
@@ -171,6 +169,5 @@ abstract final class PushAlertService {
       groupTitle: chat.isGroup ? chat.name : null,
       personKey: chat.peerId ?? chat.groupId,
     );
-    unawaited(NotificationSound.playNotification());
   }
 }
