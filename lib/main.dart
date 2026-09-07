@@ -770,8 +770,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       );
     }
 
-    // Chat: always show WhatsApp-style system tray heads-up on Android/iOS.
-    if (LocalNotificationService.supported && (!inForeground || isChat)) {
+    // Mobile tray alerts are drawn by PushAlertService at the WS/FCM source.
+    if (LocalNotificationService.supported &&
+        !Platform.isAndroid &&
+        !Platform.isIOS &&
+        (!inForeground || isChat)) {
       if (isChat) {
         final chat = ChatNotification.fromData(data);
         await LocalNotificationService.showChat(

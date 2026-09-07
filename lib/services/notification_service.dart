@@ -12,6 +12,7 @@ import 'call_service.dart';
 import 'call_tokens.dart';
 import 'chat_notification_router.dart';
 import 'notification_sound.dart';
+import 'push_alert_service.dart';
 import 'user_data_service.dart';
 
 /// Real-time notifications via WebSocket (`/ws/chat/`) with polling fallback.
@@ -220,6 +221,9 @@ class NotificationService {
     final id = rawId is int ? rawId : int.tryParse('$rawId');
     if (id != null && id == _lastPushedNotificationId) return;
     _lastPushedNotificationId = id;
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      unawaited(PushAlertService.showFromData(latest));
+    }
     _pushController.add(latest);
   }
 
@@ -393,6 +397,9 @@ class NotificationService {
     }
 
     _trackPushedId(data);
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      unawaited(PushAlertService.showFromData(data));
+    }
     _pushController.add(data);
   }
 
@@ -429,16 +436,23 @@ class NotificationService {
             'New message'
         : (text.length > 120 ? '${text.substring(0, 120)}…' : text);
 
-    _pushController.add({
+    final payload = {
       'type': 'notification',
       'notification_type': isGroup ? 'new_group_message' : 'new_message',
-      'title': isGroup ? senderName : senderName,
+      'title': senderName,
       'message': preview,
       'sender_id': senderId,
       'sender_name': senderName,
       'sender_username': data['sender_username'],
       'group_id': data['group_id'],
-    });
+    };
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      unawaited(PushAlertService.showFromData({
+        ...payload,
+        if (isGroup) 'group_id': data['group_id'],
+      }));
+    }
+    _pushController.add(payload);
   }
 
   void dispose() {

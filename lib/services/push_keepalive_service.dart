@@ -11,11 +11,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../config.dart';
 import '../utils/ws_connect.dart';
-import 'call_notification.dart';
-import 'chat_notification.dart';
 import 'local_notification_service.dart';
-import 'notification_launch_router.dart';
-import 'notification_sound.dart';
+import 'push_alert_service.dart';
 
 /// Keeps the chat WebSocket alive after login so Android can show system
 /// notifications when Aims is not on screen.
@@ -165,56 +162,6 @@ class _PushKeepAliveIsolate {
     });
   }
 
-  Future<void> _showChatFromWs(Map<String, dynamic> data, {required bool isGroup}) async {
-    final senderId = int.tryParse('${data['sender_id'] ?? ''}');
-    if (senderId == null) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    final myId = int.tryParse(prefs.getString('user_id') ?? '');
-    if (myId != null && senderId == myId) return;
-
-    final text = (data['message'] ?? '').toString();
-    if (text.contains('__AIMS_CALL_')) return;
-
-    final senderName = (data['sender_full_name'] ??
-            data['sender_name'] ??
-            data['sender_username'] ??
-            'Someone')
-        .toString();
-    final preview = text.trim().isEmpty
-        ? ({'image': '[Image]', 'file': '[File]', 'voice': '[Voice]'})[
-                data['message_type']?.toString() ?? 'text'] ??
-            'New message'
-        : (text.length > 120 ? '${text.substring(0, 120)}\u2026' : text);
-
-    final notifType = isGroup ? 'new_group_message' : 'new_message';
-    final chat = ChatNotification.fromData({
-      'notification_type': notifType,
-      'title': senderName,
-      'message': preview,
-      'sender_id': senderId,
-      'sender_name': senderName,
-      'sender_username': data['sender_username'],
-      'group_id': data['group_id'],
-    });
-    await LocalNotificationService.showChat(
-      conversationKey: chat.isGroup
-          ? 'g:${chat.groupId ?? senderName.hashCode}'
-          : 'u:${chat.peerId ?? senderId}',
-      personName: chat.name,
-      body: chat.body.isNotEmpty ? chat.body : preview,
-      payload: ChatNotification.encode(
-        name: chat.name,
-        peerId: chat.peerId,
-        groupId: chat.groupId,
-        notificationType: notifType,
-      ),
-      isGroup: chat.isGroup,
-      groupTitle: chat.isGroup ? chat.name : null,
-      personKey: chat.peerId ?? chat.groupId,
-    );
-  }
-
   Future<void> _onMessage(dynamic raw) async {
     Map<String, dynamic> data;
     try {
@@ -228,88 +175,15 @@ class _PushKeepAliveIsolate {
     final type = data['type']?.toString() ?? '';
     if (_uiForeground && type != 'call_dismiss') return;
 
-    if (type == 'chat_message' || type == 'group_message') {
-      await _showChatFromWs(data, isGroup: type == 'group_message');
-      return;
-    }
-
-    if (type.startsWith('call_')) {
-      if (type == 'call_dismiss') {
-        await LocalNotificationService.cancelIncomingCall();
-        await NotificationSound.stopCallSounds();
-        return;
-      }
-      if (type == 'call_invite') {
-        final name = (data['sender_name'] ??
-                data['caller_name'] ??
-                data['sender_username'] ??
-                'Someone')
-            .toString();
-        final video = (data['call_type']?.toString() ?? 'audio') == 'video';
-        final callId = data['call_id']?.toString() ?? 'call';
-        final callerId = int.tryParse('${data['caller_id'] ?? data['sender_id'] ?? ''}') ?? 0;
-        await LocalNotificationService.showIncomingCall(
-          title: video ? 'Incoming video call' : 'Incoming voice call',
-          body: name,
-          payload: CallNotification.encode(
-            callId: callId,
-            callerId: callerId,
-            callType: video ? 'video' : 'audio',
-            callerName: name,
-          ),
-          playSound: true,
-          video: video,
-        );
-      }
-      return;
-    }
-
-    if (type != 'notification' && type != 'task_notification') return;
-
-    var title = data['title']?.toString() ?? 'Aims';
-    var body = data['message']?.toString() ?? '';
     if (type == 'task_notification') {
-      title = 'New task: ${data['task_name'] ?? 'Task'}';
-      body = data['task_description']?.toString() ??
-          'Assigned by ${data['assigned_by'] ?? 'Admin'}';
       data['notification_type'] = data['notification_type'] ?? 'task_assigned';
+      data['title'] = 'New task: ${data['task_name'] ?? 'Task'}';
+      data['message'] = data['task_description']?.toString() ??
+          'Assigned by ${data['assigned_by'] ?? 'Admin'}';
       data['object_type'] = data['object_type'] ?? 'task';
       data['object_id'] = data['object_id'] ?? data['task_id'];
-      data['title'] = title;
-      data['message'] = body;
-    }
-    if (body.isEmpty) body = 'Tap to open Aims';
-
-    final notifType = data['notification_type']?.toString() ?? '';
-    final isChat = notifType == 'new_message' || notifType == 'new_group_message';
-    if (isChat) {
-      final chat = ChatNotification.fromData(data);
-      await LocalNotificationService.showChat(
-        conversationKey: chat.isGroup
-            ? 'g:${chat.groupId ?? title.hashCode}'
-            : 'u:${chat.peerId ?? title.hashCode}',
-        personName: chat.name,
-        body: chat.body.isNotEmpty ? chat.body : body,
-        payload: ChatNotification.encode(
-          name: chat.name,
-          peerId: chat.peerId,
-          groupId: chat.groupId,
-          notificationType: notifType,
-        ),
-        isGroup: chat.isGroup,
-        groupTitle: chat.isGroup ? chat.name : null,
-        personKey: chat.peerId ?? chat.groupId,
-      );
-      return;
     }
 
-    final rawId = data['id'];
-    final id = rawId is int ? rawId : int.tryParse('$rawId') ?? title.hashCode;
-    await LocalNotificationService.show(
-      id: id & 0x7fffffff,
-      title: title,
-      body: body,
-      payload: NotificationLaunchRouter.encodePayloadFromData(data),
-    );
+    await PushAlertService.showFromData(data);
   }
 }
