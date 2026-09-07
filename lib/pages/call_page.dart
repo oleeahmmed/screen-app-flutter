@@ -146,7 +146,10 @@ class _CallPageState extends State<CallPage> with TickerProviderStateMixin {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B141A),
-      body: _isVideo ? _buildVideoBody(session) : _buildAudioBody(session),
+      resizeToAvoidBottomInset: false,
+      body: SizedBox.expand(
+        child: _isVideo ? _buildVideoBody(session) : _buildAudioBody(session),
+      ),
     );
   }
 
@@ -240,6 +243,8 @@ class _CallPageState extends State<CallPage> with TickerProviderStateMixin {
   Widget _buildAudioBody(CallSession session) {
     return SafeArea(
       child: Container(
+        width: double.infinity,
+        height: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
@@ -248,9 +253,10 @@ class _CallPageState extends State<CallPage> with TickerProviderStateMixin {
           ),
         ),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const SizedBox(height: 72),
-            _pulseAvatar(session.peerName),
+            Center(child: _pulseAvatar(session.peerName)),
             const SizedBox(height: 28),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -263,6 +269,7 @@ class _CallPageState extends State<CallPage> with TickerProviderStateMixin {
             const SizedBox(height: 10),
             Text(
               _statusText,
+              textAlign: TextAlign.center,
               style: TextStyle(color: Colors.white.withValues(alpha: 0.72), fontSize: 16),
             ),
             const Spacer(),
@@ -375,12 +382,10 @@ class _CallPageState extends State<CallPage> with TickerProviderStateMixin {
 
   Widget _inCallControls() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
           _roundAction(
             icon: _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
             label: _muted ? 'Unmute' : 'Mute',
@@ -430,7 +435,6 @@ class _CallPageState extends State<CallPage> with TickerProviderStateMixin {
             },
           ),
         ],
-        ),
       ),
     );
   }

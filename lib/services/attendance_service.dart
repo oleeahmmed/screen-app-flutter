@@ -1,11 +1,17 @@
+import 'dart:async';
+
 import '../app_session.dart';
 import 'attendance_cache.dart';
+import 'attendance_session_guard.dart';
 import 'attendance_work_time.dart';
 import 'api_service.dart';
 
 /// Clock in / clock out — server totals are the source of truth.
 /// Local tick only adds elapsed seconds since the last good snapshot.
 class AttendanceService {
+  AttendanceService._();
+  static final AttendanceService instance = AttendanceService._();
+
   bool isClockedIn = false;
   bool isOnBreak = false;
   int workSeconds = 0;
@@ -105,6 +111,10 @@ class AttendanceService {
     AppSession.setOnBreak(isOnBreak);
     workingDate = data['working_date']?.toString();
 
+    if (!isClockedIn) {
+      unawaited(AttendanceSessionGuard.clearWarm());
+    }
+
     final sched = data['schedule'] ?? data['effective_schedule'];
     if (sched is Map) {
       effectiveSchedule = Map<String, dynamic>.from(sched);
@@ -153,12 +163,42 @@ class AttendanceService {
     breakExpectedBackAt = null;
   }
 
+  Future<void> _closeStaleServerSession(ApiService api) async {
+    try {
+      final r = await api.checkOut();
+      if (r['success'] == true && r['data'] is Map) {
+        apply(Map<String, dynamic>.from(r['data'] as Map));
+        return;
+      }
+    } catch (_) {}
+    apply({
+      'is_clocked_in': false,
+      'on_break': false,
+      'today_work_seconds': workSeconds,
+      'today_break_duration': breakSeconds,
+      if (workingDate != null) 'working_date': workingDate,
+    });
+    await AttendanceSessionGuard.clearWarm();
+  }
+
   Future<bool> loadStatus(ApiService api) async {
+    final warm = await AttendanceSessionGuard.isWarmContinuation();
+    if (warm && isClockedIn) return true;
+
     final r = await api.getClockStatus();
     if (r['success'] == true && r['data'] is Map) {
-      apply(Map<String, dynamic>.from(r['data'] as Map));
+      final data = Map<String, dynamic>.from(r['data'] as Map);
+      if (data['is_clocked_in'] == true && !warm) {
+        await _closeStaleServerSession(api);
+        return true;
+      }
+      apply(data);
+      if (isClockedIn) await AttendanceSessionGuard.markWarm();
+      unawaited(AttendanceCache.save(data));
       return true;
     }
+
+    if (warm && isClockedIn) return true;
     return false;
   }
 
@@ -166,6 +206,7 @@ class AttendanceService {
     final r = await api.checkIn();
     if (r['success'] == true && r['data'] is Map) {
       apply(Map<String, dynamic>.from(r['data'] as Map));
+      await AttendanceSessionGuard.markWarm();
     }
     return r;
   }
@@ -175,6 +216,7 @@ class AttendanceService {
     if (r['success'] == true && r['data'] is Map) {
       apply(Map<String, dynamic>.from(r['data'] as Map));
     }
+    await AttendanceSessionGuard.clearWarm();
     return r;
   }
 
@@ -195,5 +237,21 @@ class AttendanceService {
       apply(Map<String, dynamic>.from(r['data'] as Map));
     }
     return r;
+  }
+
+  void reset() {
+    isClockedIn = false;
+    isOnBreak = false;
+    workSeconds = 0;
+    breakSeconds = 0;
+    workTickAt = null;
+    breakTickAt = null;
+    workingDate = null;
+    breakExpectedBackAt = null;
+    effectiveSchedule = null;
+    shiftWindow = null;
+    sessionsToday = [];
+    AppSession.setOnBreak(false);
+    unawaited(AttendanceSessionGuard.clearWarm());
   }
 }

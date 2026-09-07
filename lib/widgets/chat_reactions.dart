@@ -29,7 +29,7 @@ abstract final class ChatReactions {
     final box = anchorContext.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return;
 
-    final overlay = Overlay.of(anchorContext);
+    final overlay = Overlay.of(anchorContext, rootOverlay: true);
     final topLeft = box.localToGlobal(Offset.zero);
     final bubbleSize = box.size;
     var showMore = false;
@@ -113,10 +113,7 @@ abstract final class ChatReactions {
         final barrier = GestureDetector(
           onTap: dismiss,
           behavior: HitTestBehavior.opaque,
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
-            child: ColoredBox(color: Colors.black.withValues(alpha: 0.22)),
-          ),
+          child: ColoredBox(color: Colors.black.withValues(alpha: 0.28)),
         );
 
         return Stack(

@@ -36,7 +36,6 @@ import '../widgets/chat_image_viewer.dart';
 import '../widgets/empty_state.dart';
 import '../utils/responsive.dart';
 import '../utils/platform_capabilities.dart';
-import 'call_page.dart';
 
 int? _chatInt(dynamic v) {
   if (v == null) return null;
@@ -117,6 +116,7 @@ class _ChatPageState extends State<ChatPage> {
   Uint8List? _lastCopiedImageBytes;
   final Set<int> _selectedMessageIds = {};
   final Set<int> _starredMessageIds = {};
+  final GlobalKey _selectionHeaderKey = GlobalKey();
   static const int _chatPageSize = 30;
   bool _hasMoreMessages = false;
   bool _isLoadingMoreMessages = false;
@@ -762,8 +762,14 @@ class _ChatPageState extends State<ChatPage> {
     BuildContext anchorContext, {
     bool clearSelectionOnReact = false,
   }) async {
-    final topInset = MediaQuery.paddingOf(context).top +
+    var topInset = MediaQuery.paddingOf(context).top +
         (PlatformCapabilities.immersiveChatChrome ? 66.0 : 74.0);
+    final headerBox =
+        _selectionHeaderKey.currentContext?.findRenderObject() as RenderBox?;
+    if (headerBox != null && headerBox.hasSize) {
+      topInset = headerBox.localToGlobal(Offset.zero).dy + headerBox.size.height;
+    }
+
     await ChatReactions.showPicker(
       context: context,
       anchorContext: anchorContext,
@@ -1704,7 +1710,10 @@ class _ChatPageState extends State<ChatPage> {
     if (id == null || msg['is_deleted'] == true) return;
     HapticFeedback.mediumImpact();
     setState(() => _selectedMessageIds.add(id));
-    unawaited(_showReactionPicker(msg, anchorContext, clearSelectionOnReact: true));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_showReactionPicker(msg, anchorContext, clearSelectionOnReact: true));
+    });
   }
 
   void _toggleMessageSelection(dynamic msg) {
@@ -2291,13 +2300,7 @@ class _ChatPageState extends State<ChatPage> {
       return;
     }
     if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        settings: const RouteSettings(name: '/call'),
-        builder: (_) => const CallPage(),
-        fullscreenDialog: true,
-      ),
-    );
+    await CallNavigation.openCallPageIfNeeded();
   }
 
   // â”€â”€â”€ Voice recording (Android/iOS: record package, Windows: PowerShell) â”€â”€â”€
@@ -2880,7 +2883,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         child: LayoutBuilder(
           builder: (context, constraints) {
             final totalW = constraints.maxWidth;
-            final isWide = totalW >= Responsive.chatSplitMinWidth;
+            final isWide = Responsive.useChatSplit(context);
             final hasChat = _selectedUser != null || _selectedGroup != null;
             if (!isWide) {
               return hasChat ? _buildChatArea() : _buildSidebar();
@@ -4706,7 +4709,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       _clearMessageSelection();
     }
 
-    return Container(
+    return KeyedSubtree(
+      key: _selectionHeaderKey,
+      child: Container(
       height: PlatformCapabilities.immersiveChatChrome ? 66 : 74,
       padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 4),
       decoration: BoxDecoration(
@@ -4835,6 +4840,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           ),
           if (isWide) const SizedBox(width: 4),
         ],
+      ),
       ),
     );
   }

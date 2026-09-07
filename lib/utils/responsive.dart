@@ -85,9 +85,13 @@ class Responsive {
   /// Right-hand contact/group details pane (list | chat | details).
   static const double chatDetailsMinWidth = 1100;
 
-  /// Two-pane chat whenever the window is wide enough (including immersive desktop).
-  static bool useChatSplit(BuildContext context) =>
-      widthOf(context) >= chatSplitMinWidth;
+  /// Two-pane chat when the window is wide enough (desktop / large tablets).
+  static bool useChatSplit(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    // Phones stay single-pane in landscape — avoids squashed chat/call UI.
+    if (size.shortestSide < 600) return false;
+    return widthOf(context) >= chatSplitMinWidth;
+  }
 
   /// Three-pane chat when details is open and width allows.
   static bool useChatDetailsPane(BuildContext context) =>

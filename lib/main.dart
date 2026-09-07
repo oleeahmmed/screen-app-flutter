@@ -11,6 +11,8 @@ import 'app_session.dart';
 import 'config.dart';
 import 'theme/app_theme.dart';
 import 'services/api_service.dart';
+import 'services/attendance_service.dart';
+import 'services/attendance_session_guard.dart';
 import 'services/user_data_service.dart';
 import 'services/screenshot_service.dart';
 import 'services/app_filter_prefs.dart';
@@ -32,7 +34,6 @@ import 'pages/dashboard_page.dart';
 import 'pages/tasks_page.dart';
 import 'pages/work_hub_page.dart';
 import 'pages/chat_page.dart';
-import 'pages/call_page.dart';
 import 'pages/notifications_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/peer2peer_page.dart';
@@ -704,17 +705,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   void _openCallPage() {
     if (!mounted || !_isLoggedIn) return;
-    final nav = appNavigatorKey.currentState;
-    if (nav == null) return;
-    final top = ModalRoute.of(nav.context)?.settings.name;
-    if (top == '/call') return;
-    nav.push(
-      MaterialPageRoute<void>(
-        settings: const RouteSettings(name: '/call'),
-        builder: (_) => const CallPage(),
-        fullscreenDialog: true,
-      ),
-    );
+    unawaited(CallNavigation.openCallPageIfNeeded());
   }
 
   void _stopNotifications() {
@@ -840,6 +831,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Future<void> _handleLogout() async {
     _stopNotifications();
     _screenshotService.stopCapture();
+    AttendanceService.instance.reset();
+    await AttendanceSessionGuard.clearWarm();
 
     // Close tool/detail routes and dialogs so LoginPage is visible.
     appNavigatorKey.currentState?.popUntil((route) => route.isFirst);

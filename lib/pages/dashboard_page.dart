@@ -45,7 +45,7 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
-  final AttendanceService _attendance = AttendanceService();
+  final AttendanceService _attendance = AttendanceService.instance;
   late DateTime _now;
   String _companyName = '';
   String _fullName = '';
