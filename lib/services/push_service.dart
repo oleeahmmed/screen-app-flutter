@@ -11,6 +11,7 @@ import 'api_service.dart';
 import 'call_notification.dart';
 import 'chat_notification.dart';
 import 'notification_deep_link.dart';
+import 'notification_launch_router.dart';
 import 'notification_sound.dart';
 import 'local_notification_service_mobile.dart';
 
@@ -22,6 +23,9 @@ class PushService {
   ApiService? _api;
   bool _initialized = false;
   String? _lastToken;
+
+  /// Wired from [MainScreen] after login — opens the correct screen from FCM tap.
+  static void Function(Map<String, dynamic> data)? onOpenFromNotification;
 
   static bool get supported =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
@@ -39,7 +43,9 @@ class PushService {
       FirebaseMessaging.onMessageOpenedApp.listen(_onOpenedFromTray);
 
       final initial = await FirebaseMessaging.instance.getInitialMessage();
-      if (initial != null) _handleDataPayload(initial.data);
+      if (initial != null) {
+        _handleDataPayload(Map<String, dynamic>.from(initial.data));
+      }
 
       await FirebaseMessaging.instance.requestPermission(
         alert: true,
@@ -112,32 +118,41 @@ class PushService {
   }
 
   void _onOpenedFromTray(RemoteMessage message) {
-    _handleDataPayload(message.data);
+    _handleDataPayload(Map<String, dynamic>.from(message.data));
   }
 
   void _handleDataPayload(Map<String, dynamic> data) {
-    final type = data['type']?.toString() ?? '';
-    final notifType = data['notification_type']?.toString() ?? '';
+    final normalized = NotificationLaunchRouter.normalizeFcmData(data);
+    final type = normalized['type']?.toString() ?? '';
+    final notifType = normalized['notification_type']?.toString() ?? '';
+
     if (type == 'call_dismiss') {
-      unawaited(_handleCallDismiss(data));
+      unawaited(_handleCallDismiss(normalized));
       return;
     }
-    if (type == 'call_invite') {
-      AppNavigationBridge.openIncomingCall?.call(data);
+
+    if (onOpenFromNotification != null) {
+      onOpenFromNotification!(normalized);
       return;
     }
-    if (notifType == 'new_message' || notifType == 'new_group_message') {
-      final chat = ChatNotification.fromData(data);
-      AppNavigationBridge.openChatPeer?.call(chat.peerId, chat.groupId);
-      return;
-    }
-    if (type == 'notification' || notifType.isNotEmpty) {
-      AppNavigationBridge.openDeepLink?.call(data);
-    }
+    NotificationLaunchRouter.queueData(normalized);
   }
 
   static Future<void> _showFromRemoteMessage(RemoteMessage message, {bool playSound = false}) async {
-    final data = Map<String, dynamic>.from(message.data);
+    final data = NotificationLaunchRouter.normalizeFcmData(
+      Map<String, dynamic>.from(message.data),
+    );
+    if (data['title'] == null || '${data['title']}'.isEmpty) {
+      data['title'] = message.notification?.title ?? 'Aims';
+    }
+    if ((data['message'] ?? data['body'] ?? '').toString().isEmpty) {
+      final body = message.notification?.body ?? '';
+      if (body.isNotEmpty) {
+        data['message'] = body;
+        data['body'] = body;
+      }
+    }
+
     final type = data['type']?.toString() ?? '';
     final notifType = data['notification_type']?.toString() ?? '';
     final isCall = type == 'call_invite';
@@ -204,7 +219,7 @@ class PushService {
       id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
       title: title,
       body: body.isNotEmpty ? body : 'Tap to open',
-      payload: NotificationDeepLink.encodeFromData(data),
+      payload: NotificationLaunchRouter.encodePayloadFromData(data),
     );
   }
 
@@ -234,5 +249,21 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
     await PushService._handleCallDismiss(Map<String, dynamic>.from(message.data));
     return;
   }
-  await PushService._showFromRemoteMessage(message, playSound: true);
+  try {
+    await PushService._showFromRemoteMessage(message, playSound: true);
+  } catch (e) {
+    if (kDebugMode) debugPrint('[PushService] background show failed: $e');
+    final data = NotificationLaunchRouter.normalizeFcmData(
+      Map<String, dynamic>.from(message.data),
+    );
+    final title = data['title']?.toString() ?? message.notification?.title ?? 'Aims';
+    final body = (data['message'] ?? data['body'] ?? message.notification?.body ?? 'Tap to open')
+        .toString();
+    await LocalNotificationService.show(
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      body: body,
+      payload: NotificationLaunchRouter.encodePayloadFromData(data),
+    );
+  }
 }

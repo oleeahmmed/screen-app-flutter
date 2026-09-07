@@ -14,7 +14,7 @@ import '../utils/ws_connect.dart';
 import 'call_notification.dart';
 import 'chat_notification.dart';
 import 'local_notification_service.dart';
-import 'notification_deep_link.dart';
+import 'notification_launch_router.dart';
 import 'notification_sound.dart';
 
 /// Keeps the chat WebSocket alive after login so Android can show system
@@ -309,7 +309,7 @@ class _PushKeepAliveIsolate {
       id: id & 0x7fffffff,
       title: title,
       body: body,
-      payload: NotificationDeepLink.encodeFromData(data),
+      payload: NotificationLaunchRouter.encodePayloadFromData(data),
     );
   }
 }
