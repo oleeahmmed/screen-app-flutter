@@ -306,6 +306,27 @@ class _ChatPageState extends State<ChatPage> {
 
   void _onRealtimeChatMessage(Map<String, dynamic> data) {
     if (!mounted) return;
+    final wsType = data['type']?.toString() ?? 'chat_message';
+    final isGroup = wsType == 'group_message' || data['group_id'] != null;
+
+    if (isGroup) {
+      final groupId = _asInt(data['group_id']);
+      if (groupId == null || _selectedGroup == null || _asInt(_selectedGroup['id']) != groupId) {
+        return;
+      }
+      final msgId = _eventMessageId(data);
+      if (msgId == null) return;
+      final senderId = _asInt(data['sender_id']);
+      final isOwn = _myUserId != null && senderId == _myUserId;
+      final nowIso = DateTime.now().toUtc().toIso8601String();
+      final msg = _messageFromRealtimeEvent(data, isOwn: isOwn, fallbackTime: nowIso);
+      setState(() {
+        _messages = _upsertMessage(_messages, msg);
+      });
+      _scrollToBottom();
+      return;
+    }
+
     final senderId = _asInt(data['sender_id']);
     final receiverId = _asInt(data['receiver_id']);
     final text = (data['message'] ?? '').toString();
@@ -339,20 +360,8 @@ class _ChatPageState extends State<ChatPage> {
           (_selectedUser['id'] == peerId || '${_selectedUser['id']}' == '$peerId');
       if (viewing) {
         final msgId = _eventMessageId(data);
-        final msg = {
-          'id': msgId ?? DateTime.now().millisecondsSinceEpoch,
-          'message': text,
-          'message_type': data['message_type'] ?? 'text',
-          'sender_id': senderId,
-          'is_own': isOwn,
-          'is_read': data['is_read'] == true,
-          'created_at': data['created_at'] ?? nowIso,
-          'timestamp': data['created_at'] ?? nowIso,
-          'image_url': data['image_url'],
-          'file_url': data['file_url'],
-          'file_name': data['file_name'],
-          'voice_url': data['voice_url'],
-        };
+        if (msgId == null) return;
+        final msg = _messageFromRealtimeEvent(data, isOwn: isOwn, fallbackTime: nowIso);
         _messages = _upsertMessage(_messages, msg);
       }
     });
@@ -361,6 +370,37 @@ class _ChatPageState extends State<ChatPage> {
       _scrollToBottom();
       if (!isOwn) unawaited(widget.apiService.markMessagesRead(peerId));
     }
+  }
+
+  Map<String, dynamic> _messageFromRealtimeEvent(
+    Map<String, dynamic> data, {
+    required bool isOwn,
+    required String fallbackTime,
+  }) {
+    final msgId = _eventMessageId(data)!;
+    final replyRaw = data['reply'];
+    Map<String, dynamic>? reply;
+    if (replyRaw is Map) {
+      reply = Map<String, dynamic>.from(replyRaw);
+    }
+    return {
+      'id': msgId,
+      'message': (data['message'] ?? '').toString(),
+      'message_type': data['message_type'] ?? 'text',
+      'sender_id': _asInt(data['sender_id']),
+      'sender_name': data['sender_full_name'] ?? data['sender_name'] ?? data['sender_username'],
+      'sender_username': data['sender_username'],
+      'is_own': isOwn,
+      'is_read': data['is_read'] == true,
+      'created_at': data['created_at'] ?? fallbackTime,
+      'timestamp': data['created_at'] ?? fallbackTime,
+      'image_url': data['image_url'],
+      'file_url': data['file_url'],
+      'file_name': data['file_name'],
+      'voice_url': data['voice_url'],
+      'reply_to': _asInt(data['reply_to'] ?? data['reply_to_id']),
+      if (reply != null) 'reply': reply,
+    };
   }
 
   void _onRealtimeReaction(Map<String, dynamic> data) {
@@ -1247,6 +1287,24 @@ class _ChatPageState extends State<ChatPage> {
   int? _eventMessageId(Map<String, dynamic> data) =>
       _asInt(data['message_id'] ?? data['id']);
 
+  List<dynamic> _dedupeMessagesById(List<dynamic> list) {
+    final out = <dynamic>[];
+    final seen = <int>{};
+    for (final item in list) {
+      if (item is! Map) {
+        out.add(item);
+        continue;
+      }
+      final id = _messageIdOf(item);
+      if (id != null) {
+        if (seen.contains(id)) continue;
+        seen.add(id);
+      }
+      out.add(item);
+    }
+    return out;
+  }
+
   List<dynamic> _upsertMessage(List<dynamic> list, Map<String, dynamic> msg) {
     final id = _messageIdOf(msg);
     if (id != null) {
@@ -1258,33 +1316,38 @@ class _ChatPageState extends State<ChatPage> {
           ...msg,
           'id': id,
         };
-        return next;
+        return _dedupeMessagesById(next);
       }
     }
 
-    // Optimistic send + websocket/API race: merge same own text within a short window.
+    // REST response + WebSocket echo race: merge same own message within a short window.
     if (msg['is_own'] == true) {
       final text = (msg['message'] ?? '').toString();
+      final replyTo = _asInt(msg['reply_to'] ?? msg['reply_to_id']);
+      final msgType = (msg['message_type'] ?? 'text').toString();
       final now = DateTime.now();
-      for (var i = list.length - 1; i >= 0 && i >= list.length - 6; i--) {
+      for (var i = list.length - 1; i >= 0 && i >= list.length - 8; i--) {
         final existing = list[i];
         if (existing is! Map || existing['is_own'] != true) continue;
+        if ((existing['message_type'] ?? 'text').toString() != msgType) continue;
         if ((existing['message'] ?? '').toString() != text) continue;
+        final existingReply = _asInt(existing['reply_to'] ?? existing['reply_to_id']);
+        if (replyTo != existingReply) continue;
         final ts = DateTime.tryParse(
           '${existing['created_at'] ?? existing['timestamp'] ?? ''}',
         );
-        if (ts != null && now.difference(ts).inSeconds > 12) continue;
+        if (ts != null && now.difference(ts).inSeconds > 15) continue;
         final next = [...list];
         next[i] = {
           ...Map<String, dynamic>.from(existing),
           ...msg,
           if (id != null) 'id': id,
         };
-        return next;
+        return _dedupeMessagesById(next);
       }
     }
 
-    return [...list, msg];
+    return _dedupeMessagesById([...list, msg]);
   }
 
   void _refocusComposer() {
@@ -1401,7 +1464,7 @@ class _ChatPageState extends State<ChatPage> {
       if (id != null) byId[id] = map;
     }
 
-    return visible.map((item) {
+    return _dedupeMessagesById(visible.map((item) {
       if (item is! Map) return item;
       final map = Map<String, dynamic>.from(item);
       final mid = _asInt(map['id']);
@@ -1431,7 +1494,7 @@ class _ChatPageState extends State<ChatPage> {
         if (mid != null) _cacheReplyQuote(mid, reply);
       }
       return map;
-    }).toList();
+    }).toList());
   }
 
   Future<void> _sendMessage() async {

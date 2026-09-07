@@ -345,6 +345,10 @@ class NotificationService {
       }
       return;
     }
+    if (type == 'group_message') {
+      _chatMessageController.add(data);
+      return;
+    }
     if (type == 'message_reaction') {
       _reactionController.add(data);
       return;

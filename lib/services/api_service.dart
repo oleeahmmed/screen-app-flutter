@@ -1032,7 +1032,9 @@ class ApiService {
             ? data
             : (data is Map && data['messages'] is List)
                 ? data['messages']
-                : <dynamic>[];
+                : (data is Map && data['results'] is List)
+                    ? data['results']
+                    : <dynamic>[];
         return {'success': true, 'data': list};
       }
       return {'success': false, 'error': 'Failed to load conversation'};
@@ -1325,7 +1327,9 @@ class ApiService {
             ? data
             : (data is Map && data['messages'] is List)
                 ? data['messages']
-                : <dynamic>[];
+                : (data is Map && data['results'] is List)
+                    ? data['results']
+                    : <dynamic>[];
         return {'success': true, 'data': list};
       }
       return {'success': false, 'error': 'Failed to load group messages'};
