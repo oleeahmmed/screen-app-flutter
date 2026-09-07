@@ -17,7 +17,7 @@
 #endif
 
 #ifndef MyOutputBaseFilename
-  #define MyOutputBaseFilename "AIMS-Setup-{#MyAppVersion}"
+  #define MyOutputBaseFilename "AIMS-Setup-" + MyAppVersion
 #endif
 
 #define MyAppName "AIMS"
