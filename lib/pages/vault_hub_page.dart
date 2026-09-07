@@ -689,7 +689,7 @@ class VaultCategoriesPage extends StatelessWidget {
           else
             ...categories.map((cat) {
               final perm = vaultCategoryPermissionLabel(cat);
-              final isEdit = perm == 'Admin';
+              final isEdit = vaultCategoryPermissionIsEdit(cat);
               final count = cat['entry_count'] ?? 0;
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
@@ -779,8 +779,8 @@ class _VaultCategoryPageState extends State<VaultCategoryPage> {
           ? widget.category['id'] as int
           : int.parse('${widget.category['id']}');
 
-  bool get _canAddEntries => _isVaultAdmin;
   bool get _isVaultAdmin => widget.vault['is_admin'] == true;
+  bool get _canAddEntries => vaultCanEditCategory(widget.category, isAdmin: _isVaultAdmin);
 
   @override
   void initState() {
@@ -828,7 +828,7 @@ class _VaultCategoryPageState extends State<VaultCategoryPage> {
       projectId: widget.projectId,
       entry: entry,
       isAdmin: _isVaultAdmin,
-      canEdit: _isVaultAdmin,
+      canEdit: vaultCanEditCategory(widget.category, isAdmin: _isVaultAdmin),
       currentUserId: _currentUserId,
       onChanged: _load,
     );

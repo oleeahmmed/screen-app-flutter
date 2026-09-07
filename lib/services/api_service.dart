@@ -2579,6 +2579,24 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getProjectMembers(int projectId) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.projectMembersUrl(projectId)));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        return {
+          'success': true,
+          'data': decoded is List
+              ? decoded
+              : _extractJsonList(decoded, keys: const ['results', 'members', 'data']),
+        };
+      }
+      return {'success': false, 'error': 'Failed to load project members'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> getCompanyEmployees() async {
     try {
       final response = await _authorizedGet(Uri.parse(AppConfig.companyEmployeesUrl));

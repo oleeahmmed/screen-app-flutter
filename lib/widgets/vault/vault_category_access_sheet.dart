@@ -53,7 +53,7 @@ class _VaultCategoryAccessSheet extends StatefulWidget {
 class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
   bool _loading = true;
   String? _error;
-  List<Map<String, dynamic>> _employees = [];
+  List<Map<String, dynamic>> _members = [];
   List<Map<String, dynamic>> _accesses = [];
   final Set<int> _selectedUserIds = {};
   String _permission = 'view';
@@ -70,20 +70,20 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
       _loading = true;
       _error = null;
     });
-    final empR = await widget.apiService.getCompanyEmployees();
+    final memR = await widget.apiService.getProjectMembers(widget.projectId);
     final accR = await widget.apiService.getVaultCategoryAccess(widget.projectId, widget.categoryId);
     if (!mounted) return;
     setState(() {
       _loading = false;
-      if (empR['success'] != true) {
-        _error = empR['error']?.toString() ?? 'Failed to load employees';
+      if (memR['success'] != true) {
+        _error = memR['error']?.toString() ?? 'Failed to load project members';
         return;
       }
       if (accR['success'] != true) {
         _error = accR['error']?.toString() ?? 'Failed to load access';
         return;
       }
-      _employees = (empR['data'] as List? ?? [])
+      _members = (memR['data'] as List? ?? [])
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
@@ -94,23 +94,26 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
     });
   }
 
-  int? _employeeUserId(Map<String, dynamic> e) {
-    final u = e['user'];
+  int? _memberUserId(Map<String, dynamic> m) {
+    final u = m['user'];
     if (u is Map && u['id'] != null) return u['id'] is int ? u['id'] as int : int.tryParse('${u['id']}');
-    if (e['user_id'] != null) return e['user_id'] is int ? e['user_id'] as int : int.tryParse('${e['user_id']}');
-    if (e['id'] != null) return e['id'] is int ? e['id'] as int : int.tryParse('${e['id']}');
+    if (m['user_id'] != null) return m['user_id'] is int ? m['user_id'] as int : int.tryParse('${m['user_id']}');
     return null;
   }
 
-  String _employeeLabel(Map<String, dynamic> e) {
-    final u = e['user'];
+  String _memberLabel(Map<String, dynamic> m) {
+    final u = m['user'];
     if (u is Map) {
       final name = u['full_name'] ?? u['name'] ?? '${u['first_name'] ?? ''} ${u['last_name'] ?? ''}'.trim();
       if (name.toString().trim().isNotEmpty) return name.toString();
       if (u['username'] != null) return u['username'].toString();
     }
-    return e['name']?.toString() ?? e['email']?.toString() ?? 'Employee';
+    return 'Member';
   }
+
+  int? _employeeUserId(Map<String, dynamic> e) => _memberUserId(e);
+
+  String _employeeLabel(Map<String, dynamic> e) => _memberLabel(e);
 
   Set<int> get _grantedUserIds {
     final ids = <int>{};
@@ -231,7 +234,7 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Users only see entries in categories you grant.',
+            'Only project members can be granted category access.',
             style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12),
           ),
           const SizedBox(height: 14),
@@ -255,12 +258,15 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
               ),
               items: const [
                 DropdownMenuItem(value: 'view', child: Text('View only')),
+                DropdownMenuItem(value: 'edit', child: Text('Can edit entries')),
               ],
               onChanged: (v) => setState(() => _permission = v ?? 'view'),
             ),
             const SizedBox(height: 6),
             Text(
-              'Granted users can view credentials in the app — they cannot add, edit, or delete.',
+              _permission == 'edit'
+                  ? 'Can add, edit, and delete credentials in this category.'
+                  : 'Can view credentials — cannot add, edit, or delete entries.',
               style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 11.5),
             ),
             const SizedBox(height: 8),
@@ -268,7 +274,7 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
               constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.22),
               child: ListView(
                 shrinkWrap: true,
-                children: _employees.map((e) {
+                children: _members.map((e) {
                   final uid = _employeeUserId(e);
                   if (uid == null || granted.contains(uid)) return const SizedBox.shrink();
                   return CheckboxListTile(
@@ -313,7 +319,8 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
                 child: ListView(
                   shrinkWrap: true,
                   children: _accesses.map((a) {
-                    final perm = (a['permission'] ?? 'view').toString();
+                    final perm = (a['permission'] ?? 'view').toString().toLowerCase();
+                    final permLabel = perm == 'edit' ? 'Can edit' : 'View only';
                     return Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -346,7 +353,7 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
                                   ),
                                 ),
                                 Text(
-                                  'View only',
+                                  permLabel,
                                   style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 11),
                                 ),
                               ],
@@ -356,11 +363,12 @@ class _VaultCategoryAccessSheetState extends State<_VaultCategoryAccessSheet> {
                             color: AppTheme.surface2,
                             icon: const Icon(Icons.more_horiz, color: AppTheme.textMuted, size: 18),
                             onSelected: (v) {
-                              if (v == 'view') _setPermission(a, v);
+                              if (v == 'view' || v == 'edit') _setPermission(a, v);
                               if (v == 'revoke') _revoke(a);
                             },
                             itemBuilder: (_) => const [
                               PopupMenuItem(value: 'view', child: Text('Set view only')),
+                              PopupMenuItem(value: 'edit', child: Text('Set can edit')),
                               PopupMenuItem(
                                 value: 'revoke',
                                 child: Text('Remove', style: TextStyle(color: AppTheme.danger)),

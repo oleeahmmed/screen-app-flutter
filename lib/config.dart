@@ -116,6 +116,8 @@ class AppConfig {
   static String projectTasksUrl(int projectId) => '$apiBaseUrl/projects/$projectId/tasks/';
   static String projectAssignableEmployeesUrl(int projectId) =>
       '$apiBaseUrl/projects/$projectId/assignable-employees/';
+  static String projectMembersUrl(int projectId) =>
+      '$apiBaseUrl/projects/$projectId/members/';
   static String projectTaskUrl(int projectId, int taskId) =>
       '$apiBaseUrl/projects/$projectId/tasks/$taskId/';
   static String projectTaskMoveUrl(int projectId, int taskId) =>

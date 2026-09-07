@@ -97,17 +97,24 @@ Widget vaultPendingFilesPicker({
 }
 
 String vaultCategoryPermissionLabel(Map<String, dynamic> cat) {
-  if (cat['can_admin'] == true) return 'Admin';
-  // Normal users (any category grant) are view-only in the Flutter app.
+  if (vaultApiFlag(cat['can_admin'])) return 'Admin';
   final p = (cat['my_permission'] ?? '').toString().toLowerCase();
-  if (p.isNotEmpty || cat['can_manage_entries'] == true) return 'View only';
+  if (p == 'edit' || vaultApiFlag(cat['can_manage_entries'])) return 'Can edit';
+  if (p == 'view' || p.isNotEmpty) return 'View only';
   return '';
 }
 
-/// Add / rename / mutate category content — Flutter: vault admin/manager only.
+bool vaultCategoryPermissionIsEdit(Map<String, dynamic> cat) {
+  if (vaultApiFlag(cat['can_admin'])) return true;
+  final p = (cat['my_permission'] ?? '').toString().toLowerCase();
+  return p == 'edit' || vaultApiFlag(cat['can_manage_entries']);
+}
+
+/// Add / edit entries in a category — vault admin or category edit grant.
 bool vaultCanEditCategory(Map<String, dynamic>? cat, {required bool isAdmin}) {
   if (cat == null) return false;
-  return isAdmin || cat['can_admin'] == true;
+  if (isAdmin || vaultApiFlag(cat['can_admin'])) return true;
+  return vaultCategoryPermissionIsEdit(cat);
 }
 
 /// Parse API int ids that may arrive as int or string.
@@ -130,8 +137,11 @@ Map<String, dynamic> vaultEntryWithCategoryPerm(
   final out = Map<String, dynamic>.from(entry);
   final p = (category['my_permission'] ?? '').toString().toLowerCase();
   if (p.isNotEmpty) out['category_my_permission'] = p;
-  if (category['can_admin'] == true) {
+  if (vaultApiFlag(category['can_admin'])) {
     out['category_can_admin'] = true;
+  }
+  if (vaultApiFlag(category['can_manage_entries']) || p == 'edit') {
+    out['category_can_manage_entries'] = true;
   }
   return out;
 }
@@ -146,7 +156,10 @@ bool vaultEntryCanEdit(
   if (entry['can_edit_secrets'] == true || entry['can_delete'] == true) {
     return true;
   }
-  return isVaultAdmin || entry['category_can_admin'] == true;
+  if (isVaultAdmin || vaultApiFlag(entry['category_can_admin'])) return true;
+  if (vaultApiFlag(entry['category_can_manage_entries'])) return true;
+  final p = (entry['category_my_permission'] ?? '').toString().toLowerCase();
+  return p == 'edit';
 }
 
 /// Notes + attachment add/remove — anyone with view access on entry/category.
