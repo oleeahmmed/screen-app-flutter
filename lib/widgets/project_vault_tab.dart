@@ -565,8 +565,8 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
       return const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright));
     }
 
-    final canEdit = _canEditCat(cat);
     final cat = _selectedCat;
+    final canEdit = _canEditCat(cat);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
