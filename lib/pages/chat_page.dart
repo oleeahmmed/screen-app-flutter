@@ -687,6 +687,15 @@ class _ChatPageState extends State<ChatPage> {
     if (result['success'] == true && mounted) {
       setState(() {
         _groups = result['data'] ?? [];
+        if (_selectedGroup != null) {
+          final sid = _asInt(_selectedGroup['id']);
+          for (final g in _groups) {
+            if (g is Map && _asInt(g['id']) == sid) {
+              _selectedGroup = Map<String, dynamic>.from(g);
+              break;
+            }
+          }
+        }
         _isLoadingGroups = false;
       });
       _consumePendingChatOpen();
@@ -741,6 +750,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _revealDetailsPanel() async {
     if (!_detailsOpen) setState(() => _detailsOpen = true);
+    if (_selectedGroup != null) unawaited(_refreshSelectedGroupDetail());
     if (!Responsive.useChatDetailsPane(context)) {
       await _showDetailsSheet();
     }
@@ -753,9 +763,316 @@ class _ChatPageState extends State<ChatPage> {
       return;
     }
     setState(() => _detailsOpen = true);
+    if (_selectedGroup != null) unawaited(_refreshSelectedGroupDetail());
     if (!Responsive.useChatDetailsPane(context)) {
       await _showDetailsSheet();
     }
+  }
+
+  bool get _groupCanManage => _selectedGroup?['can_manage'] == true;
+
+  Future<void> _refreshSelectedGroupDetail() async {
+    final gid = _asInt(_selectedGroup?['id']);
+    if (gid == null) return;
+    final r = await widget.apiService.getGroupDetail(gid);
+    if (!mounted || r['success'] != true || r['data'] is! Map) return;
+    _applyGroupUpdate(Map<String, dynamic>.from(r['data'] as Map));
+  }
+
+  void _applyGroupUpdate(Map<String, dynamic> data) {
+    final gid = _asInt(data['id'] ?? _selectedGroup?['id']);
+    if (gid == null) return;
+    setState(() {
+      if (_selectedGroup != null) {
+        _selectedGroup = {
+          ...Map<String, dynamic>.from(_selectedGroup as Map),
+          ...data,
+        };
+      }
+      _groups = _groups.map((g) {
+        if (g is Map && _asInt(g['id']) == gid) {
+          return {...Map<String, dynamic>.from(g), ...data};
+        }
+        return g;
+      }).toList();
+    });
+  }
+
+  Future<void> _promptEditGroupName() async {
+    if (!_groupCanManage) {
+      _showError('Only group admins can edit this group');
+      return;
+    }
+    final group = _selectedGroup;
+    final gid = _asInt(group?['id']);
+    if (group == null || gid == null) return;
+    final ctrl = TextEditingController(text: group['name']?.toString() ?? '');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.dialogBg,
+        title: const Text('Group name', style: TextStyle(color: AppTheme.textPrimary)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: AppTheme.textPrimary),
+          decoration: const InputDecoration(
+            hintText: 'Group name',
+            hintStyle: TextStyle(color: AppTheme.textMuted),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              final v = ctrl.text.trim();
+              if (v.isNotEmpty) Navigator.pop(ctx, v);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty) return;
+    final r = await widget.apiService.updateGroup(gid, name: name);
+    if (!mounted) return;
+    if (r['success'] == true && r['data'] is Map) {
+      _applyGroupUpdate(Map<String, dynamic>.from(r['data'] as Map));
+      _showSuccess('Group name updated');
+    } else {
+      _showError(r['error']?.toString() ?? 'Could not update group');
+    }
+  }
+
+  Future<void> _promptEditGroupDescription() async {
+    if (!_groupCanManage) {
+      _showError('Only group admins can edit this group');
+      return;
+    }
+    final group = _selectedGroup;
+    final gid = _asInt(group?['id']);
+    if (group == null || gid == null) return;
+    final ctrl = TextEditingController(text: group['description']?.toString() ?? '');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.dialogBg,
+        title: const Text('Group description', style: TextStyle(color: AppTheme.textPrimary)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: 4,
+          style: const TextStyle(color: AppTheme.textPrimary),
+          decoration: const InputDecoration(
+            hintText: 'Add group description',
+            hintStyle: TextStyle(color: AppTheme.textMuted),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (saved != true) return;
+    final r = await widget.apiService.updateGroup(gid, description: ctrl.text.trim());
+    if (!mounted) return;
+    if (r['success'] == true && r['data'] is Map) {
+      _applyGroupUpdate(Map<String, dynamic>.from(r['data'] as Map));
+      _showSuccess('Description updated');
+    } else {
+      _showError(r['error']?.toString() ?? 'Could not update description');
+    }
+  }
+
+  Future<void> _pickGroupPhoto() async {
+    if (!_groupCanManage) {
+      _showError('Only group admins can change the group photo');
+      return;
+    }
+    final gid = _asInt(_selectedGroup?['id']);
+    if (gid == null) return;
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1200,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      final r = await widget.apiService.uploadGroupAvatar(
+        gid,
+        bytes,
+        picked.name.isNotEmpty ? picked.name : 'group.jpg',
+      );
+      if (!mounted) return;
+      if (r['success'] == true && r['data'] is Map) {
+        _applyGroupUpdate(Map<String, dynamic>.from(r['data'] as Map));
+        _showSuccess('Group photo updated');
+      } else {
+        _showError(r['error']?.toString() ?? 'Could not upload photo');
+      }
+    } catch (e) {
+      _showError('Could not pick image');
+    }
+  }
+
+  Future<void> _promptAddGroupMembers() async {
+    if (!_groupCanManage) {
+      _showError('Only group admins can add members');
+      return;
+    }
+    final groupId = _asInt(_selectedGroup?['id']);
+    if (groupId == null) return;
+    final membersRes = await widget.apiService.getGroupMembers(groupId);
+    if (!mounted) return;
+    if (membersRes['success'] != true) {
+      _showError(membersRes['error']?.toString() ?? 'Could not load members');
+      return;
+    }
+    final raw = membersRes['data'];
+    final members = raw is List
+        ? raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
+        : <Map<String, dynamic>>[];
+    final memberUserIds = members.map(_membershipUserId).whereType<int>().toSet();
+    final available = _users.where((u) {
+      if (u is! Map) return false;
+      final id = _asInt(u['id']);
+      return id != null && !memberUserIds.contains(id);
+    }).toList();
+    final selectedIds = <int>{};
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setDState) => AlertDialog(
+          backgroundColor: AppTheme.dialogBg,
+          title: const Text('Add members', style: TextStyle(color: AppTheme.textPrimary)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: available.isEmpty
+                ? const Text('No available members to add', style: TextStyle(color: AppTheme.textMuted))
+                : Container(
+                    constraints: const BoxConstraints(maxHeight: 300),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: available.length,
+                      itemBuilder: (_, i) {
+                        final u = available[i] as Map;
+                        final uid = _asInt(u['id']);
+                        if (uid == null) return const SizedBox.shrink();
+                        return CheckboxListTile(
+                          dense: true,
+                          value: selectedIds.contains(uid),
+                          onChanged: (v) => setDState(() {
+                            if (v == true) {
+                              selectedIds.add(uid);
+                            } else {
+                              selectedIds.remove(uid);
+                            }
+                          }),
+                          title: Text(
+                            '${u['full_name'] ?? u['username'] ?? 'User'}',
+                            style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.85), fontSize: 14),
+                          ),
+                          activeColor: AppTheme.primary,
+                          controlAffinity: ListTileControlAffinity.leading,
+                        );
+                      },
+                    ),
+                  ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                if (selectedIds.isEmpty) {
+                  Navigator.pop(dialogCtx);
+                  return;
+                }
+                final r = await widget.apiService.addGroupMembers(groupId, selectedIds.toList());
+                if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                if (!mounted) return;
+                if (r['success'] == true) {
+                  _showSuccess('Members added');
+                  await _loadGroups(silent: true);
+                  await _refreshSelectedGroupDetail();
+                } else {
+                  _showError(r['error']?.toString() ?? 'Could not add members');
+                }
+              },
+              style: AppTheme.primaryElevatedButton(),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChatDetailsPanel({
+    ScrollController? scrollController,
+    VoidCallback? onClose,
+    BuildContext? sheetContext,
+  }) {
+    void maybePopSheet() {
+      if (sheetContext != null && Navigator.canPop(sheetContext)) {
+        Navigator.pop(sheetContext);
+      }
+    }
+
+    final group = _selectedGroup;
+    final user = _selectedUser;
+    return ChatDetailsPanel(
+      isGroup: group != null,
+      name: _detailsName,
+      subtitle: _detailsSubtitle,
+      avatarColor: _avatarColor(_detailsAvatarKey),
+      initials: _initials(_detailsName),
+      isOnline: _detailsOnline,
+      mediaItems: _sharedMediaItems(),
+      fileItems: _sharedFileItems(),
+      voiceItems: _sharedVoiceItems(),
+      username: user?['username']?.toString(),
+      email: user?['email']?.toString(),
+      designation: user?['designation']?.toString(),
+      description: group?['description']?.toString(),
+      photoUrl: group != null
+          ? group['avatar_url']?.toString()
+          : user?['profile_photo_url']?.toString(),
+      memberCount: _asInt(group?['member_count']) ?? 0,
+      canEdit: group != null && _groupCanManage,
+      scrollController: scrollController,
+      onClose: onClose ?? () => setState(() => _detailsOpen = false),
+      onVideoCall: () {
+        maybePopSheet();
+        unawaited(_startCall(CallKind.video));
+      },
+      onVoiceCall: () {
+        maybePopSheet();
+        unawaited(_startCall(CallKind.audio));
+      },
+      onAddMembers: group == null
+          ? null
+          : () {
+              maybePopSheet();
+              unawaited(_promptAddGroupMembers());
+            },
+      onOpenMembers: group == null
+          ? null
+          : () {
+              maybePopSheet();
+              _showGroupSettings(group);
+            },
+      onSearchInChat: () {
+        maybePopSheet();
+        _promptInChatSearch();
+      },
+      onEditName: group == null ? null : () => unawaited(_promptEditGroupName()),
+      onEditDescription: group == null ? null : () => unawaited(_promptEditGroupDescription()),
+      onChangePhoto: group == null ? null : () => unawaited(_pickGroupPhoto()),
+      onOpenMediaUrl: (url) => unawaited(_openSharedMediaUrl(url)),
+    );
   }
 
   Future<void> _showDetailsSheet() async {
@@ -771,41 +1088,10 @@ class _ChatPageState extends State<ChatPage> {
         maxChildSize: 0.95,
         minChildSize: 0.45,
         expand: false,
-        builder: (ctx, scroll) => ChatDetailsPanel(
-          isGroup: _selectedGroup != null,
-          name: _detailsName,
-          subtitle: _detailsSubtitle,
-          avatarColor: _avatarColor(_detailsAvatarKey),
-          initials: _initials(_detailsName),
-          isOnline: _detailsOnline,
-          mediaItems: _sharedMediaItems(),
-          fileItems: _sharedFileItems(),
-          voiceItems: _sharedVoiceItems(),
-          username: _selectedUser?['username']?.toString(),
-          email: _selectedUser?['email']?.toString(),
-          description: _selectedGroup?['description']?.toString(),
-          memberCount: _asInt(_selectedGroup?['member_count']) ?? 0,
+        builder: (ctx, scroll) => _buildChatDetailsPanel(
           scrollController: scroll,
           onClose: () => Navigator.pop(ctx),
-          onVideoCall: () {
-            Navigator.pop(ctx);
-            unawaited(_startCall(CallKind.video));
-          },
-          onVoiceCall: () {
-            Navigator.pop(ctx);
-            unawaited(_startCall(CallKind.audio));
-          },
-          onOpenGroupSettings: _selectedGroup == null
-              ? null
-              : () {
-                  Navigator.pop(ctx);
-                  _showGroupSettings(_selectedGroup);
-                },
-          onSearchInChat: () {
-            Navigator.pop(ctx);
-            _promptInChatSearch();
-          },
-          onOpenMediaUrl: (url) => unawaited(_openSharedMediaUrl(url)),
+          sheetContext: ctx,
         ),
       ),
     );
@@ -921,30 +1207,7 @@ class _ChatPageState extends State<ChatPage> {
     }).toList();
   }
 
-  Widget _buildDetailsPane() {
-    return ChatDetailsPanel(
-      isGroup: _selectedGroup != null,
-      name: _detailsName,
-      subtitle: _detailsSubtitle,
-      avatarColor: _avatarColor(_detailsAvatarKey),
-      initials: _initials(_detailsName),
-      isOnline: _detailsOnline,
-      mediaItems: _sharedMediaItems(),
-      fileItems: _sharedFileItems(),
-      voiceItems: _sharedVoiceItems(),
-      username: _selectedUser?['username']?.toString(),
-      email: _selectedUser?['email']?.toString(),
-      description: _selectedGroup?['description']?.toString(),
-      memberCount: _asInt(_selectedGroup?['member_count']) ?? 0,
-      onClose: () => setState(() => _detailsOpen = false),
-      onVideoCall: () => unawaited(_startCall(CallKind.video)),
-      onVoiceCall: () => unawaited(_startCall(CallKind.audio)),
-      onOpenGroupSettings:
-          _selectedGroup == null ? null : () => _showGroupSettings(_selectedGroup),
-      onSearchInChat: _promptInChatSearch,
-      onOpenMediaUrl: (url) => unawaited(_openSharedMediaUrl(url)),
-    );
-  }
+  Widget _buildDetailsPane() => _buildChatDetailsPanel();
 
   void _startRefresh() {
     _refreshTimer?.cancel();
@@ -4617,7 +4880,11 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
               final groupId = _groupId;
               final name = nameCtrl.text.trim();
               if (groupId == null || name.isEmpty) return;
-              final r = await widget.apiService.updateGroup(groupId, name, descCtrl.text.trim());
+              final r = await widget.apiService.updateGroup(
+                groupId,
+                name: name,
+                description: descCtrl.text.trim(),
+              );
               if (!ctx.mounted) return;
               Navigator.pop(ctx);
               if (!mounted) return;
