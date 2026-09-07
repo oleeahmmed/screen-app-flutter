@@ -97,6 +97,10 @@ class AppConfig {
   static String get p2pCallSignalUrl => '$apiBaseUrl/p2p/call-signal/';
   static String get p2pCallSignalsPendingUrl => '$apiBaseUrl/p2p/call-signals/pending/';
   static String get chatMessageDetailUrl => '$apiBaseUrl/chat/messages/';
+  static String chatMessageReactionsUrl(int messageId) =>
+      '$apiBaseUrl/chat/messages/$messageId/reactions/';
+  static String groupMessageReactionsUrl(int groupId, int messageId) =>
+      '$apiBaseUrl/chat/groups/$groupId/messages/$messageId/reactions/';
   static String get chatGroupsUrl => '$apiBaseUrl/chat/groups/';
   static String get pushDeviceRegisterUrl => '$apiBaseUrl/devices/push/register/';
   static String get pushDeviceUnregisterUrl => '$apiBaseUrl/devices/push/unregister/';

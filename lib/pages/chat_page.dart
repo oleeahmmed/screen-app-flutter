@@ -73,6 +73,7 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription<Map<String, dynamic>>? _typingSub;
   StreamSubscription<Map<String, dynamic>>? _messagesReadSub;
   StreamSubscription<Map<String, dynamic>>? _chatMsgSub;
+  StreamSubscription<Map<String, dynamic>>? _reactionSub;
   StreamSubscription<CallPhase>? _callPhaseSub;
   bool _isRecording = false;
   int _recordSeconds = 0;
@@ -98,6 +99,7 @@ class _ChatPageState extends State<ChatPage> {
   bool _detailsOpen = false;
   /// Filter messages in the open thread (from details Search).
   String _inChatQuery = '';
+  static const _quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
   bool _chatDragOver = false;
 
   bool get _supportsNativeAudio => PlatformCapabilities.nativeAudio;
@@ -137,6 +139,7 @@ class _ChatPageState extends State<ChatPage> {
     _typingSub = widget.notificationService?.typingStream.listen(_onTypingEvent);
     _messagesReadSub = widget.notificationService?.messagesReadStream.listen(_onMessagesRead);
     _chatMsgSub = widget.notificationService?.chatMessageStream.listen(_onRealtimeChatMessage);
+    _reactionSub = widget.notificationService?.reactionStream.listen(_onRealtimeReaction);
     AppNavigation.instance.onPendingChatOpen = _consumePendingChatOpen;
     _callPhaseSub = CallService.instance.phaseStream.listen((phase) {
       if (phase == CallPhase.incoming && mounted) {
@@ -172,6 +175,7 @@ class _ChatPageState extends State<ChatPage> {
     _typingSub?.cancel();
     _messagesReadSub?.cancel();
     _chatMsgSub?.cancel();
+    _reactionSub?.cancel();
     if (AppNavigation.instance.onPendingChatOpen == _consumePendingChatOpen) {
       AppNavigation.instance.onPendingChatOpen = null;
     }
@@ -357,6 +361,177 @@ class _ChatPageState extends State<ChatPage> {
       _scrollToBottom();
       if (!isOwn) unawaited(widget.apiService.markMessagesRead(peerId));
     }
+  }
+
+  void _onRealtimeReaction(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final chatType = data['chat_type']?.toString() ?? 'direct';
+    final msgId = _asInt(data['message_id']);
+    if (msgId == null) return;
+
+    if (chatType == 'group') {
+      final groupId = _asInt(data['group_id']);
+      if (_selectedGroup == null || _asInt(_selectedGroup['id']) != groupId) return;
+    } else {
+      if (_selectedUser == null) return;
+      final peerId = _asInt(_selectedUser['id']);
+      final senderId = _asInt(data['sender_id']);
+      final receiverId = _asInt(data['receiver_id']);
+      if (peerId == null || (senderId != peerId && receiverId != peerId)) return;
+    }
+
+    final reactions = data['reactions'];
+    setState(() {
+      _messages = _messages.map((m) {
+        if (m is Map && _messageIdOf(m) == msgId) {
+          return {
+            ...Map<String, dynamic>.from(m),
+            'reactions': reactions is List ? reactions : [],
+          };
+        }
+        return m;
+      }).toList();
+    });
+  }
+
+  Future<void> _toggleReaction(dynamic msg, String emoji) async {
+    if (msg is! Map) return;
+    final msgId = _messageIdOf(msg);
+    if (msgId == null) return;
+    final isGroup = _selectedGroup != null;
+    final groupId = isGroup ? _asInt(_selectedGroup!['id']) : null;
+
+    final result = await widget.apiService.setMessageReaction(
+      msgId,
+      emoji,
+      isGroup: isGroup,
+      groupId: groupId,
+    );
+    if (!mounted) return;
+    if (result['success'] == true && result['data'] is Map) {
+      final reactions = (result['data'] as Map)['reactions'];
+      setState(() {
+        _messages = _messages.map((m) {
+          if (m is Map && _messageIdOf(m) == msgId) {
+            return {
+              ...Map<String, dynamic>.from(m),
+              'reactions': reactions is List ? reactions : [],
+            };
+          }
+          return m;
+        }).toList();
+      });
+    } else {
+      _showError(result['error']?.toString() ?? 'Could not add reaction');
+    }
+  }
+
+  Future<void> _showReactionPicker(dynamic msg, BuildContext anchorContext) async {
+    final box = anchorContext.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    final overlay = Overlay.of(anchorContext);
+    final topLeft = box.localToGlobal(Offset.zero);
+    final size = box.size;
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) {
+        final screenW = MediaQuery.sizeOf(ctx).width;
+        final barW = (_quickReactions.length * 44.0) + 16;
+        final left = (topLeft.dx + size.width / 2 - barW / 2).clamp(8.0, screenW - barW - 8);
+        final top = (topLeft.dy - 58).clamp(8.0, MediaQuery.sizeOf(ctx).height - 72);
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => entry.remove(),
+                behavior: HitTestBehavior.translucent,
+                child: ColoredBox(color: Colors.black.withValues(alpha: 0.25)),
+              ),
+            ),
+            Positioned(
+              left: left,
+              top: top,
+              child: Material(
+                elevation: 8,
+                borderRadius: BorderRadius.circular(28),
+                color: const Color(0xFF233138),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: _quickReactions.map((emoji) {
+                      return GestureDetector(
+                        onTap: () {
+                          entry.remove();
+                          unawaited(_toggleReaction(msg, emoji));
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 5),
+                          child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    overlay.insert(entry);
+  }
+
+  Widget _buildReactionsRow(dynamic msg, {required bool isOwn}) {
+    final raw = msg['reactions'];
+    if (raw is! List || raw.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: 4,
+      runSpacing: 2,
+      children: raw.map<Widget>((r) {
+        if (r is! Map) return const SizedBox.shrink();
+        final emoji = (r['emoji'] ?? '').toString();
+        if (emoji.isEmpty) return const SizedBox.shrink();
+        final count = _asInt(r['count']) ?? 1;
+        final mine = r['reacted_by_me'] == true;
+        return GestureDetector(
+          onTap: () => unawaited(_toggleReaction(msg, emoji)),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: mine ? const Color(0xFF0A4D3F) : const Color(0xFF1F2C34),
+              borderRadius: BorderRadius.circular(12),
+              border: mine ? Border.all(color: const Color(0xFF06CF9C), width: 1) : null,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.2),
+                  blurRadius: 2,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(emoji, style: const TextStyle(fontSize: 14)),
+                if (count > 1)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 3),
+                    child: Text(
+                      '$count',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
   }
 
   void _onPresenceUpdate(Map<String, dynamic> data) {
@@ -3242,11 +3417,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       );
     }
 
+    final hasReactions = msg['reactions'] is List && (msg['reactions'] as List).isNotEmpty;
+
     return Padding(
       padding: EdgeInsets.only(
         left: isOwn ? 48 : 8,
         right: isOwn ? 8 : 48,
-        bottom: 3,
+        bottom: hasReactions ? 12 : 3,
         top: 1,
       ),
       child: Align(
@@ -3264,10 +3441,10 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                 ));
               }
 
-              return Material(
+              final bubble = Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onLongPress: !isDeleted ? () => openOptions() : null,
+                  onLongPress: !isDeleted ? () => unawaited(_showReactionPicker(msg, bubbleCtx)) : null,
                   onSecondaryTapDown: !isDeleted
                       ? (details) => openOptions(details.globalPosition)
                       : null,
@@ -3297,8 +3474,6 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     ),
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
-                      // Hug content width (short "hi" stays small). No Align/infinity
-                      // children â€” those previously stretched bubbles to full pane width.
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3344,6 +3519,20 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     ),
                   ),
                 ),
+              );
+
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  bubble,
+                  if (hasReactions)
+                    Positioned(
+                      bottom: -10,
+                      right: isOwn ? 6 : null,
+                      left: isOwn ? null : 6,
+                      child: _buildReactionsRow(msg, isOwn: isOwn),
+                    ),
+                ],
               );
             },
           ),

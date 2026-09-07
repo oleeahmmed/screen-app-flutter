@@ -1222,6 +1222,45 @@ class ApiService {
     }
   }
 
+  // ─── Message Reactions ───
+  Future<Map<String, dynamic>> setMessageReaction(int messageId, String emoji, {bool isGroup = false, int? groupId}) async {
+    try {
+      final url = isGroup && groupId != null
+          ? AppConfig.groupMessageReactionsUrl(groupId, messageId)
+          : AppConfig.chatMessageReactionsUrl(messageId);
+      final response = await http
+          .post(
+            Uri.parse(url),
+            headers: _getHeaders(),
+            body: jsonEncode({'emoji': emoji}),
+          )
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to react: ${response.statusCode}'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> removeMessageReaction(int messageId, {bool isGroup = false, int? groupId}) async {
+    try {
+      final url = isGroup && groupId != null
+          ? AppConfig.groupMessageReactionsUrl(groupId, messageId)
+          : AppConfig.chatMessageReactionsUrl(messageId);
+      final response = await http
+          .delete(Uri.parse(url), headers: _getHeaders())
+          .timeout(Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      return {'success': false, 'error': 'Failed to remove reaction'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   // ─── Group Chat APIs ───
   Future<Map<String, dynamic>> getChatGroups() async {
     try {
