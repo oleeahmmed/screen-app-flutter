@@ -620,10 +620,10 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
                       side: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
                     ),
                   ),
-                if (_catCanAdmin(cat)) ...[
+                if (cat != null && _catCanAdmin(cat)) ...[
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
-                    onPressed: () => _openPeople(cat),
+                    onPressed: () => _openPeople(cat!),
                     icon: const Icon(Icons.people_outline, size: 16),
                     label: const Text('People'),
                     style: OutlinedButton.styleFrom(
@@ -648,9 +648,9 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Row(
               children: [
-                if (_catCanAdmin(cat))
+                if (cat != null && _catCanAdmin(cat))
                   OutlinedButton.icon(
-                    onPressed: () => _openPeople(cat),
+                    onPressed: () => _openPeople(cat!),
                     icon: const Icon(Icons.people_outline, size: 16),
                     label: const Text('People'),
                     style: OutlinedButton.styleFrom(
