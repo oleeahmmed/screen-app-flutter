@@ -16,6 +16,10 @@
   #define MyAppVersion "1.0.0"
 #endif
 
+#ifndef MyOutputBaseFilename
+  #define MyOutputBaseFilename "AIMS-Setup-{#MyAppVersion}"
+#endif
+
 #define MyAppName "AIMS"
 #define MyAppPublisher "iBit Ltd"
 #define MyAppExeName "aims.exe"
@@ -55,7 +59,7 @@ WizardImageBackColor=white
 ShowLanguageDialog=no
 ; --- Output ---
 OutputDir=..\..\dist
-OutputBaseFilename=AIMS-Setup-{#MyAppVersion}
+OutputBaseFilename={#MyOutputBaseFilename}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 VersionInfoVersion={#MyAppVersion}.0
