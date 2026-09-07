@@ -46,6 +46,9 @@ class NotificationService {
   final _chatMessageController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get chatMessageStream => _chatMessageController.stream;
 
+  final _reactionController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get reactionStream => _reactionController.stream;
+
   static const _callTypes = {
     'call_invite',
     'call_accept',
@@ -342,6 +345,10 @@ class NotificationService {
       }
       return;
     }
+    if (type == 'message_reaction') {
+      _reactionController.add(data);
+      return;
+    }
     if (type == 'notification') {
       final notifType = data['notification_type']?.toString() ?? '';
       if (notifType == 'call_invite') {
@@ -391,6 +398,7 @@ class NotificationService {
     _messagesReadController.close();
     _callController.close();
     _chatMessageController.close();
+    _reactionController.close();
     _pushController.close();
     _presenceController.close();
   }
