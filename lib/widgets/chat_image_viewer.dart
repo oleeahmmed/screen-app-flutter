@@ -1,7 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
+import '../services/chat_clipboard.dart';
 import '../theme/app_theme.dart';
 import '../utils/local_file_actions.dart';
 import '../utils/platform_capabilities.dart';
@@ -121,6 +124,18 @@ class _ChatImageViewerState extends State<ChatImageViewer> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _copyCurrentImage() async {
+    final url = _url;
+    if (url.isEmpty) return;
+    await _runBusy(() async {
+      final ok = await ChatClipboard.copyImageFromUrl(url);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ok ? 'Image copied' : 'Could not copy image')),
+      );
+    });
   }
 
   Future<void> _saveCurrent() async {
@@ -341,8 +356,13 @@ class _ChatImageViewerState extends State<ChatImageViewer> {
                                           ListTile(
                                             leading: const Icon(Icons.copy_rounded, color: AppTheme.textMuted),
                                             title: const Text('Copy caption', style: TextStyle(color: AppTheme.textPrimary)),
-                                            onTap: () => Navigator.pop(context, 'copy'),
+                                            onTap: () => Navigator.pop(context, 'copy_caption'),
                                           ),
+                                        ListTile(
+                                          leading: const Icon(Icons.image_outlined, color: AppTheme.textMuted),
+                                          title: const Text('Copy image', style: TextStyle(color: AppTheme.textPrimary)),
+                                          onTap: () => Navigator.pop(context, 'copy_image'),
+                                        ),
                                         const SizedBox(height: 8),
                                       ],
                                     ),
@@ -359,13 +379,16 @@ class _ChatImageViewerState extends State<ChatImageViewer> {
                                   case 'info':
                                     widget.onInfo?.call(msg);
                                     break;
-                                  case 'copy':
+                                  case 'copy_caption':
                                     await Clipboard.setData(ClipboardData(text: _caption));
                                     if (mounted) {
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         const SnackBar(content: Text('Caption copied')),
                                       );
                                     }
+                                    break;
+                                  case 'copy_image':
+                                    await _copyCurrentImage();
                                     break;
                                 }
                               },
@@ -416,6 +439,11 @@ class _ChatImageViewerState extends State<ChatImageViewer> {
                                       Navigator.pop(context);
                                       await widget.onForward!(msg);
                                     },
+                            ),
+                            _action(
+                              icon: Icons.copy_rounded,
+                              label: 'Copy',
+                              onTap: _copyCurrentImage,
                             ),
                             _action(
                               icon: Icons.download_rounded,

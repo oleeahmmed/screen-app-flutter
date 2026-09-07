@@ -45,17 +45,17 @@ class ChatWallpaperBackground extends StatelessWidget {
 BorderRadius chatBubbleRadius({required bool isOwn}) {
   if (isOwn) {
     return const BorderRadius.only(
-      topLeft: Radius.circular(8),
-      topRight: Radius.circular(2),
-      bottomLeft: Radius.circular(8),
-      bottomRight: Radius.circular(8),
+      topLeft: Radius.circular(10),
+      topRight: Radius.circular(3),
+      bottomLeft: Radius.circular(10),
+      bottomRight: Radius.circular(10),
     );
   }
   return const BorderRadius.only(
-    topLeft: Radius.circular(2),
-    topRight: Radius.circular(8),
-    bottomLeft: Radius.circular(8),
-    bottomRight: Radius.circular(8),
+    topLeft: Radius.circular(3),
+    topRight: Radius.circular(10),
+    bottomLeft: Radius.circular(10),
+    bottomRight: Radius.circular(10),
   );
 }
 

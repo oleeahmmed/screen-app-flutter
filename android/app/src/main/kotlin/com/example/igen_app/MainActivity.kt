@@ -1,5 +1,9 @@
 package com.example.igen_app
 
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.ActivityNotFoundException
 import android.content.ContentValues
 import android.content.Intent
@@ -19,9 +23,42 @@ import java.io.File
 /// Android client — P2P save / open-file / open-folder helpers.
 class MainActivity : FlutterActivity() {
     private val channelName = "com.example.igen_app/files"
+    private val clipboardChannelName = "com.example.igen_app/clipboard"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, clipboardChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "readClipboardImage" -> {
+                        try {
+                            result.success(readClipboardImageBytes())
+                        } catch (e: Exception) {
+                            result.error("clip_read", e.message, null)
+                        }
+                    }
+                    "hasClipboardImage" -> {
+                        try {
+                            result.success(hasClipboardImage())
+                        } catch (e: Exception) {
+                            result.error("clip_check", e.message, null)
+                        }
+                    }
+                    "writeClipboardImage" -> {
+                        val bytes = call.argument<ByteArray>("bytes")
+                        if (bytes == null || bytes.isEmpty()) {
+                            result.error("bad_args", "bytes required", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            result.success(writeClipboardImage(bytes))
+                        } catch (e: Exception) {
+                            result.error("clip_write", e.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -523,5 +560,107 @@ class MainActivity : FlutterActivity() {
     private fun mimeFromName(path: String?): String? {
         if (path.isNullOrBlank()) return null
         return mimeFor(File(path))
+    }
+
+    private fun hasClipboardImage(): Boolean {
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = manager.primaryClip ?: return false
+        if (clip.itemCount == 0) return false
+
+        val description = clip.description
+        if (description != null) {
+            for (i in 0 until description.mimeTypeCount) {
+                if (description.getMimeType(i)?.startsWith("image/") == true) return true
+            }
+            if (description.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST)) return true
+        }
+
+        for (i in 0 until clip.itemCount) {
+            val item = clip.getItemAt(i)
+            if (item.uri != null) return true
+            val text = item.text?.toString()?.trim()
+            if (!text.isNullOrEmpty() &&
+                (text.startsWith("content://") || text.startsWith("file://"))
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun readClipboardImageBytes(): ByteArray? {
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = manager.primaryClip ?: return null
+        if (clip.itemCount == 0) return null
+
+        val description = clip.description
+        val looksLikeImage = description != null &&
+            (description.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST) ||
+                description.mimeTypeCount.let { count ->
+                    (0 until count).any { i ->
+                        description.getMimeType(i)?.startsWith("image/") == true
+                    }
+                })
+
+        for (i in 0 until clip.itemCount) {
+            val item = clip.getItemAt(i)
+
+            item.uri?.let { uri ->
+                val bytes = readImageBytesFromUri(uri, strictImageMime = !looksLikeImage)
+                if (bytes != null && bytes.isNotEmpty()) return bytes
+            }
+
+            item.intent?.data?.let { uri ->
+                val bytes = readImageBytesFromUri(uri, strictImageMime = !looksLikeImage)
+                if (bytes != null && bytes.isNotEmpty()) return bytes
+            }
+
+            val text = item.text?.toString()?.trim()
+            if (!text.isNullOrEmpty() &&
+                (text.startsWith("content://") || text.startsWith("file://"))
+            ) {
+                try {
+                    val bytes = readImageBytesFromUri(
+                        Uri.parse(text),
+                        strictImageMime = !looksLikeImage,
+                    )
+                    if (bytes != null && bytes.isNotEmpty()) return bytes
+                } catch (_: Exception) {
+                }
+            }
+        }
+        return null
+    }
+
+    private fun readImageBytesFromUri(uri: Uri, strictImageMime: Boolean = true): ByteArray? {
+        return try {
+            if (strictImageMime) {
+                val mime = contentResolver.getType(uri) ?: ""
+                if (mime.isNotEmpty() &&
+                    !mime.startsWith("image/") &&
+                    mime != "application/octet-stream"
+                ) {
+                    return null
+                }
+            }
+            contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun writeClipboardImage(bytes: ByteArray): Boolean {
+        val name = "clipboard_${System.currentTimeMillis()}.jpg"
+        val file = File(cacheDir, name)
+        file.writeBytes(bytes)
+        val uri = FileProvider.getUriForFile(
+            this,
+            "${applicationContext.packageName}.fileprovider",
+            file,
+        )
+        val clip = ClipData.newUri(contentResolver, "image", uri)
+        val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        manager.setPrimaryClip(clip)
+        return true
     }
 }

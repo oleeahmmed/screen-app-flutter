@@ -1018,25 +1018,42 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getConversation(int userId) async {
+  Future<Map<String, dynamic>> getConversation(
+    int userId, {
+    int? limit,
+    int? beforeId,
+    int? afterId,
+  }) async {
     try {
+      final query = <String, String>{};
+      if (limit != null) query['limit'] = '$limit';
+      if (beforeId != null) query['before_id'] = '$beforeId';
+      if (afterId != null) query['after_id'] = '$afterId';
+      final uri = Uri.parse('${AppConfig.chatConversationUrl}$userId/').replace(
+        queryParameters: query.isEmpty ? null : query,
+      );
       final response = await http
           .get(
-            Uri.parse('${AppConfig.chatConversationUrl}$userId/'),
+            uri,
             headers: _getHeaders(),
           )
           .timeout(Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        if (data is Map && data['results'] is List) {
+          return {
+            'success': true,
+            'data': data['results'],
+            'has_more': data['has_more'] == true,
+          };
+        }
         final list = data is List
             ? data
             : (data is Map && data['messages'] is List)
                 ? data['messages']
-                : (data is Map && data['results'] is List)
-                    ? data['results']
-                    : <dynamic>[];
-        return {'success': true, 'data': list};
+                : <dynamic>[];
+        return {'success': true, 'data': list, 'has_more': false};
       }
       return {'success': false, 'error': 'Failed to load conversation'};
     } catch (e) {
@@ -1314,29 +1331,60 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getGroupMessages(int groupId) async {
+  Future<Map<String, dynamic>> getGroupMessages(
+    int groupId, {
+    int? limit,
+    int? beforeId,
+    int? afterId,
+  }) async {
     try {
+      final query = <String, String>{};
+      if (limit != null) query['limit'] = '$limit';
+      if (beforeId != null) query['before_id'] = '$beforeId';
+      if (afterId != null) query['after_id'] = '$afterId';
+      final uri = Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/').replace(
+        queryParameters: query.isEmpty ? null : query,
+      );
       final response = await http
           .get(
-            Uri.parse('${AppConfig.chatGroupsUrl}$groupId/messages/'),
+            uri,
             headers: _getHeaders(),
           )
           .timeout(Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        if (data is Map && data['results'] is List) {
+          return {
+            'success': true,
+            'data': data['results'],
+            'has_more': data['has_more'] == true,
+          };
+        }
         final list = data is List
             ? data
             : (data is Map && data['messages'] is List)
                 ? data['messages']
-                : (data is Map && data['results'] is List)
-                    ? data['results']
-                    : <dynamic>[];
-        return {'success': true, 'data': list};
+                : <dynamic>[];
+        return {'success': true, 'data': list, 'has_more': false};
       }
       return {'success': false, 'error': 'Failed to load group messages'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
+  }
+
+  Future<Uint8List?> downloadAuthedBytes(String url) async {
+    try {
+      final response = await http
+          .get(Uri.parse(url), headers: _getHeaders())
+          .timeout(const Duration(seconds: 45));
+      if (response.statusCode >= 200 &&
+          response.statusCode < 300 &&
+          response.bodyBytes.isNotEmpty) {
+        return response.bodyBytes;
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<Map<String, dynamic>> sendGroupMessage(
@@ -1371,6 +1419,7 @@ class ApiService {
     int groupId,
     List<int> imageBytes,
     String filename, {
+    String message = '',
     int? replyToId,
     List<int>? recipientIds,
   }) async {
@@ -1382,7 +1431,7 @@ class ApiService {
       final headers = _getHeaders();
       headers.remove('Content-Type');
       request.headers.addAll(headers);
-      request.fields['message'] = '';
+      request.fields['message'] = message;
       if (replyToId != null) request.fields['reply_to_id'] = '$replyToId';
       if (recipientIds != null && recipientIds.isNotEmpty) {
         request.fields['recipient_ids'] = recipientIds.join(',');
