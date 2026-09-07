@@ -63,8 +63,6 @@ dependencies:
   aims_style_notify:
     path: third_party/aims_style_notify
   open_filex: ^4.7.0
-  swipelab_webp: ^1.0.0
-
 dev_dependencies:
   flutter_test:
     sdk: flutter

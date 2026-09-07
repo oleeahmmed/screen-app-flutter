@@ -1,18 +1,17 @@
 import 'dart:typed_data';
 import 'package:image/image.dart' as img;
-import 'package:swipelab_webp/swipelab_webp.dart';
 
 /// Max width sent to the server (matches backend SCREENSHOT_MAX_WIDTH).
 const int kScreenshotMaxUploadWidth = 1080;
 
-/// WebP quality for uploads — visually ~JPEG Q90 at much smaller size.
-const int kScreenshotWebpQuality = 84;
+/// JPEG quality for uploads — server stores as WebP; one lossy step on the backend.
+const int kScreenshotUploadJpegQuality = 85;
 
-/// Resize and encode monitor captures to lossy WebP via native libwebp.
-Uint8List compressToWebP(
+/// Resize and encode monitor captures for upload (JPEG; server normalizes to WebP).
+Uint8List compressScreenshotForUpload(
   Uint8List inputBytes, {
   int maxWidth = kScreenshotMaxUploadWidth,
-  int quality = kScreenshotWebpQuality,
+  int quality = kScreenshotUploadJpegQuality,
 }) {
   try {
     final decoded = img.decodeImage(inputBytes);
@@ -27,47 +26,27 @@ Uint8List compressToWebP(
       );
     }
 
-    // Ensure RGBA for libwebp encoder.
-    final rgbaImage = resized.numChannels == 4
-        ? resized
-        : resized.convert(numChannels: 4);
-    final rgba = rgbaImage.getBytes(order: img.ChannelOrder.rgba);
-
-    final webp = WebPEncoder.encodeRgba(
-      rgba: rgba,
-      width: rgbaImage.width,
-      height: rgbaImage.height,
-      quality: quality.toDouble(),
-    );
-    if (webp != null && webp.isNotEmpty) return webp;
-
-    // Fallback if native WebP encoder unavailable.
     return Uint8List.fromList(img.encodeJpg(resized, quality: quality));
   } catch (_) {
     return inputBytes;
   }
 }
 
-/// Legacy JPEG path — prefer [compressToWebP] for screenshot uploads.
+@Deprecated('Use compressScreenshotForUpload')
+Uint8List compressToWebP(
+  Uint8List inputBytes, {
+  int maxWidth = kScreenshotMaxUploadWidth,
+  int quality = kScreenshotUploadJpegQuality,
+}) =>
+    compressScreenshotForUpload(inputBytes, maxWidth: maxWidth, quality: quality);
+
+@Deprecated('Use compressScreenshotForUpload')
 Uint8List compressToJpeg(
   Uint8List inputBytes, {
   int maxWidth = kScreenshotMaxUploadWidth,
   int quality = 72,
-}) {
-  try {
-    final decoded = img.decodeImage(inputBytes);
-    if (decoded == null) return inputBytes;
-
-    img.Image resized = decoded;
-    if (decoded.width > maxWidth) {
-      resized = img.copyResize(decoded, width: maxWidth);
-    }
-
-    return Uint8List.fromList(img.encodeJpg(resized, quality: quality));
-  } catch (_) {
-    return inputBytes;
-  }
-}
+}) =>
+    compressScreenshotForUpload(inputBytes, maxWidth: maxWidth, quality: quality);
 
 bool isWebpBytes(List<int> bytes) {
   if (bytes.length < 12) return false;
