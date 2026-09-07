@@ -15,8 +15,8 @@ class LocalNotificationService {
   static String? pendingPayload;
   static String? pendingInput;
 
-  static const messageChannelId = 'aims_messages_v3';
-  static const callChannelId = 'aims_calls_v3';
+  static const messageChannelId = 'aims_messages_v4';
+  static const callChannelId = 'aims_calls_v4';
 
   static bool get supported =>
       !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
