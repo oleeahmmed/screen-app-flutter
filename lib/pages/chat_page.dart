@@ -316,20 +316,23 @@ class _ChatPageState extends State<ChatPage> {
       final viewing = _selectedUser != null &&
           (_selectedUser['id'] == peerId || '${_selectedUser['id']}' == '$peerId');
       if (viewing) {
-        final msg = {
-          'id': data['message_id'] ?? DateTime.now().millisecondsSinceEpoch,
-          'message': text,
-          'message_type': data['message_type'] ?? 'text',
-          'sender_id': senderId,
-          'is_own': isOwn,
-          'is_read': false,
-          'created_at': data['created_at'] ?? nowIso,
-          'image_url': data['image_url'],
-          'file_url': data['file_url'],
-          'file_name': data['file_name'],
-          'voice_url': data['voice_url'],
-        };
-        _messages = [..._messages, msg];
+        final msgId = _asInt(data['message_id']);
+        if (msgId == null || !_messageExists(msgId)) {
+          final msg = {
+            'id': msgId ?? DateTime.now().millisecondsSinceEpoch,
+            'message': text,
+            'message_type': data['message_type'] ?? 'text',
+            'sender_id': senderId,
+            'is_own': isOwn,
+            'is_read': false,
+            'created_at': data['created_at'] ?? nowIso,
+            'image_url': data['image_url'],
+            'file_url': data['file_url'],
+            'file_name': data['file_name'],
+            'voice_url': data['voice_url'],
+          };
+          _messages = [..._messages, msg];
+        }
       }
     });
     if (_selectedUser != null &&
@@ -563,6 +566,17 @@ class _ChatPageState extends State<ChatPage> {
     return int.tryParse('${v ?? ''}');
   }
 
+  bool _messageExists(int? id) {
+    if (id == null) return false;
+    return _messages.any((m) => m is Map && _asInt(m['id']) == id);
+  }
+
+  void _refocusComposer() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _msgFocus.requestFocus();
+    });
+  }
+
   Map<String, dynamic> _quoteFromParent(Map<String, dynamic> parent) {
     return {
       'id': parent['id'],
@@ -698,7 +712,7 @@ class _ChatPageState extends State<ChatPage> {
       }
       setState(() => _messages = [..._messages, local]);
       _scrollToBottom();
-      _msgFocus.requestFocus();
+      _refocusComposer();
     } else {
       _msgController.text = text;
       _msgController.selection = TextSelection.collapsed(offset: text.length);
@@ -2168,7 +2182,6 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                                 child: TextField(
                                   controller: _msgController,
                                   focusNode: _msgFocus,
-                                  enabled: !_isSending,
                                   minLines: 1,
                                   maxLines: 6,
                                   keyboardType: TextInputType.multiline,

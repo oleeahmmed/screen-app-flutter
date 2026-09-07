@@ -200,6 +200,23 @@ class CallService {
   }
 
   /// Answer / Decline from the system notification (or open the incoming UI).
+  void _broadcastCallDismiss(String callId) {
+    final uid = _myUserId;
+    if (uid == null) return;
+    _notif?.sendChatPayload({
+      'type': 'call_dismiss',
+      'call_id': callId,
+      'callee_id': uid,
+    });
+  }
+
+  void _dismissIncomingIfMatches(String callId, {String reason = 'Call ended'}) {
+    if (_session?.callId != callId) return;
+    if (_phase != CallPhase.incoming) return;
+    _endCall(reason);
+  }
+
+  /// Answer / Decline from the system notification (or open the incoming UI).
   Future<void> applyNotificationAction(String? actionId, Map<String, dynamic> invite) async {
     await handleRemoteSignal(invite);
     if (actionId == CallNotification.declineAction) {
@@ -341,6 +358,7 @@ class CallService {
     }
 
     await _sendChatControl('$acceptPrefix${s.callId}');
+    _broadcastCallDismiss(s.callId);
     _notif?.sendChatPayload({
       'type': 'call_accept',
       'call_id': s.callId,
@@ -359,6 +377,7 @@ class CallService {
     if (s == null) return;
     _ringTimer?.cancel();
     unawaited(_sendChatControl('$rejectPrefix${s.callId}'));
+    _broadcastCallDismiss(s.callId);
     _notif?.sendChatPayload({
       'type': 'call_reject',
       'call_id': s.callId,
@@ -435,6 +454,9 @@ class CallService {
         break;
       case 'call_hangup':
         if (_session?.callId == callId) _endCall('Call ended');
+        break;
+      case 'call_dismiss':
+        if (callId.isNotEmpty) _dismissIncomingIfMatches(callId);
         break;
       case 'call_offer':
       case 'call_answer':

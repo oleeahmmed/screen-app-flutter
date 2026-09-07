@@ -51,6 +51,7 @@ class NotificationService {
     'call_accept',
     'call_reject',
     'call_hangup',
+    'call_dismiss',
     'call_offer',
     'call_answer',
     'call_ice',
