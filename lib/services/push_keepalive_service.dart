@@ -165,6 +165,56 @@ class _PushKeepAliveIsolate {
     });
   }
 
+  Future<void> _showChatFromWs(Map<String, dynamic> data, {required bool isGroup}) async {
+    final senderId = int.tryParse('${data['sender_id'] ?? ''}');
+    if (senderId == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final myId = int.tryParse(prefs.getString('user_id') ?? '');
+    if (myId != null && senderId == myId) return;
+
+    final text = (data['message'] ?? '').toString();
+    if (text.contains('__AIMS_CALL_')) return;
+
+    final senderName = (data['sender_full_name'] ??
+            data['sender_name'] ??
+            data['sender_username'] ??
+            'Someone')
+        .toString();
+    final preview = text.trim().isEmpty
+        ? ({'image': '[Image]', 'file': '[File]', 'voice': '[Voice]'})[
+                data['message_type']?.toString() ?? 'text'] ??
+            'New message'
+        : (text.length > 120 ? '${text.substring(0, 120)}\u2026' : text);
+
+    final notifType = isGroup ? 'new_group_message' : 'new_message';
+    final chat = ChatNotification.fromData({
+      'notification_type': notifType,
+      'title': senderName,
+      'message': preview,
+      'sender_id': senderId,
+      'sender_name': senderName,
+      'sender_username': data['sender_username'],
+      'group_id': data['group_id'],
+    });
+    await LocalNotificationService.showChat(
+      conversationKey: chat.isGroup
+          ? 'g:${chat.groupId ?? senderName.hashCode}'
+          : 'u:${chat.peerId ?? senderId}',
+      personName: chat.name,
+      body: chat.body.isNotEmpty ? chat.body : preview,
+      payload: ChatNotification.encode(
+        name: chat.name,
+        peerId: chat.peerId,
+        groupId: chat.groupId,
+        notificationType: notifType,
+      ),
+      isGroup: chat.isGroup,
+      groupTitle: chat.isGroup ? chat.name : null,
+      personKey: chat.peerId ?? chat.groupId,
+    );
+  }
+
   Future<void> _onMessage(dynamic raw) async {
     Map<String, dynamic> data;
     try {
@@ -177,6 +227,11 @@ class _PushKeepAliveIsolate {
 
     final type = data['type']?.toString() ?? '';
     if (_uiForeground && type != 'call_dismiss') return;
+
+    if (type == 'chat_message' || type == 'group_message') {
+      await _showChatFromWs(data, isGroup: type == 'group_message');
+      return;
+    }
 
     if (type.startsWith('call_')) {
       if (type == 'call_dismiss') {

@@ -8,8 +8,11 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config.dart';
 import '../utils/ws_connect.dart';
 import 'api_service.dart';
+import 'call_service.dart';
 import 'call_tokens.dart';
+import 'chat_notification_router.dart';
 import 'notification_sound.dart';
+import 'user_data_service.dart';
 
 /// Real-time notifications via WebSocket (`/ws/chat/`) with polling fallback.
 class NotificationService {
@@ -342,11 +345,13 @@ class NotificationService {
         _emitCallSignal(call);
       } else {
         _chatMessageController.add(data);
+        unawaited(_maybePushChatNotification(data, isGroup: false));
       }
       return;
     }
     if (type == 'group_message') {
       _chatMessageController.add(data);
+      unawaited(_maybePushChatNotification(data, isGroup: true));
       return;
     }
     if (type == 'message_reaction') {
@@ -394,6 +399,46 @@ class NotificationService {
   int? _notifInt(dynamic v) {
     if (v is int) return v;
     return int.tryParse('${v ?? ''}');
+  }
+
+  Future<void> _maybePushChatNotification(Map<String, dynamic> data, {required bool isGroup}) async {
+    if (kIsWeb) return;
+    final senderId = _notifInt(data['sender_id']);
+    if (senderId == null) return;
+    final myId = int.tryParse(await UserDataService.getUserId());
+    if (ChatNotificationRouter.shouldSuppress(
+      senderId: senderId,
+      myUserId: myId,
+      peerId: isGroup ? null : senderId,
+      groupId: isGroup ? _notifInt(data['group_id']) : null,
+    )) {
+      return;
+    }
+
+    final text = (data['message'] ?? '').toString();
+    if (CallService.isHiddenCallChatMessage(text)) return;
+
+    final senderName = (data['sender_full_name'] ??
+            data['sender_name'] ??
+            data['sender_username'] ??
+            'Someone')
+        .toString();
+    final preview = text.trim().isEmpty
+        ? ({'image': '[Image]', 'file': '[File]', 'voice': '[Voice]'})[
+                data['message_type']?.toString() ?? 'text'] ??
+            'New message'
+        : (text.length > 120 ? '${text.substring(0, 120)}…' : text);
+
+    _pushController.add({
+      'type': 'notification',
+      'notification_type': isGroup ? 'new_group_message' : 'new_message',
+      'title': isGroup ? senderName : senderName,
+      'message': preview,
+      'sender_id': senderId,
+      'sender_name': senderName,
+      'sender_username': data['sender_username'],
+      'group_id': data['group_id'],
+    });
   }
 
   void dispose() {

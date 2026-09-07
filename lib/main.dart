@@ -453,8 +453,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _ensureMobileNotificationPermission() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return;
+  Future<void> _ensureNotificationPermission() async {
+    if (kIsWeb) return;
     await LocalNotificationService.requestPermissions();
   }
 
@@ -476,7 +476,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         ));
       });
     }
-    unawaited(_ensureMobileNotificationPermission());
+    unawaited(_ensureNotificationPermission());
     unawaited(PushKeepAlive.start());
     unawaited(PushService.instance.bindApi(_apiService));
   }

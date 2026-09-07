@@ -11,6 +11,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
+import '../utils/chat_emojis.dart';
+import '../services/chat_notification_router.dart';
 import '../services/notification_service.dart';
 import '../services/call_service.dart';
 import '../services/call_navigation.dart';
@@ -165,6 +167,7 @@ class _ChatPageState extends State<ChatPage> {
     _chatMsgSub = widget.notificationService?.chatMessageStream.listen(_onRealtimeChatMessage);
     _reactionSub = widget.notificationService?.reactionStream.listen(_onRealtimeReaction);
     AppNavigation.instance.onPendingChatOpen = _consumePendingChatOpen;
+    ChatNotificationRouter.chatTabActive = true;
     _callPhaseSub = CallService.instance.phaseStream.listen((phase) {
       if (phase == CallPhase.incoming && mounted) {
         CallNavigation.openCallPageIfNeeded();
@@ -190,6 +193,7 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   void dispose() {
+    ChatNotificationRouter.clear();
     _stopTypingSignal();
     _refreshTimer?.cancel();
     _usersPollTimer?.cancel();
@@ -304,7 +308,7 @@ class _ChatPageState extends State<ChatPage> {
 
   String _chatPreviewText(Map user) {
     final key = 'u:${user['id']}';
-    if (_typingPeers.containsKey(key)) return 'typingâ€¦';
+    if (_typingPeers.containsKey(key)) return 'typing\u2026';
     final raw = (user['last_message'] ?? '').toString().trim();
     if (raw.isNotEmpty) return raw;
     final designation = (user['designation'] ?? '').toString().trim();
@@ -335,19 +339,45 @@ class _ChatPageState extends State<ChatPage> {
 
     if (isGroup) {
       final groupId = _asInt(data['group_id']);
-      if (groupId == null || _selectedGroup == null || _asInt(_selectedGroup['id']) != groupId) {
-        return;
-      }
-      final msgId = _eventMessageId(data);
-      if (msgId == null) return;
+      if (groupId == null) return;
+
       final senderId = _asInt(data['sender_id']);
       final isOwn = _myUserId != null && senderId == _myUserId;
+      final text = (data['message'] ?? '').toString();
+      if (CallService.isHiddenCallChatMessage(text)) return;
+
+      final preview = text.trim().isEmpty
+          ? _chatPreviewText({'last_message': data['message_type']})
+          : (text.length > 80 ? '${text.substring(0, 80)}\u2026' : text);
       final nowIso = DateTime.now().toUtc().toIso8601String();
-      final msg = _messageFromRealtimeEvent(data, isOwn: isOwn, fallbackTime: nowIso);
+      final viewing = _selectedGroup != null && _asInt(_selectedGroup['id']) == groupId;
+
       setState(() {
-        _messages = _upsertMessage(_messages, msg);
+        _groups = _groups.map((g) {
+          if (g is! Map || _asInt(g['id']) != groupId) return g;
+          final map = Map<String, dynamic>.from(g);
+          map['last_message'] = preview;
+          map['last_message_at'] = nowIso;
+          if (!isOwn && !viewing) {
+            final n = _asInt(map['unread_count']) ?? 0;
+            map['unread_count'] = n + 1;
+          }
+          return map;
+        }).toList();
+
+        if (viewing) {
+          final msgId = _eventMessageId(data);
+          if (msgId == null) return;
+          if (isOwn && _messageExists(msgId)) return;
+          final msg = _messageFromRealtimeEvent(data, isOwn: isOwn, fallbackTime: nowIso);
+          _messages = _upsertMessage(_messages, msg);
+        }
       });
-      _scrollToBottom();
+
+      if (viewing) {
+        ChatNotificationRouter.setActiveChat(groupId: groupId);
+        _scrollToBottom();
+      }
       return;
     }
 
@@ -362,7 +392,7 @@ class _ChatPageState extends State<ChatPage> {
 
     final preview = text.trim().isEmpty
         ? _chatPreviewText({'last_message': data['message_type']})
-        : (text.length > 80 ? '${text.substring(0, 80)}â€¦' : text);
+        : (text.length > 80 ? '${text.substring(0, 80)}\u2026' : text);
     final nowIso = DateTime.now().toUtc().toIso8601String();
 
     setState(() {
@@ -385,12 +415,14 @@ class _ChatPageState extends State<ChatPage> {
       if (viewing) {
         final msgId = _eventMessageId(data);
         if (msgId == null) return;
+        if (isOwn && _messageExists(msgId)) return;
         final msg = _messageFromRealtimeEvent(data, isOwn: isOwn, fallbackTime: nowIso);
         _messages = _upsertMessage(_messages, msg);
       }
     });
     if (_selectedUser != null &&
         (_selectedUser['id'] == peerId || '${_selectedUser['id']}' == '$peerId')) {
+      ChatNotificationRouter.setActiveChat(peerId: peerId);
       _scrollToBottom();
       if (!isOwn) unawaited(widget.apiService.markMessagesRead(peerId));
     }
@@ -711,7 +743,7 @@ class _ChatPageState extends State<ChatPage> {
   String? _activeTypingLabel() {
     if (_selectedUser != null) {
       final key = 'u:${_selectedUser['id']}';
-      if (_typingPeers.containsKey(key)) return 'typingâ€¦';
+      if (_typingPeers.containsKey(key)) return 'typing\u2026';
       return null;
     }
     if (_selectedGroup != null) {
@@ -721,8 +753,8 @@ class _ChatPageState extends State<ChatPage> {
           .map((e) => e.value)
           .toList();
       if (names.isEmpty) return null;
-      if (names.length == 1) return '${names.first} is typingâ€¦';
-      return '${names.length} people typingâ€¦';
+      if (names.length == 1) return '${names.first} is typing\u2026';
+      return '${names.length} people typing\u2026';
     }
     return null;
   }
@@ -805,8 +837,10 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _selectUser(dynamic user, {bool resetQuotes = true, bool openDetails = false}) async {
     _stopTypingSignal();
+    final uid = user['id'];
     setState(() {
-      _selectedUser = user;
+      _selectedUser = Map<String, dynamic>.from(user as Map);
+      _selectedUser['unread_count'] = 0;
       _selectedGroup = null;
       _messages = [];
       _replyTo = null;
@@ -814,7 +848,15 @@ class _ChatPageState extends State<ChatPage> {
       if (openDetails) _detailsOpen = true;
       if (resetQuotes) _replyQuotesByMsgId.clear();
       _typingPeers.removeWhere((k, _) => k.startsWith('g:'));
+      _users = _users.map((u) {
+        if (u is! Map) return u;
+        if (u['id'] == uid || '${u['id']}' == '$uid') {
+          return {...Map<String, dynamic>.from(u), 'unread_count': 0};
+        }
+        return u;
+      }).toList();
     });
+    ChatNotificationRouter.setActiveChat(peerId: _asInt(uid));
     _startRefresh();
     final result = await widget.apiService.getConversation(user['id']);
     if (result['success']) {
@@ -827,8 +869,10 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _selectGroup(dynamic group, {bool resetQuotes = true, bool openDetails = false}) async {
     _stopTypingSignal();
+    final gid = group['id'];
     setState(() {
-      _selectedGroup = group;
+      _selectedGroup = Map<String, dynamic>.from(group as Map);
+      _selectedGroup['unread_count'] = 0;
       _selectedUser = null;
       _messages = [];
       _replyTo = null;
@@ -836,7 +880,15 @@ class _ChatPageState extends State<ChatPage> {
       if (openDetails) _detailsOpen = true;
       if (resetQuotes) _replyQuotesByMsgId.clear();
       _typingPeers.removeWhere((k, _) => k.startsWith('u:'));
+      _groups = _groups.map((g) {
+        if (g is! Map) return g;
+        if (g['id'] == gid || '${g['id']}' == '$gid') {
+          return {...Map<String, dynamic>.from(g), 'unread_count': 0};
+        }
+        return g;
+      }).toList();
     });
+    ChatNotificationRouter.setActiveChat(groupId: _asInt(gid));
     _startRefresh();
     final result = await widget.apiService.getGroupMessages(group['id']);
     if (result['success']) {
@@ -1267,7 +1319,7 @@ class _ChatPageState extends State<ChatPage> {
           controller: ctrl,
           autofocus: true,
           style: const TextStyle(color: AppTheme.textPrimary),
-          decoration: _dialogInputDecor('Type to filter messagesâ€¦'),
+          decoration: _dialogInputDecor('Type to filter messages\u2026'),
           onSubmitted: (v) {
             setState(() => _inChatQuery = v.trim());
             Navigator.pop(ctx);
@@ -1384,7 +1436,7 @@ class _ChatPageState extends State<ChatPage> {
       final replyTo = _asInt(msg['reply_to'] ?? msg['reply_to_id']);
       final msgType = (msg['message_type'] ?? 'text').toString();
       final now = DateTime.now();
-      for (var i = list.length - 1; i >= 0 && i >= list.length - 8; i--) {
+      for (var i = list.length - 1; i >= 0 && i >= list.length - 20; i--) {
         final existing = list[i];
         if (existing is! Map || existing['is_own'] != true) continue;
         if ((existing['message_type'] ?? 'text').toString() != msgType) continue;
@@ -1394,7 +1446,7 @@ class _ChatPageState extends State<ChatPage> {
         final ts = DateTime.tryParse(
           '${existing['created_at'] ?? existing['timestamp'] ?? ''}',
         );
-        if (ts != null && now.difference(ts).inSeconds > 15) continue;
+        if (ts != null && now.difference(ts).inSeconds > 30) continue;
         final next = [...list];
         next[i] = {
           ...Map<String, dynamic>.from(existing),
@@ -1589,6 +1641,8 @@ class _ChatPageState extends State<ChatPage> {
       Map<String, dynamic> local;
       if (payload is Map) {
         local = Map<String, dynamic>.from(payload);
+        final mid = _asInt(local['id'] ?? local['message_id']);
+        if (mid != null) local['id'] = mid;
         local['is_own'] = true;
         local['is_read'] = payload['is_read'] == true;
       } else {
@@ -1757,7 +1811,7 @@ class _ChatPageState extends State<ChatPage> {
     }
     final text = (msg['message'] ?? '').toString().trim();
     if (text.isEmpty) return 'Message';
-    return text.length > 100 ? '${text.substring(0, 100)}â€¦' : text;
+    return text.length > 100 ? '${text.substring(0, 100)}\u2026' : text;
   }
 
   Future<void> _startCall(CallKind kind) async {
@@ -2427,7 +2481,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
             style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
             decoration: InputDecoration(
-              hintText: 'Searchâ€¦',
+              hintText: 'Search\u2026',
               hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 14),
               prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9), size: 20),
               prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
@@ -2515,9 +2569,11 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             : (_selectedUser != null && _asInt(_selectedUser['id']) == id);
         final isOnline = !isGroup && _parseOnline(data['is_online']);
         final typingKey = isGroup ? 'g:$id' : 'u:$id';
-        final isTyping = _typingPeers.containsKey(typingKey);
+        final isTyping = isGroup
+            ? _typingPeers.keys.any((k) => k == 'g:$id' || k.startsWith('g:$id:'))
+            : _typingPeers.containsKey(typingKey);
         final preview = isTyping
-            ? 'typingâ€¦'
+            ? 'typing\u2026'
             : (isGroup
                 ? ((data['last_message'] ?? '').toString().trim().isEmpty
                     ? '${data['member_count'] ?? 0} members'
@@ -3043,6 +3099,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       tooltip: 'Back',
                       onPressed: () {
                         _stopTypingSignal();
+                        ChatNotificationRouter.clearActiveThread();
                         setState(() {
                           _selectedUser = null;
                           _selectedGroup = null;
@@ -3245,7 +3302,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                           _chatThreadWidth = constraints.maxWidth;
                           if (_visibleMessages.isEmpty) {
                             return _buildEmpty(_inChatQuery.isNotEmpty
-                                ? 'No messages match\nâ€œ$_inChatQueryâ€'
+                                ? 'No messages match\n"\u201C$_inChatQuery\u201D"'
                                 : 'No messages yet\nStart the conversation!');
                           }
                           return ListView.builder(
@@ -3291,26 +3348,6 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       ],
     ));
   }
-
-  static const _emojiList = [
-    'ðŸ˜€', 'ðŸ˜', 'ðŸ˜‚', 'ðŸ¤£', 'ðŸ˜Š', 'ðŸ˜‡', 'ðŸ™‚', 'ðŸ˜‰', 'ðŸ˜', 'ðŸ˜˜',
-    'ðŸ˜—', 'ðŸ˜š', 'ðŸ˜‹', 'ðŸ˜œ', 'ðŸ¤ª', 'ðŸ˜', 'ðŸ¤‘', 'ðŸ¤—', 'ðŸ¤­', 'ðŸ¤«',
-    'ðŸ¤”', 'ðŸ¤', 'ðŸ¤¨', 'ðŸ˜', 'ðŸ˜‘', 'ðŸ˜¶', 'ðŸ˜', 'ðŸ˜’', 'ðŸ™„', 'ðŸ˜¬',
-    'ðŸ˜Œ', 'ðŸ˜”', 'ðŸ˜ª', 'ðŸ¤¤', 'ðŸ˜´', 'ðŸ˜·', 'ðŸ¤’', 'ðŸ¤•', 'ðŸ¤¢', 'ðŸ¤®',
-    'ðŸ¥µ', 'ðŸ¥¶', 'ðŸ¥´', 'ðŸ˜µ', 'ðŸ¤¯', 'ðŸ¤ ', 'ðŸ¥³', 'ðŸ˜Ž', 'ðŸ¤“', 'ðŸ§',
-    'ðŸ˜•', 'ðŸ˜Ÿ', 'ðŸ™', 'ðŸ˜®', 'ðŸ˜¯', 'ðŸ˜²', 'ðŸ˜³', 'ðŸ¥º', 'ðŸ˜¦', 'ðŸ˜§',
-    'ðŸ˜¨', 'ðŸ˜°', 'ðŸ˜¥', 'ðŸ˜¢', 'ðŸ˜­', 'ðŸ˜±', 'ðŸ˜–', 'ðŸ˜£', 'ðŸ˜ž', 'ðŸ˜“',
-    'ðŸ˜©', 'ðŸ˜«', 'ðŸ¥±', 'ðŸ˜¤', 'ðŸ˜¡', 'ðŸ˜ ', 'ðŸ¤¬', 'ðŸ˜ˆ', 'ðŸ‘¿', 'ðŸ’€',
-    'ðŸ‘', 'ðŸ‘Ž', 'ðŸ‘Œ', 'âœŒï¸', 'ðŸ¤ž', 'ðŸ¤Ÿ', 'ðŸ¤˜', 'ðŸ¤™', 'ðŸ‘ˆ', 'ðŸ‘‰',
-    'ðŸ‘†', 'ðŸ‘‡', 'â˜ï¸', 'âœ‹', 'ðŸ¤š', 'ðŸ–', 'ðŸ––', 'ðŸ‘', 'ðŸ™Œ', 'ðŸ¤²',
-    'ðŸ¤', 'ðŸ™', 'ðŸ’ª', 'ðŸ¦¾', 'ðŸ§ ', 'ðŸ‘€', 'ðŸ‘ï¸', 'ðŸ‘…', 'ðŸ‘„', 'ðŸ’‹',
-    'ðŸ’˜', 'ðŸ’', 'ðŸ’–', 'ðŸ’—', 'ðŸ’“', 'ðŸ’ž', 'ðŸ’•', 'â£ï¸', 'ðŸ’”', 'â¤ï¸',
-    'ðŸ§¡', 'ðŸ’›', 'ðŸ’š', 'ðŸ’™', 'ðŸ’œ', 'ðŸ–¤', 'ðŸ¤', 'ðŸ¤Ž', 'ðŸ’¯', 'ðŸ’¢',
-    'ðŸ’¥', 'ðŸ’«', 'ðŸ’¦', 'ðŸ’¨', 'ðŸ•³', 'ðŸ’£', 'ðŸ’¬', 'ðŸ‘â€ðŸ—¨', 'ðŸ—¨', 'ðŸ—¯',
-    'ðŸ’­', 'ðŸ’¤', 'ðŸ”¥', 'â­', 'ðŸŒŸ', 'âœ¨', 'âš¡', 'â˜€ï¸', 'ðŸŒˆ', 'â˜ï¸',
-    'ðŸŽ‰', 'ðŸŽŠ', 'ðŸŽˆ', 'ðŸŽ', 'ðŸ†', 'ðŸ¥‡', 'ðŸŽ¯', 'âš½', 'ðŸ€', 'ðŸŽ®',
-    'âœ…', 'âŒ', 'â“', 'â—', 'ðŸ’¬', 'ðŸ“', 'ðŸ“Œ', 'ðŸ“Ž', 'ðŸ”—', 'ðŸ”’',
-  ];
 
   /// WhatsApp-style: input stays visible; emoji panel replaces the keyboard below.
   Widget _buildMessageComposer() {
@@ -3497,14 +3534,14 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     Expanded(
                       child: GridView.builder(
                         padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-                        itemCount: _emojiList.length,
+                        itemCount: kChatEmojiList.length,
                         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: 8,
                           mainAxisSpacing: 2,
                           crossAxisSpacing: 2,
                         ),
                         itemBuilder: (_, i) {
-                          final e = _emojiList[i];
+                          final e = kChatEmojiList[i];
                           return InkWell(
                             borderRadius: BorderRadius.circular(8),
                             onTap: () => _insertEmoji(e),
@@ -3718,7 +3755,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     ),
                   ),
                   Text(
-                    _playingUrl == voiceUrl ? 'Playingâ€¦' : 'Tap to play',
+                    _playingUrl == voiceUrl ? 'Playing\u2026' : 'Tap to play',
                     style: TextStyle(color: Colors.white.withValues(alpha: 0.55), fontSize: 11),
                   ),
                 ],
