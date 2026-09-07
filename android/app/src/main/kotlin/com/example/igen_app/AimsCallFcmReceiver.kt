@@ -18,6 +18,14 @@ class AimsCallFcmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val extras = intent.extras ?: return
         val type = extra(extras, "type").ifBlank { extra(extras, "notification_type") }
+        if (type == "call_dismiss") {
+            try {
+                AimsNotifier.cancelIncomingCall(context)
+            } catch (e: Exception) {
+                Log.w(TAG, "call dismiss notify failed", e)
+            }
+            return
+        }
         if (type != "call_invite") return
         if (isAppInForeground(context)) return
 

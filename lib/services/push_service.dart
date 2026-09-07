@@ -11,6 +11,7 @@ import 'api_service.dart';
 import 'call_notification.dart';
 import 'chat_notification.dart';
 import 'notification_deep_link.dart';
+import 'notification_sound.dart';
 import 'local_notification_service_mobile.dart';
 
 /// FCM push — WhatsApp-style alerts when app is minimized or killed.
@@ -102,9 +103,11 @@ class PushService {
 
   void _onForegroundMessage(RemoteMessage message) {
     final type = message.data['type']?.toString() ?? '';
-    if (type != 'call_invite') {
-      unawaited(_showFromRemoteMessage(message, playSound: true));
+    if (type == 'call_invite' || type == 'call_dismiss') {
+      _handleDataPayload(message.data);
+      return;
     }
+    unawaited(_showFromRemoteMessage(message, playSound: true));
     _handleDataPayload(message.data);
   }
 
@@ -115,6 +118,10 @@ class PushService {
   void _handleDataPayload(Map<String, dynamic> data) {
     final type = data['type']?.toString() ?? '';
     final notifType = data['notification_type']?.toString() ?? '';
+    if (type == 'call_dismiss') {
+      unawaited(_handleCallDismiss(data));
+      return;
+    }
     if (type == 'call_invite') {
       AppNavigationBridge.openIncomingCall?.call(data);
       return;
@@ -200,6 +207,12 @@ class PushService {
       payload: NotificationDeepLink.encodeFromData(data),
     );
   }
+
+  static Future<void> _handleCallDismiss(Map<String, dynamic> data) async {
+    await LocalNotificationService.cancelIncomingCall();
+    await NotificationSound.stopCallSounds();
+    AppNavigationBridge.openIncomingCall?.call(data);
+  }
 }
 
 /// Callbacks wired from main.dart (avoids circular imports).
@@ -216,5 +229,10 @@ Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.android);
   await LocalNotificationService.initialize();
+  final type = message.data['type']?.toString() ?? '';
+  if (type == 'call_dismiss') {
+    await PushService._handleCallDismiss(Map<String, dynamic>.from(message.data));
+    return;
+  }
   await PushService._showFromRemoteMessage(message, playSound: true);
 }

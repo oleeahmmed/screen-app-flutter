@@ -175,9 +175,9 @@ class _PushKeepAliveIsolate {
       return;
     }
 
-    if (_uiForeground) return;
-
     final type = data['type']?.toString() ?? '';
+    if (_uiForeground && type != 'call_dismiss') return;
+
     if (type.startsWith('call_')) {
       if (type == 'call_dismiss') {
         await LocalNotificationService.cancelIncomingCall();
