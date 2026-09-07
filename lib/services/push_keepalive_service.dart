@@ -15,6 +15,7 @@ import 'call_notification.dart';
 import 'chat_notification.dart';
 import 'local_notification_service.dart';
 import 'notification_deep_link.dart';
+import 'notification_sound.dart';
 
 /// Keeps the chat WebSocket alive after login so Android can show system
 /// notifications when Aims is not on screen.
@@ -178,6 +179,11 @@ class _PushKeepAliveIsolate {
 
     final type = data['type']?.toString() ?? '';
     if (type.startsWith('call_')) {
+      if (type == 'call_dismiss') {
+        await LocalNotificationService.cancelIncomingCall();
+        await NotificationSound.stopCallSounds();
+        return;
+      }
       if (type == 'call_invite') {
         final name = (data['sender_name'] ??
                 data['caller_name'] ??

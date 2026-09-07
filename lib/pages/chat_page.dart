@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
@@ -97,6 +98,7 @@ class _ChatPageState extends State<ChatPage> {
   bool _detailsOpen = false;
   /// Filter messages in the open thread (from details Search).
   String _inChatQuery = '';
+  bool _chatDragOver = false;
 
   bool get _supportsNativeAudio => PlatformCapabilities.nativeAudio;
 
@@ -332,20 +334,23 @@ class _ChatPageState extends State<ChatPage> {
       final viewing = _selectedUser != null &&
           (_selectedUser['id'] == peerId || '${_selectedUser['id']}' == '$peerId');
       if (viewing) {
-        final msg = {
-          'id': data['message_id'] ?? DateTime.now().millisecondsSinceEpoch,
-          'message': text,
-          'message_type': data['message_type'] ?? 'text',
-          'sender_id': senderId,
-          'is_own': isOwn,
-          'is_read': false,
-          'created_at': data['created_at'] ?? nowIso,
-          'image_url': data['image_url'],
-          'file_url': data['file_url'],
-          'file_name': data['file_name'],
-          'voice_url': data['voice_url'],
-        };
-        _messages = [..._messages, msg];
+        final msgId = _asInt(data['message_id']);
+        if (msgId == null || !_messageExists(msgId)) {
+          final msg = {
+            'id': msgId ?? DateTime.now().millisecondsSinceEpoch,
+            'message': text,
+            'message_type': data['message_type'] ?? 'text',
+            'sender_id': senderId,
+            'is_own': isOwn,
+            'is_read': false,
+            'created_at': data['created_at'] ?? nowIso,
+            'image_url': data['image_url'],
+            'file_url': data['file_url'],
+            'file_name': data['file_name'],
+            'voice_url': data['voice_url'],
+          };
+          _messages = [..._messages, msg];
+        }
       }
     });
     if (_selectedUser != null &&
@@ -792,6 +797,89 @@ class _ChatPageState extends State<ChatPage> {
     return int.tryParse('${v ?? ''}');
   }
 
+  bool _messageExists(int? id) {
+    if (id == null) return false;
+    return _messages.any((m) => m is Map && _asInt(m['id']) == id);
+  }
+
+  void _refocusComposer() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _msgFocus.requestFocus();
+    });
+  }
+
+  static bool _isImageFileName(String name) {
+    final lower = name.toLowerCase();
+    return lower.endsWith('.png') ||
+        lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp');
+  }
+
+  Future<void> _handleDroppedFiles(List<XFile> files) async {
+    if (_selectedUser == null && _selectedGroup == null) return;
+    if (_isSending) return;
+    for (final f in files) {
+      final name = f.name.isNotEmpty ? f.name : 'file';
+      final path = f.path;
+      if (path != null && path.isNotEmpty) {
+        if (_isImageFileName(name)) {
+          await _sendPickedImagePath(path, name);
+        } else {
+          await _sendPickedFilePath(path, name);
+        }
+        continue;
+      }
+      final bytes = await f.readAsBytes();
+      if (bytes.length > 10 * 1024 * 1024) {
+        _showError('File must be under 10MB');
+        continue;
+      }
+      await _sendPickedBytes(bytes, name);
+    }
+  }
+
+  Widget _wrapChatFileDropTarget(Widget child) {
+    if (!PlatformCapabilities.fileDragDrop) return child;
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _chatDragOver = true),
+      onDragExited: (_) => setState(() => _chatDragOver = false),
+      onDragDone: (details) async {
+        setState(() => _chatDragOver = false);
+        await _handleDroppedFiles(details.files);
+      },
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          child,
+          if (_chatDragOver)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withValues(alpha: 0.14),
+                    border: Border.all(color: AppTheme.primaryBright.withValues(alpha: 0.55), width: 2),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      'Drop file to send',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Map<String, dynamic> _quoteFromParent(Map<String, dynamic> parent) {
     return {
       'id': parent['id'],
@@ -932,7 +1020,7 @@ class _ChatPageState extends State<ChatPage> {
       }
       setState(() => _messages = [..._messages, local]);
       _scrollToBottom();
-      _msgFocus.requestFocus();
+      _refocusComposer();
     } else {
       _msgController.text = text;
       _msgController.selection = TextSelection.collapsed(offset: text.length);
@@ -1421,37 +1509,42 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     }
   }
 
-  Future<void> _pickFile() async {
+  Future<void> _sendPickedFilePath(String path, String name) async {
     if (_selectedUser == null && _selectedGroup == null) return;
-    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
-    if (result == null || result.files.isEmpty) return;
-    final pf = result.files.first;
-    if (pf.path == null) return;
-    if (pf.size > 10 * 1024 * 1024) {
+    final file = File(path);
+    if (!await file.exists()) {
+      _showError('Could not read file');
+      return;
+    }
+    final bytes = await file.readAsBytes();
+    if (bytes.length > 10 * 1024 * 1024) {
       _showError('File must be under 10MB');
       return;
     }
-    final file = File(pf.path!);
+    await _sendPickedBytes(bytes, name);
+  }
+
+  Future<void> _sendPickedBytes(List<int> bytes, String name) async {
+    if (_selectedUser == null && _selectedGroup == null) return;
     final replySnapshot = _replyTo == null ? null : Map<String, dynamic>.from(_replyTo!);
     final replyId = _replyToId;
     setState(() {
       _isSending = true;
       _replyTo = null;
     });
-    final bytes = await file.readAsBytes();
     Map<String, dynamic> r;
     if (_selectedUser != null) {
       r = await widget.apiService.sendFileMessage(
         _selectedUser['id'],
         bytes,
-        pf.name,
+        name,
         replyToId: replyId,
       );
     } else {
       r = await widget.apiService.sendGroupFileMessage(
         _selectedGroup['id'],
         bytes,
-        pf.name,
+        name,
         replyToId: replyId,
         recipientIds: _personalRecipientIds(replySnapshot),
       );
@@ -1473,6 +1566,19 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       if (replySnapshot != null) setState(() => _replyTo = replySnapshot);
       _showError(r['error']?.toString() ?? 'Failed to send file');
     }
+  }
+
+  Future<void> _pickFile() async {
+    if (_selectedUser == null && _selectedGroup == null) return;
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false);
+    if (result == null || result.files.isEmpty) return;
+    final pf = result.files.first;
+    if (pf.path == null) return;
+    if (pf.size > 10 * 1024 * 1024) {
+      _showError('File must be under 10MB');
+      return;
+    }
+    await _sendPickedFilePath(pf.path!, pf.name);
   }
 
   // â”€â”€â”€ Play Voice â”€â”€â”€
@@ -2303,7 +2409,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         ? (_selectedUser['id'] is int ? _selectedUser['id'] as int : int.tryParse('${_selectedUser['id']}') ?? 0)
         : 0;
 
-    return Column(
+    return _wrapChatFileDropTarget(Column(
       children: [
         LayoutBuilder(
           builder: (context, headerConstraints) {
@@ -2577,7 +2683,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         else
           _buildMessageComposer(),
       ],
-    );
+    ));
   }
 
   static const _emojiList = [
@@ -2677,7 +2783,6 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                                       child: TextField(
                                         controller: _msgController,
                                         focusNode: _msgFocus,
-                                        enabled: !_isSending,
                                         minLines: 1,
                                         maxLines: 6,
                                         keyboardType: TextInputType.multiline,
