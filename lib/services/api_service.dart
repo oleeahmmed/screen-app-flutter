@@ -1558,18 +1558,68 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> updateGroup(int groupId, String name, String description) async {
+  Future<Map<String, dynamic>> updateGroup(
+    int groupId, {
+    String? name,
+    String? description,
+  }) async {
     try {
       await ensureAuth();
+      final body = <String, dynamic>{};
+      if (name != null) body['name'] = name;
+      if (description != null) body['description'] = description;
       final response = await _authorizedPatch(
         Uri.parse('${AppConfig.chatGroupsUrl}$groupId/'),
-        body: jsonEncode({'name': name, 'description': description}),
+        body: jsonEncode(body),
       );
       if (response.statusCode == 200) {
         final raw = response.body.isNotEmpty ? jsonDecode(response.body) : null;
         return {'success': true, 'data': raw is Map ? Map<String, dynamic>.from(raw) : raw};
       }
       return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> getGroupDetail(int groupId) async {
+    try {
+      await ensureAuth();
+      final response = await _authorizedGet(
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/'),
+      );
+      if (response.statusCode == 200) {
+        final raw = jsonDecode(response.body);
+        return {'success': true, 'data': raw is Map ? Map<String, dynamic>.from(raw) : raw};
+      }
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode)};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadGroupAvatar(
+    int groupId,
+    List<int> imageBytes,
+    String filename,
+  ) async {
+    try {
+      await ensureAuth();
+      var request = http.MultipartRequest(
+        'PATCH',
+        Uri.parse('${AppConfig.chatGroupsUrl}$groupId/'),
+      );
+      request.headers.addAll(_authHeaderOnly());
+      request.files.add(
+        http.MultipartFile.fromBytes('avatar', imageBytes, filename: filename),
+      );
+      final response = await request.send().timeout(const Duration(seconds: 30));
+      final body = await response.stream.bytesToString();
+      if (response.statusCode == 200) {
+        final raw = body.isNotEmpty ? jsonDecode(body) : null;
+        return {'success': true, 'data': raw is Map ? Map<String, dynamic>.from(raw) : raw};
+      }
+      return {'success': false, 'error': _parseApiErrorBody(body, response.statusCode)};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
