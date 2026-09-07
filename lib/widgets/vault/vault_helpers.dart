@@ -100,17 +100,23 @@ String vaultCategoryPermissionLabel(Map<String, dynamic> cat) {
   if (vaultApiFlag(cat['can_admin'])) return 'Admin';
   final p = (cat['my_permission'] ?? '').toString().toLowerCase();
   if (p == 'edit' || vaultApiFlag(cat['can_manage_entries'])) return 'Can edit';
-  if (p == 'view' || p.isNotEmpty) return 'View only';
+  if (p == 'view' || p == 'admin' || p.isNotEmpty) return 'View only';
   return '';
 }
 
 bool vaultCategoryPermissionIsEdit(Map<String, dynamic> cat) {
   if (vaultApiFlag(cat['can_admin'])) return true;
   final p = (cat['my_permission'] ?? '').toString().toLowerCase();
-  return p == 'edit' || vaultApiFlag(cat['can_manage_entries']);
+  return p == 'edit' || p == 'admin' || vaultApiFlag(cat['can_manage_entries']);
 }
 
-/// Add / edit entries in a category — vault admin or category edit grant.
+bool vaultCategoryCanAdmin(Map<String, dynamic>? cat, {bool projectVaultAdmin = false}) {
+  if (cat == null) return false;
+  if (projectVaultAdmin || vaultApiFlag(cat['can_admin'])) return true;
+  return false;
+}
+
+/// Add / edit entries in a category — vault admin, category admin, or edit grant.
 bool vaultCanEditCategory(Map<String, dynamic>? cat, {required bool isAdmin}) {
   if (cat == null) return false;
   if (isAdmin || vaultApiFlag(cat['can_admin'])) return true;

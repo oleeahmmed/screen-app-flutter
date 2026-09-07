@@ -781,6 +781,7 @@ class _VaultCategoryPageState extends State<VaultCategoryPage> {
 
   bool get _isVaultAdmin => widget.vault['is_admin'] == true;
   bool get _canAddEntries => vaultCanEditCategory(widget.category, isAdmin: _isVaultAdmin);
+  bool get _catAdmin => vaultCategoryCanAdmin(widget.category, projectVaultAdmin: _isVaultAdmin);
 
   @override
   void initState() {
@@ -827,7 +828,7 @@ class _VaultCategoryPageState extends State<VaultCategoryPage> {
       apiService: widget.apiService,
       projectId: widget.projectId,
       entry: entry,
-      isAdmin: _isVaultAdmin,
+      isAdmin: _isVaultAdmin || _catAdmin,
       canEdit: vaultCanEditCategory(widget.category, isAdmin: _isVaultAdmin),
       currentUserId: _currentUserId,
       onChanged: _load,
