@@ -1,3 +1,5 @@
+import 'package:flutter/scheduler.dart';
+
 /// Global tab switching from pushed routes (task detail, project detail, etc.).
 class AppNavigation {
   AppNavigation._();
@@ -56,7 +58,9 @@ class AppNavigation {
     pendingChatUserId = userId;
     pendingChatGroupId = groupId;
     goChat();
-    onPendingChatOpen?.call();
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      onPendingChatOpen?.call();
+    });
   }
   void goVault() => navigateToTab(tabVault);
   void goProject() => navigateToTab(tabProject);

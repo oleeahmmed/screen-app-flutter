@@ -1,6 +1,7 @@
 ﻿import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -168,6 +169,9 @@ class _ChatPageState extends State<ChatPage> {
     _reactionSub = widget.notificationService?.reactionStream.listen(_onRealtimeReaction);
     AppNavigation.instance.onPendingChatOpen = _consumePendingChatOpen;
     ChatNotificationRouter.chatTabActive = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _consumePendingChatOpen();
+    });
     _callPhaseSub = CallService.instance.phaseStream.listen((phase) {
       if (phase == CallPhase.incoming && mounted) {
         CallNavigation.openCallPageIfNeeded();
@@ -249,18 +253,26 @@ class _ChatPageState extends State<ChatPage> {
     final userId = AppNavigation.instance.pendingChatUserId;
     final groupId = AppNavigation.instance.pendingChatGroupId;
     if (userId == null && groupId == null) return;
+
     if (userId != null) {
-      AppNavigation.instance.pendingChatUserId = null;
       for (final u in _users) {
         if (u is Map && _asInt(u['id']) == userId) {
+          AppNavigation.instance.pendingChatUserId = null;
           unawaited(_selectUser(u));
           return;
         }
       }
+      if (_isLoadingUsers) return;
+      AppNavigation.instance.pendingChatUserId = null;
+      unawaited(_selectUser(<String, dynamic>{
+        'id': userId,
+        'username': 'user_$userId',
+        'full_name': 'Chat',
+      }));
       return;
     }
+
     if (groupId != null) {
-      if (_groups.isEmpty && !_isLoadingGroups) unawaited(_loadGroups());
       for (final g in _groups) {
         if (g is Map && _asInt(g['id']) == groupId) {
           AppNavigation.instance.pendingChatGroupId = null;
@@ -269,6 +281,16 @@ class _ChatPageState extends State<ChatPage> {
           return;
         }
       }
+      if (_isLoadingGroups) {
+        if (_groups.isEmpty) unawaited(_loadGroups(silent: true));
+        return;
+      }
+      AppNavigation.instance.pendingChatGroupId = null;
+      setState(() => _currentTab = 'group');
+      unawaited(_selectGroup(<String, dynamic>{
+        'id': groupId,
+        'name': 'Group',
+      }));
     }
   }
 

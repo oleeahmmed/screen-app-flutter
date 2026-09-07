@@ -26,6 +26,7 @@ import 'pages/projects_page.dart';
 import 'pages/task_detail_page.dart';
 import 'services/local_notification_service.dart';
 import 'services/push_keepalive_service.dart';
+import 'services/notification_launch_router.dart';
 import 'pages/login_page.dart';
 import 'pages/dashboard_page.dart';
 import 'pages/tasks_page.dart';
@@ -194,7 +195,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       unawaited(_onNotificationAction(actionId, payload, input: input));
     };
     LocalNotificationService.onTap = (payload) {
-      unawaited(_openNotificationLink(payload));
+      unawaited(_dispatchNotificationNavigation(payload: payload));
     };
     AppNavigation.instance.onSelectTab = _onNavSelected;
     AppNavigation.instance.onNavigateToTab = _navigateToTab;
@@ -220,6 +221,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       unawaited(CallService.instance.handleRemoteSignal(data));
       _openCallPage();
     };
+    PushService.onOpenFromNotification = _openFromNotificationData;
     _notificationService.onUnreadCountChanged = _onUnreadCountChanged;
     _initializeApp();
     if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
@@ -479,6 +481,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     unawaited(_ensureNotificationPermission());
     unawaited(PushKeepAlive.start());
     unawaited(PushService.instance.bindApi(_apiService));
+    _flushNotificationLaunch();
   }
 
   Future<void> _bindCallService() async {
@@ -511,6 +514,63 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (pending != null) {
       unawaited(_onNotificationAction(pending.actionId, pending.payload, input: pending.input));
     }
+    _flushNotificationLaunch();
+  }
+
+  void _openFromNotificationData(Map<String, dynamic> data) {
+    if (!_isLoggedIn || !mounted) {
+      NotificationLaunchRouter.queueData(data);
+      return;
+    }
+    _dispatchNotificationNavigation(data: data);
+  }
+
+  void _flushNotificationLaunch() {
+    if (!_isLoggedIn || !mounted) return;
+    final queued = NotificationLaunchRouter.take();
+    if (queued != null) {
+      _dispatchNotificationNavigation(payload: queued.payload, data: queued.data);
+    }
+  }
+
+  Future<void> _dispatchNotificationNavigation({String? payload, Map<String, dynamic>? data}) async {
+    if (!_isLoggedIn || !mounted) {
+      if (payload != null) NotificationLaunchRouter.queuePayload(payload);
+      if (data != null) NotificationLaunchRouter.queueData(data);
+      return;
+    }
+
+    final call = CallNotification.parse(payload);
+    if (call != null) {
+      unawaited(CallService.instance.applyNotificationAction(null, call));
+      _openCallPage();
+      return;
+    }
+
+    if (data != null) {
+      final type = data['type']?.toString() ?? '';
+      final notifType = data['notification_type']?.toString() ?? '';
+      if (type == 'call_invite' || notifType == 'call_invite') {
+        unawaited(CallService.instance.handleRemoteSignal(data));
+        _openCallPage();
+        return;
+      }
+      if (notifType == 'new_message' || notifType == 'new_group_message') {
+        final chat = ChatNotification.fromData(data);
+        AppNavigation.instance.goChatWithPeer(userId: chat.peerId, groupId: chat.groupId);
+        return;
+      }
+    }
+
+    if (ChatNotification.isChatPayload(payload) || payload == 'chat') {
+      _openChatFromPayload(payload);
+      return;
+    }
+
+    final map = data ?? NotificationLaunchRouter.tryDecodeMap(payload);
+    final resolvedPayload = payload ??
+        (map != null ? NotificationLaunchRouter.encodePayloadFromData(map) : null);
+    await _openNotificationLink(resolvedPayload, data: map ?? data);
   }
 
   Future<void> _onNotificationAction(String? actionId, String? payload, {String? input}) async {
@@ -545,7 +605,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       _openChatFromPayload(payload);
       return;
     }
-    unawaited(_openNotificationLink(payload));
+    _dispatchNotificationNavigation(payload: payload);
   }
 
   void _openChatFromPayload(String? payload) {
@@ -702,8 +762,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         message: chatMeta?.body.isNotEmpty == true ? chatMeta!.body : message,
         notificationType: notifType,
         onTap: () {
-          unawaited(_openNotificationLink(
-            NotificationDeepLink.encodeFromData(data),
+          unawaited(_dispatchNotificationNavigation(
+            payload: NotificationDeepLink.encodeFromData(data),
             data: data,
           ));
         },

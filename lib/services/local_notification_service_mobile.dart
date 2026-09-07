@@ -454,5 +454,9 @@ void localNotificationBackground(NotificationResponse response) {
     ChatNotification.replyViaHttp(response.payload, response.input);
   } else if (response.actionId == ChatNotification.markReadAction) {
     ChatNotification.markReadViaHttp(response.payload);
+  } else if ((response.actionId == null || response.actionId!.isEmpty) &&
+      response.payload != null &&
+      response.payload!.isNotEmpty) {
+    LocalNotificationService.pendingPayload = response.payload;
   }
 }

@@ -129,8 +129,12 @@ class NotificationDeepLink {
   static NotificationDeepLink fromData(Map<String, dynamic> data) {
     final type = data['type']?.toString() ?? '';
     var notifType = data['notification_type']?.toString() ?? '';
+    final link = data['link']?.toString() ?? '';
     if (type == 'task_notification' && notifType.isEmpty) {
       notifType = 'task_assigned';
+    }
+    if (!_isChatType(notifType) && link.contains('/monitor/chat/')) {
+      notifType = link.contains('group=') ? 'new_group_message' : 'new_message';
     }
     if (type == 'call_invite' || notifType == 'call_invite') {
       return NotificationDeepLink(
@@ -153,7 +157,6 @@ class NotificationDeepLink {
 
     final objectType = data['object_type']?.toString().toLowerCase() ?? '';
     final objectId = asInt(data['object_id']);
-    final link = data['link']?.toString() ?? '';
     var taskId = asInt(data['task_id'] ?? data['task']);
     var projectId = asInt(data['project_id'] ?? data['project']);
 
