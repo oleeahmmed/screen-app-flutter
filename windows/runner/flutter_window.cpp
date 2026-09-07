@@ -13,6 +13,18 @@ constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMenuOpen = 1001;
 constexpr UINT kTrayMenuExit = 1002;
 
+bool IsTrayActivateEvent(LPARAM lparam) {
+  switch (lparam) {
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case NIN_SELECT:
+    case NIN_KEYSELECT:
+      return true;
+    default:
+      return false;
+  }
+}
+
 }  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -69,6 +81,8 @@ void FlutterWindow::EnsureTrayIcon() {
   wcscpy_s(nid.szTip, L"Aims");
   if (Shell_NotifyIconW(NIM_ADD, &nid)) {
     tray_added_ = true;
+    nid.uVersion = NOTIFYICON_VERSION_4;
+    Shell_NotifyIconW(NIM_SETVERSION, &nid);
   }
 }
 
@@ -89,9 +103,33 @@ void FlutterWindow::RestoreFromTray() {
   if (!hwnd) {
     return;
   }
-  ShowWindow(hwnd, SW_SHOW);
-  ShowWindow(hwnd, SW_RESTORE);
+
+  if (IsIconic(hwnd)) {
+    ShowWindow(hwnd, SW_RESTORE);
+  } else {
+    ShowWindow(hwnd, SW_SHOW);
+  }
+
+  SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+
+  HWND foreground = GetForegroundWindow();
+  DWORD foreground_thread =
+      foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
+  DWORD current_thread = GetCurrentThreadId();
+  if (foreground_thread != 0 && foreground_thread != current_thread) {
+    AttachThreadInput(current_thread, foreground_thread, TRUE);
+  }
+
+  BringWindowToTop(hwnd);
   SetForegroundWindow(hwnd);
+  SetFocus(hwnd);
+
+  if (foreground_thread != 0 && foreground_thread != current_thread) {
+    AttachThreadInput(current_thread, foreground_thread, FALSE);
+  }
 }
 
 void FlutterWindow::ShowTrayMenu() {
@@ -126,6 +164,27 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  switch (message) {
+    case WM_CLOSE:
+      ShowWindow(hwnd, SW_HIDE);
+      return 0;
+    case kTrayCallbackMessage:
+      if (IsTrayActivateEvent(lparam)) {
+        RestoreFromTray();
+        return 0;
+      }
+      if (lparam == WM_RBUTTONUP || lparam == WM_CONTEXTMENU) {
+        ShowTrayMenu();
+        return 0;
+      }
+      return 0;
+    case WM_FONTCHANGE:
+      if (flutter_controller_) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
+      break;
+  }
+
   if (flutter_controller_) {
     std::optional<LRESULT> result =
         flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,
@@ -133,25 +192,6 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (result) {
       return *result;
     }
-  }
-
-  switch (message) {
-    case WM_CLOSE:
-      ShowWindow(hwnd, SW_HIDE);
-      return 0;
-    case kTrayCallbackMessage:
-      if (lparam == WM_LBUTTONDBLCLK || lparam == WM_LBUTTONUP) {
-        RestoreFromTray();
-        return 0;
-      }
-      if (lparam == WM_RBUTTONUP) {
-        ShowTrayMenu();
-        return 0;
-      }
-      return 0;
-    case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
-      break;
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
