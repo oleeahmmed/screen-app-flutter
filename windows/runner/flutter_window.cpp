@@ -13,12 +13,28 @@ constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayMenuOpen = 1001;
 constexpr UINT kTrayMenuExit = 1002;
 
+UINT TrayEvent(LPARAM lparam) {
+  // NOTIFYICON_VERSION_4 packs the mouse message in the low word on 64-bit Windows.
+  return LOWORD(lparam);
+}
+
 bool IsTrayActivateEvent(LPARAM lparam) {
-  switch (lparam) {
+  switch (TrayEvent(lparam)) {
     case WM_LBUTTONUP:
     case WM_LBUTTONDBLCLK:
     case NIN_SELECT:
     case NIN_KEYSELECT:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool IsTrayContextEvent(LPARAM lparam) {
+  switch (TrayEvent(lparam)) {
+    case WM_RBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_CONTEXTMENU:
       return true;
     default:
       return false;
@@ -139,7 +155,13 @@ void FlutterWindow::ShowTrayMenu() {
   }
 
   HMENU menu = CreatePopupMenu();
-  AppendMenuW(menu, MF_STRING, kTrayMenuOpen, L"Open Aims");
+  MENUITEMINFOW open_item = {};
+  open_item.cbSize = sizeof(open_item);
+  open_item.fMask = MIIM_STRING | MIIM_ID | MIIM_STATE;
+  open_item.fState = MFS_DEFAULT;
+  open_item.wID = kTrayMenuOpen;
+  open_item.dwTypeData = const_cast<LPWSTR>(L"Open Aims");
+  InsertMenuItemW(menu, 0, TRUE, &open_item);
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kTrayMenuExit, L"Exit");
 
@@ -147,8 +169,11 @@ void FlutterWindow::ShowTrayMenu() {
   GetCursorPos(&cursor);
   SetForegroundWindow(hwnd);
   const UINT selected = TrackPopupMenu(
-      menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, cursor.x, cursor.y, 0, hwnd, nullptr);
+      menu,
+      TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY | TPM_VERTICAL,
+      cursor.x, cursor.y, 0, hwnd, nullptr);
   DestroyMenu(menu);
+  PostMessage(hwnd, WM_NULL, 0, 0);
 
   if (selected == kTrayMenuOpen) {
     RestoreFromTray();
@@ -166,14 +191,23 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               LPARAM const lparam) noexcept {
   switch (message) {
     case WM_CLOSE:
+      if (exiting_) {
+        break;
+      }
       ShowWindow(hwnd, SW_HIDE);
       return 0;
+    case WM_CONTEXTMENU:
+      if (tray_added_) {
+        ShowTrayMenu();
+        return 0;
+      }
+      break;
     case kTrayCallbackMessage:
       if (IsTrayActivateEvent(lparam)) {
         RestoreFromTray();
         return 0;
       }
-      if (lparam == WM_RBUTTONUP || lparam == WM_CONTEXTMENU) {
+      if (IsTrayContextEvent(lparam)) {
         ShowTrayMenu();
         return 0;
       }
