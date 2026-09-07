@@ -32,7 +32,8 @@ class ProjectVaultTab extends StatefulWidget {
 class _ProjectVaultTabState extends State<ProjectVaultTab> {
   bool _loading = true;
   String? _error;
-  bool _isAdmin = false;
+  bool _vaultPrivileged = false;
+  bool _canCreateCategory = false;
   int? _currentUserId;
   List<Map<String, dynamic>> _categories = [];
   List<Map<String, dynamic>> _entries = [];
@@ -47,7 +48,10 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   }
 
   bool _canEditCat(Map<String, dynamic>? c) =>
-      vaultCanEditCategory(c, isAdmin: _isAdmin);
+      vaultCanEditCategory(c, isAdmin: _vaultPrivileged);
+
+  bool _catCanAdmin(Map<String, dynamic>? c) =>
+      vaultCategoryCanAdmin(c, projectVaultAdmin: _vaultPrivileged);
 
   @override
   void initState() {
@@ -86,9 +90,15 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
     final project = projR['success'] == true && projR['data'] is Map
         ? Map<String, dynamic>.from(projR['data'] as Map)
         : <String, dynamic>{};
-    final admin = companyPrivileged ||
-        cats.any((c) => c['can_admin'] == true) ||
-        project['is_manager'] == true;
+    final vaultPrivileged = companyPrivileged || project['is_manager'] == true;
+    final members = (project['project_members'] as List?) ?? [];
+    final uid = _currentUserId;
+    final isMember = uid != null && members.any((m) {
+      if (m is! Map) return false;
+      final u = m['user'];
+      final id = m['user_id'] ?? (u is Map ? u['id'] : null);
+      return id == uid;
+    });
 
     int? selected = widget.initialCategoryId ?? _categoryId;
     if (selected != null && !cats.any((c) => c['id'] == selected)) {
@@ -116,7 +126,8 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
 
     setState(() {
       _categories = cats;
-      _isAdmin = admin;
+      _vaultPrivileged = vaultPrivileged;
+      _canCreateCategory = vaultPrivileged || isMember;
       _categoryId = selected;
       _entries = entries;
       _loading = false;
@@ -168,7 +179,8 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   }
 
   Future<void> _editCategory({Map<String, dynamic>? existing}) async {
-    if (!_isAdmin) return;
+    if (existing != null && !_catCanAdmin(existing)) return;
+    if (existing == null && !_canCreateCategory) return;
     final nameCtrl = TextEditingController(text: existing?['name']?.toString() ?? '');
     final ok = await showDialog<bool>(
       context: context,
@@ -215,7 +227,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   }
 
   Future<void> _deleteCategory(Map<String, dynamic> cat) async {
-    if (!_isAdmin) return;
+    if (!_catCanAdmin(cat)) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -247,7 +259,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   }
 
   void _openPeople(Map<String, dynamic> cat) {
-    if (!_isAdmin) return;
+    if (!_catCanAdmin(cat)) return;
     showVaultCategoryAccessSheet(
       context: context,
       apiService: widget.apiService,
@@ -261,15 +273,14 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   Future<void> _editEntry({Map<String, dynamic>? existing}) async {
     final cat = _selectedCat;
     if (!_canEditCat(cat)) {
-      _toast(
-        _categories.isEmpty
-            ? (_isAdmin ? 'Create a category first' : 'No access yet — ask admin')
-            : 'No edit permission on this category',
-        error: true,
-      );
+      _toast('You do not have permission to add or edit entries', error: true);
       return;
     }
-    final catId = cat!['id'] as int;
+    if (cat == null) {
+      _toast('Create a category first', error: true);
+      return;
+    }
+    final catId = cat['id'] as int;
     final nameCtrl = TextEditingController(text: existing?['name']?.toString() ?? '');
     final urlCtrl = TextEditingController(text: existing?['url']?.toString() ?? '');
     final userCtrl = TextEditingController(text: existing?['username']?.toString() ?? '');
@@ -388,8 +399,8 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
       apiService: widget.apiService,
       projectId: widget.projectId,
       entry: entry,
-      isAdmin: _isAdmin,
-      canEdit: _isAdmin,
+      isAdmin: _vaultPrivileged || _catCanAdmin(_selectedCat),
+      canEdit: _canEditCat(_selectedCat),
       currentUserId: _currentUserId,
       onChanged: () {
         if (_categoryId != null) _selectCategory(_categoryId!);
@@ -445,8 +456,8 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
   Widget _categoryChip(Map<String, dynamic> c) {
     final id = c['id'] as int;
     final selected = id == _categoryId;
-    final permLabel = _isAdmin ? '' : vaultCategoryPermissionLabel(c);
-    final isEdit = permLabel == 'Admin';
+    final permLabel = _catCanAdmin(c) ? '' : vaultCategoryPermissionLabel(c);
+    final isEdit = !_catCanAdmin(c) && vaultCategoryPermissionIsEdit(c);
 
     return Material(
       color: selected
@@ -455,10 +466,10 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         onTap: () => _selectCategory(id),
-        onLongPress: _isAdmin ? () => _categoryMenu(c) : null,
+        onLongPress: _catCanAdmin(c) ? () => _categoryMenu(c) : null,
         borderRadius: BorderRadius.circular(20),
         child: Container(
-          padding: EdgeInsets.fromLTRB(14, 10, _isAdmin ? 6 : 14, 10),
+          padding: EdgeInsets.fromLTRB(14, 10, _catCanAdmin(c) ? 6 : 14, 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
@@ -479,7 +490,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
                 ),
               ),
               if (permLabel.isNotEmpty) vaultPermissionChip(permLabel, edit: isEdit),
-              if (_isAdmin)
+              if (_catCanAdmin(c))
                 InkWell(
                   onTap: () => _categoryMenu(c),
                   borderRadius: BorderRadius.circular(12),
@@ -566,8 +577,8 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
       return const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright));
     }
 
-    final canEdit = _canEditCat(_selectedCat);
     final cat = _selectedCat;
+    final canEdit = _canEditCat(cat);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -576,13 +587,13 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           child: Row(
             children: [
-              vaultRoleBadge(isAdmin: _isAdmin),
+              vaultRoleBadge(isAdmin: _vaultPrivileged),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  _isAdmin
+                  _vaultPrivileged
                       ? 'Manage categories, access & credentials'
-                      : 'Only categories shared with you',
+                      : 'Categories shared with you or created by you',
                   style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12),
                 ),
               ),
@@ -599,7 +610,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Row(
               children: [
-                if (_isAdmin)
+                if (_canCreateCategory)
                   OutlinedButton.icon(
                     onPressed: () => _editCategory(),
                     icon: const Icon(Icons.create_new_folder_outlined, size: 16),
@@ -609,10 +620,10 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
                       side: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
                     ),
                   ),
-                if (_isAdmin && cat != null) ...[
+                if (cat != null && _catCanAdmin(cat)) ...[
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
-                    onPressed: () => _openPeople(cat),
+                    onPressed: () => _openPeople(cat!),
                     icon: const Icon(Icons.people_outline, size: 16),
                     label: const Text('People'),
                     style: OutlinedButton.styleFrom(
@@ -637,9 +648,9 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Row(
               children: [
-                if (_isAdmin && cat != null)
+                if (cat != null && _catCanAdmin(cat))
                   OutlinedButton.icon(
-                    onPressed: () => _openPeople(cat),
+                    onPressed: () => _openPeople(cat!),
                     icon: const Icon(Icons.people_outline, size: 16),
                     label: const Text('People'),
                     style: OutlinedButton.styleFrom(
@@ -672,9 +683,9 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        _isAdmin
+                        _canCreateCategory
                             ? 'No categories yet — tap Category to create one'
-                            : 'No category access yet — ask your admin',
+                            : 'No category access yet — ask a project member',
                         style: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
                       ),
                     ),
@@ -700,11 +711,11 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
                     fontSize: 15,
                   ),
                 ),
-                if (!_isAdmin) ...[
+                if (!_catCanAdmin(cat)) ...[
                   const SizedBox(width: 8),
                   vaultPermissionChip(
                     vaultCategoryPermissionLabel(cat),
-                    edit: vaultCategoryPermissionLabel(cat) == 'Can edit',
+                    edit: vaultCategoryPermissionIsEdit(cat),
                   ),
                 ],
               ],
@@ -715,7 +726,7 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
         Expanded(
           child: _categoryId == null
               ? Center(
-                  child: _isAdmin
+                  child: _canCreateCategory
                       ? FilledButton(
                           onPressed: () => _editCategory(),
                           style: FilledButton.styleFrom(backgroundColor: AppTheme.featureVault),

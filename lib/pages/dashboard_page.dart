@@ -12,12 +12,15 @@ import '../services/api_service.dart';
 import '../services/attendance_service.dart';
 import '../services/attendance_work_time.dart';
 import '../services/screenshot_service.dart';
+import '../services/app_filter_prefs.dart';
+import '../services/windows_app_capture.dart';
 import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
 import '../utils/responsive.dart';
 import '../services/user_data_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_dialog.dart';
+import '../widgets/app_filter_picker_sheet.dart';
 import '../widgets/break_panel.dart';
 import '../widgets/animated_glow_border.dart';
 
@@ -50,6 +53,8 @@ class _DashboardPageState extends State<DashboardPage> {
   String _department = '';
   bool _isProcessing = false;
   bool _isBreakBusy = false;
+  bool _appFilterBusy = false;
+  List<WindowsAppInfo> _allowedApps = const [];
   List<Map<String, dynamic>> _todayBreaks = [];
   Timer? _uiTickTimer;
 
@@ -67,8 +72,51 @@ class _DashboardPageState extends State<DashboardPage> {
     super.initState();
     _now = DateTime.now();
     _loadUserData();
+    _loadAppFilterPrefs();
     _loadInitialStatus();
     _startUiTick();
+    AppSession.setOpenSelectApps(_openAppPicker);
+  }
+
+  @override
+  void dispose() {
+    if (AppSession.openSelectApps == _openAppPicker) {
+      AppSession.setOpenSelectApps(null);
+    }
+    _uiTickTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadAppFilterPrefs() async {
+    final apps = await AppFilterPrefs.loadAllowedApps();
+    final mode = await AppFilterPrefs.loadCaptureMode();
+    if (!mounted) return;
+    AppSession.setCaptureMode(mode);
+    AppSession.setSelectedAppsCount(apps.length);
+    setState(() => _allowedApps = apps);
+  }
+
+  /// Start the correct capture path from employee.screenshot_capture_mode.
+  Future<void> _resumeCaptureIfNeeded({bool promptForApps = false}) async {
+    if (!AppSession.mayCaptureScreenshots) return;
+    if (AppSession.usesAppWindowCapture) {
+      if (_allowedApps.isEmpty) {
+        widget.screenshotService?.stopCapture();
+        if (promptForApps) {
+          _showAttendanceToast(
+            title: 'Select apps',
+            message: 'Pick apps from the top bar, then capture starts automatically',
+            type: AppToastType.warning,
+            icon: Icons.apps_rounded,
+          );
+          unawaited(_openAppPicker());
+        }
+        return;
+      }
+      await widget.screenshotService?.startAppFilterCapture(_allowedApps);
+      return;
+    }
+    await widget.screenshotService?.startCapture();
   }
 
   Future<void> _loadInitialStatus() async {
@@ -79,17 +127,11 @@ class _DashboardPageState extends State<DashboardPage> {
       if (_isClockedIn) {
         if (_onBreak) {
           widget.screenshotService?.stopCapture();
-        } else if (AppSession.mayCaptureScreenshots) {
-          widget.screenshotService?.startCapture();
+        } else {
+          await _resumeCaptureIfNeeded();
         }
       }
     }
-  }
-
-  @override
-  void dispose() {
-    _uiTickTimer?.cancel();
-    super.dispose();
   }
 
   Future<void> _loadBreakInfo() async {
@@ -132,6 +174,7 @@ class _DashboardPageState extends State<DashboardPage> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.refreshToken != widget.refreshToken) {
       _syncConsentFromPrefs();
+      _loadAppFilterPrefs();
       _loadInitialStatus().then((_) {
         if (mounted) setState(() {});
       });
@@ -196,22 +239,19 @@ class _DashboardPageState extends State<DashboardPage> {
           setState(() {});
           await _loadBreakInfo();
           if (AppSession.mayCaptureScreenshots) {
-            unawaited(widget.screenshotService?.startCapture());
-            if (Platform.isLinux || Platform.isMacOS) {
-              _showAttendanceToast(
-                title: 'Clocked In',
-                message: 'Screen capture runs in the background',
-                type: AppToastType.success,
-                icon: Icons.how_to_reg_rounded,
-              );
-            } else {
-              _showAttendanceToast(
-                title: 'Clocked In',
-                message: 'Work timer started · monitoring active',
-                type: AppToastType.success,
-                icon: Icons.how_to_reg_rounded,
-              );
-            }
+            // Start screen capture immediately so live monitor shows online.
+            unawaited(_resumeCaptureIfNeeded(promptForApps: true));
+            final usingAppFilter = AppSession.usesAppWindowCapture;
+            _showAttendanceToast(
+              title: 'Clocked In',
+              message: usingAppFilter
+                  ? (_allowedApps.isEmpty
+                      ? 'Work timer started · select apps to begin capture'
+                      : 'Work timer started · app window monitoring')
+                  : 'Work timer started · screen monitoring active',
+              type: AppToastType.success,
+              icon: Icons.how_to_reg_rounded,
+            );
           } else if (PlatformCapabilities.screenshotMonitoring) {
             _showAttendanceToast(
               title: 'Clocked In',
@@ -367,6 +407,12 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           const SizedBox(height: 18),
           _buildActionArea(),
+          if (Platform.isWindows &&
+              PlatformCapabilities.screenshotMonitoring &&
+              AppSession.usesAppWindowCapture) ...[
+            const SizedBox(height: 14),
+            _buildCaptureModeHint(),
+          ],
         ],
       ),
     );
@@ -455,11 +501,17 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _liveStatusPill() {
     Color color;
     String label;
+    final monitoring = !_onBreak &&
+        _isClockedIn &&
+        (widget.screenshotService?.isRunning == true);
     if (_onBreak) {
       color = AppTheme.warning;
       label = 'ON BREAK';
-    } else if (_isClockedIn) {
+    } else if (monitoring) {
       color = AppTheme.success;
+      label = 'MONITORING';
+    } else if (_isClockedIn) {
+      color = AppTheme.accent;
       label = 'CLOCKED IN';
     } else {
       color = AppTheme.danger;
@@ -534,6 +586,58 @@ class _DashboardPageState extends State<DashboardPage> {
       );
     }
     return _buildClockInButton();
+  }
+
+  Widget _buildCaptureModeHint() {
+    final n = _allowedApps.length;
+    final running = widget.screenshotService?.isAppFilterMode == true &&
+        widget.screenshotService?.isRunning == true;
+    final text = !AppSession.mayCaptureScreenshots
+        ? 'Enable screenshots under Me → Profile'
+        : n == 0
+            ? 'App window mode · use Select Apps in the top bar'
+            : running
+                ? 'Capturing $n selected app${n == 1 ? '' : 's'} when on top'
+                : '$n app${n == 1 ? '' : 's'} selected · Clock In to monitor';
+    return Row(
+      children: [
+        Icon(
+          Icons.filter_center_focus_rounded,
+          size: 16,
+          color: running ? AppTheme.success : AppTheme.textMuted,
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              color: AppTheme.textMuted.withValues(alpha: 0.95),
+              fontSize: 11.5,
+              height: 1.35,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openAppPicker() async {
+    if (_appFilterBusy) return;
+    setState(() => _appFilterBusy = true);
+    try {
+      final picked = await AppFilterPickerSheet.show(
+        context,
+        initialSelectedApps: _allowedApps,
+      );
+      if (!mounted || picked == null) return;
+      await AppFilterPrefs.saveAllowedApps(picked);
+      setState(() => _allowedApps = picked);
+      if (_isClockedIn && !_onBreak && AppSession.mayCaptureScreenshots) {
+        await _resumeCaptureIfNeeded();
+      }
+    } finally {
+      if (mounted) setState(() => _appFilterBusy = false);
+    }
   }
 
   Widget _buildClockInButton() {
@@ -852,7 +956,7 @@ class _DashboardPageState extends State<DashboardPage> {
         setState(() {});
         await _loadBreakInfo();
         if (AppSession.mayCaptureScreenshots) {
-          unawaited(widget.screenshotService?.startCapture());
+          unawaited(_resumeCaptureIfNeeded());
         }
         _showAttendanceToast(
           title: 'Back to Work',

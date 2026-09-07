@@ -191,8 +191,8 @@ class _VaultShareSheetState extends State<_VaultShareSheet> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Shared people can view credentials — they cannot edit or delete entries.',
-              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 11.5),
+              'Shared users can open credentials only — they cannot edit or delete.',
+              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12),
             ),
             const SizedBox(height: 8),
             ConstrainedBox(

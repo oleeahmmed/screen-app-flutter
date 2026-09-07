@@ -26,12 +26,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
-  // Keep compact default; task/chat layouts fit this via thinner panes.
-  Win32Window::Size size(620, 720);
+  // Wide enough for chat list + thread pane by default (chatSplitMinWidth = 640).
+  Win32Window::Size size(1000, 720);
   if (!window.Create(L"Aims", origin, size)) {
     return EXIT_FAILURE;
   }
-  window.SetQuitOnClose(true);
+  window.SetQuitOnClose(false);
 
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {

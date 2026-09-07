@@ -6,6 +6,7 @@ import '../generated/app_version.dart';
 import '../app_session.dart';
 import '../config.dart';
 import '../services/api_service.dart';
+import '../services/app_filter_prefs.dart';
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
@@ -121,6 +122,9 @@ class _ProfilePageState extends State<ProfilePage> {
       });
       AppSession.setConsent(_consent);
       await prefs.setBool('screenshot_monitoring_consent', _consent);
+      if (emp is Map) {
+        await AppFilterPrefs.applyServerCaptureMode(emp['screenshot_capture_mode']);
+      }
       if (_photoUrl != null && _photoUrl!.isNotEmpty) {
         await prefs.setString('profile_photo_url', _photoUrl!);
       }

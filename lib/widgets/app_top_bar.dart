@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../app_session.dart';
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import 'app_logo.dart';
 import 'app_quick_menu.dart';
 
-/// Persistent top bar: logo → home, report / P2P / alerts / profile / logout.
+/// Persistent top bar: logo → home, optional Select Apps, report / P2P / alerts / profile / logout.
 class AppTopBar extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onSelected;
@@ -49,6 +50,32 @@ class AppTopBar extends StatelessWidget {
                 const SizedBox(width: 2),
               ],
               _logoHomeButton(),
+              const SizedBox(width: 8),
+              ValueListenableBuilder<int>(
+                valueListenable: AppSession.captureUiRevision,
+                builder: (context, rev, child) {
+                  if (!AppSession.showSelectAppsInTopBar) {
+                    return const SizedBox.shrink();
+                  }
+                  final n = AppSession.selectedAppsCount;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: TextButton.icon(
+                      onPressed: AppSession.openSelectApps,
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppTheme.accent,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      icon: const Icon(Icons.apps_rounded, size: 18),
+                      label: Text(
+                        n > 0 ? 'Apps ($n)' : 'Select Apps',
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5),
+                      ),
+                    ),
+                  );
+                },
+              ),
               const Spacer(),
               AppHeaderMenuActions(
                 onLogout: onLogout,

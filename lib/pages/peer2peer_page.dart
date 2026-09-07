@@ -331,7 +331,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
       _mode = 'receiving';
       _statusText = 'Joining...';
       _sessionId = normalized;
-      _joinedSession = true;
+    _joinedSession = true;
       _transferSucceeded = false;
       _saveInProgress = false;
     });
@@ -643,7 +643,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
       final cand = c.candidate;
       if (cand == null || cand.isEmpty) return;
       _wsSend({
-        'type': 'ice_candidate',
+      'type': 'ice_candidate',
         'candidate': {
           'candidate': cand,
           'sdpMid': c.sdpMid,
@@ -694,7 +694,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     _pc!.onConnectionState = (s) {
       if (s != RTCPeerConnectionState.RTCPeerConnectionStateFailed || !mounted) return;
       if (_transferSucceeded || _mode == 'complete' || _saveInProgress) return;
-      _showError('Peer connection failed — check network or TURN server');
+        _showError('Peer connection failed — check network or TURN server');
     };
   }
 
@@ -714,15 +714,15 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
           await raf.writeFrom(chunk);
           _rxWritten += chunk.length;
           _rxSize = _rxWritten;
-          if (_expectedSize > 0 && mounted) {
-            setState(() {
-              _mode = 'transferring';
-              _bytesTransferred = _rxSize;
-              _progress = _rxSize / _expectedSize;
+        if (_expectedSize > 0 && mounted) {
+          setState(() {
+            _mode = 'transferring';
+            _bytesTransferred = _rxSize;
+            _progress = _rxSize / _expectedSize;
               _statusText =
                   'Receiving: ${(_progress * 100).toStringAsFixed(1)}% · ${_fmtSize(_rxSize)} / ${_fmtSize(_expectedSize)}';
-            });
-          }
+          });
+        }
         }).catchError((Object e) {
           debugPrint('[P2P] receive write error: $e');
         });
@@ -814,24 +814,24 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     final total = _selectedFileSize > 0 ? _selectedFileSize : await file.length();
     final raf = await file.open(mode: FileMode.read);
     try {
-      var off = 0;
+    var off = 0;
       final buf = Uint8List(_chunkSize);
-      while (off < total) {
-        while ((_dataChannel!.bufferedAmount ?? 0) > _highWater) {
-          await Future.delayed(const Duration(milliseconds: 50));
-        }
+    while (off < total) {
+      while ((_dataChannel!.bufferedAmount ?? 0) > _highWater) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
         final toRead = min(_chunkSize, total - off);
         final read = await raf.readInto(buf, 0, toRead);
         if (read <= 0) break;
         _dataChannel!.send(RTCDataChannelMessage.fromBinary(Uint8List.sublistView(buf, 0, read)));
         off += read;
-        if (mounted) {
-          setState(() {
-            _progress = off / total;
-            _bytesTransferred = off;
-            _statusText = 'Sending: ${(_progress * 100).toStringAsFixed(1)}% · ${_fmtSize(off)} / ${_fmtSize(total)}';
-          });
-        }
+      if (mounted) {
+        setState(() {
+          _progress = off / total;
+          _bytesTransferred = off;
+          _statusText = 'Sending: ${(_progress * 100).toStringAsFixed(1)}% · ${_fmtSize(off)} / ${_fmtSize(total)}';
+        });
+      }
         await Future.delayed(const Duration(milliseconds: 1));
       }
     } finally {
@@ -1308,7 +1308,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                 children: [
                   Icon(Icons.inbox_outlined, size: 36, color: AppTheme.textMuted.withValues(alpha: 0.55)),
                   const SizedBox(height: 10),
-                  Text(
+          Text(
                     'No files received yet',
                     style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13.5),
                   ),
@@ -1346,9 +1346,9 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
               BoxShadow(color: color.withValues(alpha: 0.35), blurRadius: 14, offset: const Offset(0, 6)),
             ],
           ),
-          child: Column(
+                child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
-            children: [
+                  children: [
               Icon(icon, color: Colors.white, size: 32),
               const SizedBox(height: 8),
               Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
@@ -1434,16 +1434,16 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                 ),
                 const SizedBox(height: 4),
                 Text(_fmtSize(_selectedFileSize), style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13)),
-                if (_sessionId != null) ...[
+          if (_sessionId != null) ...[
                   const SizedBox(height: 18),
-                  Container(
+            Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
-                    child: QrImageView(
-                      data: _sessionId!,
-                      version: QrVersions.auto,
-                      size: 200,
-                      backgroundColor: Colors.white,
+              child: QrImageView(
+                data: _sessionId!,
+                version: QrVersions.auto,
+                size: 200,
+                backgroundColor: Colors.white,
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -1490,12 +1490,12 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                     _awaitingAccept ? 'Incoming file' : 'Connecting…',
                     style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w800, fontSize: 18),
                   ),
-                  if (_peerName != null) ...[
+            if (_peerName != null) ...[
                     const SizedBox(height: 6),
                     Text('From $_peerName', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9))),
-                  ],
+            ],
                   const SizedBox(height: 16),
-                  if (_awaitingAccept) ...[
+            if (_awaitingAccept) ...[
                     Text(_rxFileName, textAlign: TextAlign.center, style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
                     Text(_fmtSize(_expectedSize), style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85))),
                     const SizedBox(height: 18),
@@ -1586,19 +1586,19 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
             child: Column(
               children: [
                 P2pJoinField(
-                  controller: _joinCtrl,
-                  onSubmitted: (v) {
-                    if (v.trim().isNotEmpty) _startReceiveFlow(v.trim());
-                  },
-                ),
+            controller: _joinCtrl,
+            onSubmitted: (v) {
+              if (v.trim().isNotEmpty) _startReceiveFlow(v.trim());
+            },
+          ),
                 const SizedBox(height: 12),
                 P2pPrimaryButton(
                   label: 'Join',
                   icon: LucideIcons.logIn,
                   onTap: () {
-                    final c = _joinCtrl.text.trim();
-                    if (c.isNotEmpty) _startReceiveFlow(c);
-                  },
+                final c = _joinCtrl.text.trim();
+                if (c.isNotEmpty) _startReceiveFlow(c);
+              },
                   gradient: const [Color(0xFF10B981), Color(0xFF047857)],
                 ),
               ],
@@ -1631,15 +1631,15 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                     value: _progress > 0 ? _progress : null,
                     strokeWidth: 7,
                     color: AppTheme.primaryBright,
-                    backgroundColor: Colors.white.withValues(alpha: 0.08),
-                  ),
+                      backgroundColor: Colors.white.withValues(alpha: 0.08),
+                    ),
                   Text(
                     _progress > 0 ? '${pct.toStringAsFixed(0)}%' : '…',
                     style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w800, fontSize: 18),
                   ),
-                ],
+                    ],
+                  ),
               ),
-            ),
             const SizedBox(height: 18),
             Text(
               _selectedFileName ?? _rxFileName,
@@ -1675,9 +1675,9 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     final sizeLabel = sizeBytes > 0 ? _fmtSize(sizeBytes) : null;
 
     return P2pPageFrame(
-      child: Column(
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+          children: [
           const SizedBox(height: 28),
           Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 56),
           const SizedBox(height: 14),
@@ -1700,7 +1700,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
             ),
             const SizedBox(height: 28),
             if (path != null)
-              Container(
+            Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(16),
@@ -1734,10 +1734,10 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                             ),
                           ],
                         ],
-                      ),
-                    ),
-                  ],
-                ),
+              ),
+            ),
+          ],
+        ),
               ),
             if (path != null) ...[
               const SizedBox(height: 18),

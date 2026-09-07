@@ -211,9 +211,13 @@ class CallService {
   }
 
   void _dismissIncomingIfMatches(String callId, {String reason = 'Call ended'}) {
-    if (_session?.callId != callId) return;
-    if (_phase != CallPhase.incoming) return;
-    _endCall(reason);
+    if (callId.isEmpty) return;
+    if (_session?.callId == callId && _phase == CallPhase.incoming) {
+      _endCall(reason);
+    } else {
+      unawaited(LocalNotificationService.cancelIncomingCall());
+      unawaited(NotificationSound.stopCallSounds());
+    }
   }
 
   /// Answer / Decline from the system notification (or open the incoming UI).
@@ -392,10 +396,12 @@ class CallService {
     final s = _session;
     if (s != null && _phase != CallPhase.ended && _phase != CallPhase.idle) {
       unawaited(_sendChatControl('$endPrefix${s.callId}'));
+      final uid = _myUserId;
       _notif?.sendChatPayload({
         'type': 'call_hangup',
         'call_id': s.callId,
         'peer_id': s.peerId,
+        'callee_id': s.isOutgoing ? s.peerId : uid,
       });
       if (s.isOutgoing) {
         unawaited(_api?.p2pCancelSession(s.callId));

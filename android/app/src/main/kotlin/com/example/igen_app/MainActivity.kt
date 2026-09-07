@@ -58,6 +58,32 @@ class MainActivity : FlutterActivity() {
                             result.error("open_failed", e.message, null)
                         }
                     }
+                    "saveImageToGallery" -> {
+                        val displayName = call.argument<String>("displayName") ?: "photo.jpg"
+                        val bytes = call.argument<ByteArray>("bytes")
+                        if (bytes == null || bytes.isEmpty()) {
+                            result.error("bad_args", "bytes required", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            result.success(saveImageToGallery(bytes, displayName))
+                        } catch (e: Exception) {
+                            result.error("save_failed", e.message, null)
+                        }
+                    }
+                    "saveBytesToDownloads" -> {
+                        val displayName = call.argument<String>("displayName") ?: "file.bin"
+                        val bytes = call.argument<ByteArray>("bytes")
+                        if (bytes == null || bytes.isEmpty()) {
+                            result.error("bad_args", "bytes required", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            result.success(saveBytesToDownloads(bytes, displayName))
+                        } catch (e: Exception) {
+                            result.error("save_failed", e.message, null)
+                        }
+                    }
                     "openFolder" -> {
                         val path = call.argument<String>("path")
                         try {
@@ -123,6 +149,69 @@ class MainActivity : FlutterActivity() {
         val dest = File(destDir, safeName)
         source.copyTo(dest, overwrite = true)
         source.delete()
+        return mapOf("path" to dest.absolutePath, "contentUri" to null)
+    }
+
+    private fun saveBytesToDownloads(bytes: ByteArray, displayName: String): Map<String, String?> {
+        val safeName = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Aims")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val resolver = contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("MediaStore insert failed")
+            resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                ?: throw IllegalStateException("MediaStore stream failed")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return mapOf(
+                "path" to File(aimsPublicDir(), safeName).absolutePath,
+                "contentUri" to uri.toString(),
+            )
+        }
+        val destDir = aimsPublicDir()
+        if (!destDir.exists()) destDir.mkdirs()
+        val dest = File(destDir, safeName)
+        dest.writeBytes(bytes)
+        return mapOf("path" to dest.absolutePath, "contentUri" to null)
+    }
+
+    private fun saveImageToGallery(bytes: ByteArray, displayName: String): Map<String, String?> {
+        val safeName = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val mime = when {
+            safeName.endsWith(".png", true) -> "image/png"
+            safeName.endsWith(".webp", true) -> "image/webp"
+            safeName.endsWith(".gif", true) -> "image/gif"
+            else -> "image/jpeg"
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, safeName)
+                put(MediaStore.Images.Media.MIME_TYPE, mime)
+                put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Aims")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val resolver = contentResolver
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("MediaStore insert failed")
+            resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                ?: throw IllegalStateException("MediaStore stream failed")
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return mapOf("path" to "Pictures/Aims/$safeName", "contentUri" to uri.toString())
+        }
+        val dir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+            "Aims",
+        )
+        if (!dir.exists()) dir.mkdirs()
+        val dest = File(dir, safeName)
+        dest.writeBytes(bytes)
         return mapOf("path" to dest.absolutePath, "contentUri" to null)
     }
 
