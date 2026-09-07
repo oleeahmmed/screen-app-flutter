@@ -660,7 +660,7 @@ try {
         }
       }
 
-      final uploadBytes = compressToJpeg(imageBytes, maxWidth: 1280, quality: 72);
+      final uploadBytes = compressToWebP(imageBytes);
       final result = await apiService.uploadScreenshot(
         uploadBytes,
         isIdle: isIdle,

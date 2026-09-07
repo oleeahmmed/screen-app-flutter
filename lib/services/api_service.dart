@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
+import 'image_compress_util.dart';
 import 'user_data_service.dart';
 
 class ApiService {
@@ -2726,8 +2727,9 @@ class ApiService {
       final time = '${now.hour.toString().padLeft(2, '0')}-${now.minute.toString().padLeft(2, '0')}-${now.second.toString().padLeft(2, '0')}-${now.millisecond.toString().padLeft(3, '0')}';
       final screenNum = screenIndex.clamp(1, 16);
       final screenSlot = 'screen$screenNum';
-      final isJpeg = imageBytes.length > 2 && imageBytes[0] == 0xFF && imageBytes[1] == 0xD8;
-      final ext = isJpeg ? 'jpg' : 'png';
+      final isWebp = isWebpBytes(imageBytes);
+      final isJpeg = !isWebp && isJpegBytes(imageBytes);
+      final ext = isWebp ? 'webp' : (isJpeg ? 'jpg' : 'png');
       // Backend LiveMonitorManager groups by date/screenN/… — must match per monitor.
       final relativePath = '$date/$screenSlot/$time.$ext';
 
@@ -2745,7 +2747,7 @@ class ApiService {
             'file',
             imageBytes,
             filename: '$time.$ext',
-            contentType: MediaType('image', isJpeg ? 'jpeg' : 'png'),
+            contentType: MediaType('image', isWebp ? 'webp' : (isJpeg ? 'jpeg' : 'png')),
           ),
         );
 
