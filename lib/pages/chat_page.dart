@@ -102,6 +102,30 @@ class _ChatPageState extends State<ChatPage> {
   static const _quickReactions = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
   bool _chatDragOver = false;
 
+  static const TextStyle _bubbleTextStyle = TextStyle(
+    color: Color(0xFFE9EDEF),
+    fontSize: 14.2,
+    height: 1.32,
+    letterSpacing: 0.1,
+  );
+
+  static const TextStyle _reactionEmojiStyle = TextStyle(
+    fontSize: 17,
+    height: 1.0,
+    leadingDistribution: TextLeadingDistribution.even,
+  );
+
+  static Widget _emojiText(String emoji, {double size = 17}) {
+    return Text(
+      emoji,
+      style: _reactionEmojiStyle.copyWith(fontSize: size),
+      textHeightBehavior: const TextHeightBehavior(
+        applyHeightToFirstAscent: false,
+        applyHeightToLastDescent: false,
+      ),
+    );
+  }
+
   bool get _supportsNativeAudio => PlatformCapabilities.nativeAudio;
 
   VoiceRecorderService get _recorder => _voiceRecorder ??= VoiceRecorderService();
@@ -476,38 +500,53 @@ class _ChatPageState extends State<ChatPage> {
     entry = OverlayEntry(
       builder: (ctx) {
         final screenW = MediaQuery.sizeOf(ctx).width;
-        final barW = (_quickReactions.length * 44.0) + 16;
+        const itemSize = 46.0;
+        const gap = 4.0;
+        final barW = (_quickReactions.length * itemSize) + ((_quickReactions.length - 1) * gap) + 12;
         final left = (topLeft.dx + size.width / 2 - barW / 2).clamp(8.0, screenW - barW - 8);
-        final top = (topLeft.dy - 58).clamp(8.0, MediaQuery.sizeOf(ctx).height - 72);
+        final top = (topLeft.dy - 64).clamp(8.0, MediaQuery.sizeOf(ctx).height - 80);
         return Stack(
           children: [
             Positioned.fill(
               child: GestureDetector(
                 onTap: () => entry.remove(),
                 behavior: HitTestBehavior.translucent,
-                child: ColoredBox(color: Colors.black.withValues(alpha: 0.25)),
+                child: ColoredBox(color: Colors.black.withValues(alpha: 0.28)),
               ),
             ),
             Positioned(
               left: left,
               top: top,
               child: Material(
-                elevation: 8,
-                borderRadius: BorderRadius.circular(28),
+                elevation: 10,
+                shadowColor: Colors.black.withValues(alpha: 0.45),
+                borderRadius: BorderRadius.circular(30),
                 color: const Color(0xFF233138),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(30),
+                    border: Border.all(color: const Color(0xFF3B4A54), width: 0.5),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: _quickReactions.map((emoji) {
-                      return GestureDetector(
-                        onTap: () {
-                          entry.remove();
-                          unawaited(_toggleReaction(msg, emoji));
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 5),
-                          child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                      return Padding(
+                        padding: EdgeInsets.only(right: emoji == _quickReactions.last ? 0 : gap),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () {
+                              entry.remove();
+                              unawaited(_toggleReaction(msg, emoji));
+                            },
+                            customBorder: const CircleBorder(),
+                            child: SizedBox(
+                              width: itemSize,
+                              height: itemSize,
+                              child: Center(child: _emojiText(emoji, size: 28)),
+                            ),
+                          ),
                         ),
                       );
                     }).toList(),
@@ -525,52 +564,71 @@ class _ChatPageState extends State<ChatPage> {
   Widget _buildReactionsRow(dynamic msg, {required bool isOwn}) {
     final raw = msg['reactions'];
     if (raw is! List || raw.isEmpty) return const SizedBox.shrink();
-    return Wrap(
-      spacing: 4,
-      runSpacing: 2,
-      children: raw.map<Widget>((r) {
-        if (r is! Map) return const SizedBox.shrink();
-        final emoji = (r['emoji'] ?? '').toString();
-        if (emoji.isEmpty) return const SizedBox.shrink();
-        final count = _asInt(r['count']) ?? 1;
-        final mine = r['reacted_by_me'] == true;
-        return GestureDetector(
+
+    final chips = <Widget>[];
+    for (final r in raw) {
+      if (r is! Map) continue;
+      final emoji = (r['emoji'] ?? '').toString();
+      if (emoji.isEmpty) continue;
+      final count = _asInt(r['count']) ?? 1;
+      final mine = r['reacted_by_me'] == true;
+
+      if (chips.isNotEmpty) {
+        chips.add(Container(
+          width: 1,
+          height: 14,
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          color: const Color(0xFF3B4A54),
+        ));
+      }
+
+      chips.add(
+        GestureDetector(
           onTap: () => unawaited(_toggleReaction(msg, emoji)),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
             decoration: BoxDecoration(
-              color: mine ? const Color(0xFF0A4D3F) : const Color(0xFF1F2C34),
-              borderRadius: BorderRadius.circular(12),
-              border: mine ? Border.all(color: const Color(0xFF06CF9C), width: 1) : null,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.2),
-                  blurRadius: 2,
-                  offset: const Offset(0, 1),
-                ),
-              ],
+              color: mine ? const Color(0xFF0B5C4A) : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(emoji, style: const TextStyle(fontSize: 14)),
-                if (count > 1)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 3),
-                    child: Text(
-                      '$count',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white.withValues(alpha: 0.85),
-                      ),
+                _emojiText(emoji, size: 16),
+                if (count > 1) ...[
+                  const SizedBox(width: 3),
+                  Text(
+                    '$count',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      height: 1.0,
+                      color: mine ? const Color(0xFF06CF9C) : Colors.white.withValues(alpha: 0.8),
                     ),
                   ),
+                ],
               ],
             ),
           ),
-        );
-      }).toList(),
+        ),
+      );
+    }
+
+    if (chips.isEmpty) return const SizedBox.shrink();
+
+    return Material(
+      elevation: 2,
+      shadowColor: Colors.black.withValues(alpha: 0.35),
+      borderRadius: BorderRadius.circular(13),
+      color: const Color(0xFF1F2C33),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(13),
+          border: Border.all(color: const Color(0xFF2A3942), width: 0.6),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Row(mainAxisSize: MainAxisSize.min, children: chips),
+      ),
     );
   }
 
@@ -3695,7 +3753,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               const SizedBox(height: 4),
               Text(
                 text.toString(),
-                style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 14.5, height: 1.35),
+                style: _bubbleTextStyle,
               ),
             ],
           ],
@@ -3739,7 +3797,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       return Text(
         text.toString(),
         softWrap: true,
-        style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 14.8, height: 1.35),
+        style: _bubbleTextStyle,
       );
     }
 
@@ -3749,7 +3807,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       padding: EdgeInsets.only(
         left: isOwn ? 48 : 8,
         right: isOwn ? 8 : 48,
-        bottom: hasReactions ? 12 : 3,
+        bottom: hasReactions ? 18 : 3,
         top: 1,
       ),
       child: Align(
@@ -3799,46 +3857,50 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       ],
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+                      padding: EdgeInsets.fromLTRB(9, 6, 9, hasReactions ? 7 : 5),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           if (!isOwn && isGroup)
                             Padding(
-                              padding: const EdgeInsets.only(bottom: 2, left: 1),
+                              padding: const EdgeInsets.only(bottom: 3, left: 1),
                               child: Text(
                                 senderName.toString(),
                                 style: const TextStyle(
                                   fontSize: 12.5,
                                   fontWeight: FontWeight.w700,
+                                  height: 1.1,
                                   color: Color(0xFF53BDEB),
                                 ),
                               ),
                             ),
                           if (reply != null) ...[
                             _buildQuotedReply(reply, isOwn: isOwn, maxWidth: maxW - 20),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: 5),
                           ],
                           bodyContent(),
-                          const SizedBox(height: 2),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (!isDeleted && PlatformCapabilities.isDesktop)
-                                GestureDetector(
-                                  onTap: () => openOptions(),
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(right: 4),
-                                    child: Icon(
-                                      Icons.expand_more_rounded,
-                                      size: 16,
-                                      color: Colors.white.withValues(alpha: 0.4),
+                          const SizedBox(height: 3),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (!isDeleted && PlatformCapabilities.isDesktop)
+                                  GestureDetector(
+                                    onTap: () => openOptions(),
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: Icon(
+                                        Icons.expand_more_rounded,
+                                        size: 16,
+                                        color: Colors.white.withValues(alpha: 0.4),
+                                      ),
                                     ),
                                   ),
-                                ),
-                              metaRow(),
-                            ],
+                                metaRow(),
+                              ],
+                            ),
                           ),
                         ],
                       ),
@@ -3853,9 +3915,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   bubble,
                   if (hasReactions)
                     Positioned(
-                      bottom: -10,
-                      right: isOwn ? 6 : null,
-                      left: isOwn ? null : 6,
+                      bottom: -12,
+                      right: isOwn ? 8 : null,
+                      left: isOwn ? null : 8,
                       child: _buildReactionsRow(msg, isOwn: isOwn),
                     ),
                 ],
