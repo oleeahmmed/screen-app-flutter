@@ -334,23 +334,22 @@ class _ChatPageState extends State<ChatPage> {
       final viewing = _selectedUser != null &&
           (_selectedUser['id'] == peerId || '${_selectedUser['id']}' == '$peerId');
       if (viewing) {
-        final msgId = _asInt(data['message_id']);
-        if (msgId == null || !_messageExists(msgId)) {
-          final msg = {
-            'id': msgId ?? DateTime.now().millisecondsSinceEpoch,
-            'message': text,
-            'message_type': data['message_type'] ?? 'text',
-            'sender_id': senderId,
-            'is_own': isOwn,
-            'is_read': false,
-            'created_at': data['created_at'] ?? nowIso,
-            'image_url': data['image_url'],
-            'file_url': data['file_url'],
-            'file_name': data['file_name'],
-            'voice_url': data['voice_url'],
-          };
-          _messages = [..._messages, msg];
-        }
+        final msgId = _eventMessageId(data);
+        final msg = {
+          'id': msgId ?? DateTime.now().millisecondsSinceEpoch,
+          'message': text,
+          'message_type': data['message_type'] ?? 'text',
+          'sender_id': senderId,
+          'is_own': isOwn,
+          'is_read': data['is_read'] == true,
+          'created_at': data['created_at'] ?? nowIso,
+          'timestamp': data['created_at'] ?? nowIso,
+          'image_url': data['image_url'],
+          'file_url': data['file_url'],
+          'file_name': data['file_name'],
+          'voice_url': data['voice_url'],
+        };
+        _messages = _upsertMessage(_messages, msg);
       }
     });
     if (_selectedUser != null &&
@@ -799,7 +798,55 @@ class _ChatPageState extends State<ChatPage> {
 
   bool _messageExists(int? id) {
     if (id == null) return false;
-    return _messages.any((m) => m is Map && _asInt(m['id']) == id);
+    return _messages.any((m) => m is Map && _messageIdOf(m) == id);
+  }
+
+  int? _messageIdOf(dynamic msg) {
+    if (msg is! Map) return null;
+    return _asInt(msg['id'] ?? msg['message_id']);
+  }
+
+  int? _eventMessageId(Map<String, dynamic> data) =>
+      _asInt(data['message_id'] ?? data['id']);
+
+  List<dynamic> _upsertMessage(List<dynamic> list, Map<String, dynamic> msg) {
+    final id = _messageIdOf(msg);
+    if (id != null) {
+      final idx = list.indexWhere((m) => m is Map && _messageIdOf(m) == id);
+      if (idx >= 0) {
+        final next = [...list];
+        next[idx] = {
+          ...Map<String, dynamic>.from(next[idx] as Map),
+          ...msg,
+          'id': id,
+        };
+        return next;
+      }
+    }
+
+    // Optimistic send + websocket/API race: merge same own text within a short window.
+    if (msg['is_own'] == true) {
+      final text = (msg['message'] ?? '').toString();
+      final now = DateTime.now();
+      for (var i = list.length - 1; i >= 0 && i >= list.length - 6; i--) {
+        final existing = list[i];
+        if (existing is! Map || existing['is_own'] != true) continue;
+        if ((existing['message'] ?? '').toString() != text) continue;
+        final ts = DateTime.tryParse(
+          '${existing['created_at'] ?? existing['timestamp'] ?? ''}',
+        );
+        if (ts != null && now.difference(ts).inSeconds > 12) continue;
+        final next = [...list];
+        next[i] = {
+          ...Map<String, dynamic>.from(existing),
+          ...msg,
+          if (id != null) 'id': id,
+        };
+        return next;
+      }
+    }
+
+    return [...list, msg];
   }
 
   void _refocusComposer() {
@@ -1018,7 +1065,7 @@ class _ChatPageState extends State<ChatPage> {
         local['reply_to'] = replyId ?? quote['id'];
         _cacheReplyQuote(local['id'], quote);
       }
-      setState(() => _messages = [..._messages, local]);
+      setState(() => _messages = _upsertMessage(_messages, local));
       _scrollToBottom();
       _refocusComposer();
     } else {
@@ -2729,7 +2776,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               final narrow = constraints.maxWidth < 420;
               final padH = mobile || narrow ? 6.0 : 12.0;
               final hint = desktop
-                  ? (narrow ? 'Message' : 'Message  Â·  Enter to send')
+                  ? (narrow ? 'Message' : 'Message · Enter to send')
                   : 'Message';
               return Padding(
                 padding: EdgeInsets.fromLTRB(padH, 6, padH, 6),
