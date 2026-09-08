@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -18,195 +16,161 @@ abstract final class ChatReactions {
         leadingDistribution: TextLeadingDistribution.even,
       );
 
-  static Future<void> showPicker({
-    required BuildContext context,
-    required BuildContext anchorContext,
+  /// Reaction picker scoped to the chat message pane (keeps the selection header clear).
+  static Widget pickerLayer({
+    required Offset anchorTopLeft,
+    required Size anchorSize,
+    required Size layerSize,
     required ValueChanged<String> onPick,
+    required VoidCallback onDismiss,
     List<String> extraEmojis = const [],
-    double topBarrierInset = 0,
-    VoidCallback? onDismiss,
-  }) async {
-    final box = anchorContext.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) return;
+    bool showMore = false,
+    required VoidCallback onToggleMore,
+  }) {
+    const emojiSize = 34.0;
+    const itemSize = 44.0;
+    const gap = 2.0;
+    const plusSize = 40.0;
+    const hPad = 8.0;
+    const vPad = 6.0;
 
-    final overlay = Overlay.of(anchorContext, rootOverlay: true);
-    final topLeft = box.localToGlobal(Offset.zero);
-    final bubbleSize = box.size;
-    var showMore = false;
+    final quickCount = quick.length + 1;
+    final barW = hPad * 2 + (quickCount * itemSize) + ((quickCount - 1) * gap);
+    final left = (anchorTopLeft.dx + anchorSize.width / 2 - barW / 2)
+        .clamp(10.0, layerSize.width - barW - 10);
 
-    late OverlayEntry entry;
-    entry = OverlayEntry(
-      builder: (ctx) {
-        final screen = MediaQuery.sizeOf(ctx);
-        const emojiSize = 34.0;
-        const itemSize = 44.0;
-        const gap = 2.0;
-        const plusSize = 40.0;
-        const hPad = 8.0;
-        const vPad = 6.0;
+    var top = anchorTopLeft.dy - 58;
+    if (top < 8) {
+      top = anchorTopLeft.dy + anchorSize.height + 10;
+    }
+    top = top.clamp(8.0, layerSize.height - 120);
 
-        final quickCount = quick.length + 1;
-        final barW = hPad * 2 + (quickCount * itemSize) + ((quickCount - 1) * gap);
-        final left = (topLeft.dx + bubbleSize.width / 2 - barW / 2).clamp(10.0, screen.width - barW - 10);
+    Widget emojiBtn(String emoji, {VoidCallback? onTap}) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          splashColor: Colors.white.withValues(alpha: 0.12),
+          highlightColor: Colors.white.withValues(alpha: 0.06),
+          child: SizedBox(
+            width: itemSize,
+            height: itemSize,
+            child: Center(
+              child: Text(emoji, style: emojiStyle(emojiSize)),
+            ),
+          ),
+        ),
+      );
+    }
 
-        var top = topLeft.dy - 58;
-        if (top < MediaQuery.paddingOf(ctx).top + 8) {
-          top = topLeft.dy + bubbleSize.height + 10;
-        }
-        top = top.clamp(8.0, screen.height - 120);
-
-        Widget emojiBtn(String emoji, {VoidCallback? onTap}) {
-          return Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onTap,
-              customBorder: const CircleBorder(),
-              splashColor: Colors.white.withValues(alpha: 0.12),
-              highlightColor: Colors.white.withValues(alpha: 0.06),
-              child: SizedBox(
-                width: itemSize,
-                height: itemSize,
-                child: Center(
-                  child: Text(emoji, style: emojiStyle(emojiSize)),
+    final moreRow = showMore && extraEmojis.isNotEmpty
+        ? Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Material(
+              elevation: 8,
+              shadowColor: Colors.black.withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(22),
+              color: _barBg,
+              child: Container(
+                constraints: BoxConstraints(maxWidth: layerSize.width - 24),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(22),
+                  border: Border.all(color: _barBorder, width: 0.6),
+                ),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: extraEmojis.take(24).map((e) => emojiBtn(e, onTap: () {
+                      HapticFeedback.selectionClick();
+                      onPick(e);
+                    })).toList(),
+                  ),
                 ),
               ),
             ),
-          );
-        }
+          )
+        : const SizedBox.shrink();
 
-        final moreRow = showMore && extraEmojis.isNotEmpty
-            ? Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(22),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                    child: Container(
-                      constraints: BoxConstraints(maxWidth: screen.width - 24),
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: _barBg.withValues(alpha: 0.96),
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(color: _barBorder, width: 0.6),
-                      ),
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: extraEmojis.take(24).map((e) => emojiBtn(e, onTap: () {
-                            entry.remove();
-                            HapticFeedback.selectionClick();
-                            onPick(e);
-                          })).toList(),
-                        ),
-                      ),
+    return Positioned.fill(
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          GestureDetector(
+            onTap: onDismiss,
+            behavior: HitTestBehavior.opaque,
+            child: ColoredBox(color: Colors.black.withValues(alpha: 0.28)),
+          ),
+          Positioned(
+            left: left,
+            top: top,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Material(
+                  elevation: 8,
+                  shadowColor: Colors.black.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(28),
+                  color: _barBg,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(color: _barBorder, width: 0.6),
                     ),
-                  ),
-                ),
-              )
-            : const SizedBox.shrink();
-
-        void dismiss() {
-          entry.remove();
-          onDismiss?.call();
-        }
-
-        final barrier = GestureDetector(
-          onTap: dismiss,
-          behavior: HitTestBehavior.opaque,
-          child: ColoredBox(color: Colors.black.withValues(alpha: 0.28)),
-        );
-
-        return Stack(
-          children: [
-            if (topBarrierInset > 0)
-              Positioned(
-                top: topBarrierInset,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: barrier,
-              )
-            else
-              Positioned.fill(child: barrier),
-            Positioned(
-              left: left,
-              top: top,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(28),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                      child: Material(
-                        elevation: 8,
-                        shadowColor: Colors.black.withValues(alpha: 0.4),
-                        borderRadius: BorderRadius.circular(28),
-                        color: _barBg.withValues(alpha: 0.97),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(28),
-                            border: Border.all(color: _barBorder, width: 0.6),
-                          ),
-                          padding: EdgeInsets.fromLTRB(hPad, vPad, hPad, vPad),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              for (var i = 0; i < quick.length; i++) ...[
-                                if (i > 0) SizedBox(width: gap),
-                                emojiBtn(quick[i], onTap: () {
-                                  entry.remove();
-                                  HapticFeedback.selectionClick();
-                                  onPick(quick[i]);
-                                }),
-                              ],
-                              SizedBox(width: gap),
-                              Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: () {
-                                    if (extraEmojis.isEmpty) return;
-                                    showMore = !showMore;
-                                    entry.markNeedsBuild();
-                                  },
-                                  customBorder: const CircleBorder(),
-                                  child: Container(
-                                    width: plusSize,
-                                    height: plusSize,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: showMore
-                                          ? const Color(0xFF00A884).withValues(alpha: 0.25)
-                                          : Colors.white.withValues(alpha: 0.08),
-                                      border: Border.all(
-                                        color: showMore
-                                            ? const Color(0xFF00A884).withValues(alpha: 0.5)
-                                            : Colors.white.withValues(alpha: 0.12),
-                                      ),
-                                    ),
-                                    child: Icon(
-                                      showMore ? Icons.close_rounded : Icons.add_rounded,
-                                      size: 22,
-                                      color: showMore ? const Color(0xFF00A884) : Colors.white70,
-                                    ),
-                                  ),
+                    padding: EdgeInsets.fromLTRB(hPad, vPad, hPad, vPad),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (var i = 0; i < quick.length; i++) ...[
+                          if (i > 0) SizedBox(width: gap),
+                          emojiBtn(quick[i], onTap: () {
+                            HapticFeedback.selectionClick();
+                            onPick(quick[i]);
+                          }),
+                        ],
+                        SizedBox(width: gap),
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () {
+                              if (extraEmojis.isEmpty) return;
+                              onToggleMore();
+                            },
+                            customBorder: const CircleBorder(),
+                            child: Container(
+                              width: plusSize,
+                              height: plusSize,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: showMore
+                                    ? const Color(0xFF00A884).withValues(alpha: 0.25)
+                                    : Colors.white.withValues(alpha: 0.08),
+                                border: Border.all(
+                                  color: showMore
+                                      ? const Color(0xFF00A884).withValues(alpha: 0.5)
+                                      : Colors.white.withValues(alpha: 0.12),
                                 ),
                               ),
-                            ],
+                              child: Icon(
+                                showMore ? Icons.close_rounded : Icons.add_rounded,
+                                size: 22,
+                                color: showMore ? const Color(0xFF00A884) : Colors.white70,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ),
                   ),
-                  moreRow,
-                ],
-              ),
+                ),
+                moreRow,
+              ],
             ),
-          ],
-        );
-      },
+          ),
+        ],
+      ),
     );
-    overlay.insert(entry);
   }
 
   static Widget badge({

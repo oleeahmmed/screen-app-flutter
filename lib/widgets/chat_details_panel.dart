@@ -22,6 +22,8 @@ class ChatDetailsPanel extends StatelessWidget {
   final VoidCallback? onOpenMembers;
   final VoidCallback? onSearchInChat;
   final VoidCallback? onChangeWallpaper;
+  final bool isPinned;
+  final VoidCallback? onTogglePin;
   final ValueChanged<String>? onOpenMediaUrl;
   final String? username;
   final String? email;
@@ -53,6 +55,8 @@ class ChatDetailsPanel extends StatelessWidget {
     this.onOpenMembers,
     this.onSearchInChat,
     this.onChangeWallpaper,
+    this.isPinned = false,
+    this.onTogglePin,
     this.onOpenMediaUrl,
     this.username,
     this.email,
@@ -347,6 +351,11 @@ class ChatDetailsPanel extends StatelessWidget {
               _ActionChip(icon: Icons.videocam_rounded, label: 'Video', onTap: onVideoCall),
             _ActionChip(icon: Icons.person_add_alt_1_rounded, label: 'Add', onTap: onAddMembers),
             _ActionChip(icon: Icons.search_rounded, label: 'Search', onTap: onSearchInChat),
+            _ActionChip(
+              icon: isPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+              label: isPinned ? 'Unpin' : 'Pin',
+              onTap: onTogglePin,
+            ),
             _ActionChip(icon: Icons.wallpaper_rounded, label: 'Wallpaper', onTap: onChangeWallpaper),
           ],
         ),
@@ -362,6 +371,11 @@ class ChatDetailsPanel extends StatelessWidget {
           if (PlatformCapabilities.voiceVideoCall)
             _ActionChip(icon: Icons.call_rounded, label: 'Audio', onTap: onVoiceCall),
           _ActionChip(icon: Icons.search_rounded, label: 'Search', onTap: onSearchInChat),
+          _ActionChip(
+            icon: isPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+            label: isPinned ? 'Unpin' : 'Pin',
+            onTap: onTogglePin,
+          ),
           _ActionChip(icon: Icons.wallpaper_rounded, label: 'Wallpaper', onTap: onChangeWallpaper),
         ],
       ),

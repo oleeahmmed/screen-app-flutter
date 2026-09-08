@@ -147,8 +147,14 @@ class _CallPageState extends State<CallPage> with TickerProviderStateMixin {
     return Scaffold(
       backgroundColor: const Color(0xFF0B141A),
       resizeToAvoidBottomInset: false,
-      body: SizedBox.expand(
-        child: _isVideo ? _buildVideoBody(session) : _buildAudioBody(session),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          return SizedBox(
+            width: constraints.maxWidth,
+            height: constraints.maxHeight,
+            child: _isVideo ? _buildVideoBody(session) : _buildAudioBody(session),
+          );
+        },
       ),
     );
   }
@@ -241,17 +247,15 @@ class _CallPageState extends State<CallPage> with TickerProviderStateMixin {
   }
 
   Widget _buildAudioBody(CallSession session) {
-    return SafeArea(
-      child: Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFF1F2C34), Color(0xFF0B141A)],
-          ),
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF1F2C34), Color(0xFF0B141A)],
         ),
+      ),
+      child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

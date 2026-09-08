@@ -26,6 +26,7 @@ import '../utils/app_toast.dart';
 import '../widgets/app_logo.dart';
 import '../services/chat_clipboard.dart';
 import '../services/chat_wallpaper_prefs.dart';
+import '../services/chat_pin_prefs.dart';
 import '../widgets/chat_wallpaper_background.dart';
 import '../widgets/swipe_to_reply.dart';
 import '../widgets/chat_avatar.dart';
@@ -116,7 +117,15 @@ class _ChatPageState extends State<ChatPage> {
   Uint8List? _lastCopiedImageBytes;
   final Set<int> _selectedMessageIds = {};
   final Set<int> _starredMessageIds = {};
+  List<String> _pinnedChatKeys = [];
   final GlobalKey _selectionHeaderKey = GlobalKey();
+  final GlobalKey _chatMessageStackKey = GlobalKey();
+  dynamic _reactionPickerMsg;
+  BuildContext? _reactionPickerAnchor;
+  Offset? _reactionPickerTopLeft;
+  Size? _reactionPickerAnchorSize;
+  bool _reactionPickerShowMore = false;
+  bool _reactionPickerClearSelectionOnDismiss = false;
   static const int _chatPageSize = 30;
   bool _hasMoreMessages = false;
   bool _isLoadingMoreMessages = false;
@@ -185,6 +194,7 @@ class _ChatPageState extends State<ChatPage> {
     _loadGroups(silent: true);
     _loadMyUserId();
     unawaited(_loadWallpaper());
+    unawaited(_loadPinnedChats());
     _usersPollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       _loadUsers(silent: true);
       _loadGroups(silent: true);
@@ -227,6 +237,112 @@ class _ChatPageState extends State<ChatPage> {
       _wallpaperSolid = w.solidColor;
       _wallpaperImagePath = w.imagePath;
     });
+  }
+
+  Future<void> _loadPinnedChats() async {
+    final keys = await ChatPinPrefs.loadOrderedKeys();
+    if (!mounted) return;
+    setState(() => _pinnedChatKeys = keys);
+  }
+
+  String? _openChatPinKey() {
+    if (_selectedGroup != null) {
+      final id = _asInt(_selectedGroup['id']);
+      if (id == null) return null;
+      return ChatPinPrefs.chatKey(isGroup: true, id: id);
+    }
+    if (_selectedUser != null) {
+      final id = _asInt(_selectedUser['id']);
+      if (id == null) return null;
+      return ChatPinPrefs.chatKey(isGroup: false, id: id);
+    }
+    return null;
+  }
+
+  bool _isChatPinned(String pinKey) => _pinnedChatKeys.contains(pinKey);
+
+  Future<void> _toggleChatPin({
+    required bool isGroup,
+    required int id,
+    String? name,
+  }) async {
+    final pinKey = ChatPinPrefs.chatKey(isGroup: isGroup, id: id);
+    final wasPinned = _isChatPinned(pinKey);
+    final keys = await ChatPinPrefs.togglePin(pinKey);
+    if (!mounted) return;
+    setState(() => _pinnedChatKeys = keys);
+    final label = name?.trim();
+    final who = (label != null && label.isNotEmpty) ? label : 'Chat';
+    AppToast.success(context, wasPinned ? '$who unpinned' : '$who pinned');
+  }
+
+  Future<void> _showInboxChatOptions({
+    required bool isGroup,
+    required int id,
+    required String name,
+  }) async {
+    final pinKey = ChatPinPrefs.chatKey(isGroup: isGroup, id: id);
+    final pinned = _isChatPinned(pinKey);
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF1F2C34),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            ListTile(
+              leading: Icon(
+                pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+                color: AppTheme.primaryBright,
+              ),
+              title: Text(pinned ? 'Unpin chat' : 'Pin chat'),
+              onTap: () => Navigator.pop(ctx, 'pin'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline_rounded, color: AppTheme.textMuted),
+              title: const Text('Chat info'),
+              onTap: () => Navigator.pop(ctx, 'info'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'pin') {
+      await _toggleChatPin(isGroup: isGroup, id: id, name: name);
+    } else if (action == 'info') {
+      if (isGroup) {
+        final group = _groups.cast<Map?>().firstWhere(
+          (g) => _asInt(g?['id']) == id,
+          orElse: () => null,
+        );
+        if (group != null) unawaited(_selectGroup(group, openDetails: true));
+      } else {
+        final user = _users.cast<Map?>().firstWhere(
+          (u) => _asInt(u?['id']) == id,
+          orElse: () => null,
+        );
+        if (user != null) unawaited(_selectUser(user, openDetails: true));
+      }
+    }
   }
 
   Future<void> _showWallpaperPicker() async {
@@ -762,23 +878,64 @@ class _ChatPageState extends State<ChatPage> {
     BuildContext anchorContext, {
     bool clearSelectionOnReact = false,
   }) async {
-    var topInset = MediaQuery.paddingOf(context).top +
-        (PlatformCapabilities.immersiveChatChrome ? 66.0 : 74.0);
-    final headerBox =
-        _selectionHeaderKey.currentContext?.findRenderObject() as RenderBox?;
-    if (headerBox != null && headerBox.hasSize) {
-      topInset = headerBox.localToGlobal(Offset.zero).dy + headerBox.size.height;
-    }
+    _reactionPickerClearSelectionOnDismiss = clearSelectionOnReact;
+    _reactionPickerAnchor = anchorContext;
+    _reactionPickerMsg = msg;
+    _reactionPickerShowMore = false;
+    _reactionPickerTopLeft = null;
+    _reactionPickerAnchorSize = null;
+    if (mounted) setState(() {});
 
-    await ChatReactions.showPicker(
-      context: context,
-      anchorContext: anchorContext,
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _reactionPickerAnchor == null) return;
+      final anchorBox =
+          _reactionPickerAnchor!.findRenderObject() as RenderBox?;
+      final stackBox =
+          _chatMessageStackKey.currentContext?.findRenderObject() as RenderBox?;
+      if (anchorBox == null || !anchorBox.hasSize || stackBox == null || !stackBox.hasSize) {
+        return;
+      }
+      final globalTopLeft = anchorBox.localToGlobal(Offset.zero);
+      final localTopLeft = stackBox.globalToLocal(globalTopLeft);
+      setState(() {
+        _reactionPickerTopLeft = localTopLeft;
+        _reactionPickerAnchorSize = anchorBox.size;
+      });
+    });
+  }
+
+  void _dismissReactionPicker({bool clearSelection = true}) {
+    if (_reactionPickerMsg == null) return;
+    final shouldClear = clearSelection && _reactionPickerClearSelectionOnDismiss;
+    setState(() {
+      _reactionPickerMsg = null;
+      _reactionPickerAnchor = null;
+      _reactionPickerTopLeft = null;
+      _reactionPickerAnchorSize = null;
+      _reactionPickerShowMore = false;
+      _reactionPickerClearSelectionOnDismiss = false;
+    });
+    if (shouldClear) _clearMessageSelection();
+  }
+
+  Widget? _buildReactionPickerLayer(Size layerSize) {
+    if (_reactionPickerMsg == null ||
+        _reactionPickerTopLeft == null ||
+        _reactionPickerAnchorSize == null) {
+      return null;
+    }
+    final msg = _reactionPickerMsg;
+    return ChatReactions.pickerLayer(
+      anchorTopLeft: _reactionPickerTopLeft!,
+      anchorSize: _reactionPickerAnchorSize!,
+      layerSize: layerSize,
       extraEmojis: kChatEmojiList,
-      topBarrierInset: topInset,
-      onDismiss: _clearMessageSelection,
+      showMore: _reactionPickerShowMore,
+      onToggleMore: () => setState(() => _reactionPickerShowMore = !_reactionPickerShowMore),
+      onDismiss: () => _dismissReactionPicker(),
       onPick: (emoji) {
         unawaited(_toggleReaction(msg, emoji));
-        if (clearSelectionOnReact) _clearMessageSelection();
+        _dismissReactionPicker(clearSelection: _reactionPickerClearSelectionOnDismiss);
       },
     );
   }
@@ -1353,6 +1510,20 @@ class _ChatPageState extends State<ChatPage> {
         maybePopSheet();
         unawaited(_showWallpaperPicker());
       },
+      isPinned: () {
+        final key = _openChatPinKey();
+        return key != null && _isChatPinned(key);
+      }(),
+      onTogglePin: () {
+        final id = group != null ? _asInt(group['id']) : _asInt(user?['id']);
+        if (id == null) return;
+        maybePopSheet();
+        unawaited(_toggleChatPin(
+          isGroup: group != null,
+          id: id,
+          name: _detailsName,
+        ));
+      },
       onEditName: group == null ? null : () => unawaited(_promptEditGroupName()),
       onEditDescription: group == null ? null : () => unawaited(_promptEditGroupDescription()),
       onChangePhoto: group == null ? null : () => unawaited(_pickGroupPhoto()),
@@ -1701,6 +1872,8 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void _clearMessageSelection() {
+    if (_selectedMessageIds.isEmpty && _reactionPickerMsg == null) return;
+    _dismissReactionPicker(clearSelection: false);
     if (_selectedMessageIds.isEmpty) return;
     setState(() => _selectedMessageIds.clear());
   }
@@ -3017,12 +3190,14 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       final name = (u['full_name'] ?? u['username'] ?? 'User').toString();
       if (_searchQuery.isNotEmpty && !name.toLowerCase().contains(_searchQuery)) continue;
       final unread = u['unread_count'];
+      final id = _asInt(u['id']) ?? 0;
       rows.add({
         'kind': 'user',
         'data': u,
         'name': name,
         'unread': unread is int ? unread : int.tryParse('$unread') ?? 0,
         'at': DateTime.tryParse('${u['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0),
+        'pinKey': ChatPinPrefs.chatKey(isGroup: false, id: id),
       });
     }
     for (final g in _groups) {
@@ -3030,15 +3205,26 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       final name = (g['name'] ?? 'Group').toString();
       if (_searchQuery.isNotEmpty && !name.toLowerCase().contains(_searchQuery)) continue;
       final unread = g['unread_count'];
+      final id = _asInt(g['id']) ?? 0;
       rows.add({
         'kind': 'group',
         'data': g,
         'name': name,
         'unread': unread is int ? unread : int.tryParse('$unread') ?? 0,
         'at': DateTime.tryParse('${g['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0),
+        'pinKey': ChatPinPrefs.chatKey(isGroup: true, id: id),
       });
     }
-    rows.sort((a, b) => (b['at'] as DateTime).compareTo(a['at'] as DateTime));
+    rows.sort((a, b) {
+      final pinA = _pinnedChatKeys.indexOf(a['pinKey'] as String);
+      final pinB = _pinnedChatKeys.indexOf(b['pinKey'] as String);
+      final aPinned = pinA >= 0;
+      final bPinned = pinB >= 0;
+      if (aPinned && bPinned) return pinA.compareTo(pinB);
+      if (aPinned) return -1;
+      if (bPinned) return 1;
+      return (b['at'] as DateTime).compareTo(a['at'] as DateTime);
+    });
     return rows;
   }
 
@@ -3081,11 +3267,23 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     : data['last_message'].toString())
                 : _chatPreviewText(Map<String, dynamic>.from(data)));
         final timeLabel = _formatChatListTime(data['last_message_at']);
+        final pinKey = row['pinKey'] as String;
+        final isPinned = _isChatPinned(pinKey);
 
         return Material(
           color: Colors.transparent,
           child: InkWell(
             onTap: () => isGroup ? _selectGroup(data) : _selectUser(data),
+            onLongPress: () => unawaited(_showInboxChatOptions(
+              isGroup: isGroup,
+              id: id,
+              name: name,
+            )),
+            onSecondaryTap: () => unawaited(_showInboxChatOptions(
+              isGroup: isGroup,
+              id: id,
+              name: name,
+            )),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
               color: isSelected ? AppTheme.primary.withValues(alpha: 0.14) : Colors.transparent,
@@ -3124,6 +3322,14 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                             ),
                             if (timeLabel.isNotEmpty) ...[
                               const SizedBox(width: 6),
+                              if (isPinned) ...[
+                                Icon(
+                                  Icons.push_pin_rounded,
+                                  size: 14,
+                                  color: AppTheme.textMuted.withValues(alpha: 0.85),
+                                ),
+                                const SizedBox(width: 4),
+                              ],
                               Text(
                                 timeLabel,
                                 style: TextStyle(
@@ -3531,6 +3737,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final headerUid = !isGroup && _selectedUser != null
         ? (_selectedUser['id'] is int ? _selectedUser['id'] as int : int.tryParse('${_selectedUser['id']}') ?? 0)
         : 0;
+    final openPinKey = _openChatPinKey();
+    final chatPinned = openPinKey != null && _isChatPinned(openPinKey);
+    final chatPinId = isGroup ? _asInt(_selectedGroup['id']) : _asInt(_selectedUser['id']);
 
     return PopScope(
       canPop: !_inMessageSelectionMode,
@@ -3661,6 +3870,21 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       visualDensity: VisualDensity.compact,
                     ),
                   ],
+                  if (!veryCompact && chatPinId != null)
+                    IconButton(
+                      tooltip: chatPinned ? 'Unpin chat' : 'Pin chat',
+                      onPressed: () => unawaited(_toggleChatPin(
+                        isGroup: isGroup,
+                        id: chatPinId,
+                        name: name.toString(),
+                      )),
+                      icon: Icon(
+                        chatPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+                        color: chatPinned ? AppTheme.primaryBright : const Color(0xFFE9EDEF),
+                        size: 22,
+                      ),
+                      visualDensity: VisualDensity.compact,
+                    ),
                   IconButton(
                     tooltip: 'Wallpaper',
                     onPressed: () => unawaited(_showWallpaperPicker()),
@@ -3701,8 +3925,20 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                         if (v == 'video') _startCall(CallKind.video);
                         if (v == 'audio') _startCall(CallKind.audio);
                         if (v == 'wallpaper') unawaited(_showWallpaperPicker());
+                        if (v == 'pin' && chatPinId != null) {
+                          unawaited(_toggleChatPin(
+                            isGroup: isGroup,
+                            id: chatPinId,
+                            name: name.toString(),
+                          ));
+                        }
                       },
                       itemBuilder: (_) => [
+                        if (chatPinId != null)
+                          PopupMenuItem(
+                            value: 'pin',
+                            child: Text(chatPinned ? 'Unpin chat' : 'Pin chat'),
+                          ),
                         const PopupMenuItem(value: 'wallpaper', child: Text('Wallpaper')),
                         if (!isGroup && PlatformCapabilities.voiceVideoCall) ...[
                           const PopupMenuItem(value: 'video', child: Text('Video call')),
@@ -3720,6 +3956,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
         Expanded(
           child: Stack(
+            key: _chatMessageStackKey,
             fit: StackFit.expand,
             children: [
               ChatWallpaperBackground(
@@ -3750,21 +3987,34 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       child: LayoutBuilder(
                         builder: (context, constraints) {
                           _chatThreadWidth = constraints.maxWidth;
+                          final picker = _buildReactionPickerLayer(constraints.biggest);
                           if (_visibleMessages.isEmpty && !_isLoadingMessages) {
-                            return _buildEmpty(_inChatQuery.isNotEmpty
-                                ? 'No messages match\n"\u201C$_inChatQuery\u201D"'
-                                : 'No messages yet\nStart the conversation!');
+                            return Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                _buildEmpty(_inChatQuery.isNotEmpty
+                                    ? 'No messages match\n"\u201C$_inChatQuery\u201D"'
+                                    : 'No messages yet\nStart the conversation!'),
+                                if (picker != null) picker,
+                              ],
+                            );
                           }
                           final showLoadHeader = _hasMoreMessages || _isLoadingMoreMessages || _isLoadingMessages;
-                          return ListView.builder(
-                            controller: _scrollController,
-                            padding: const EdgeInsets.fromLTRB(6, 8, 6, 6),
-                            itemCount: _visibleMessages.length + (showLoadHeader ? 1 : 0),
-                            itemBuilder: (_, i) {
-                              if (showLoadHeader && i == 0) return _buildLoadOlderHeader();
-                              final idx = i - (showLoadHeader ? 1 : 0);
-                              return _buildMessageBubble(_visibleMessages[idx]);
-                            },
+                          return Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              ListView.builder(
+                                controller: _scrollController,
+                                padding: const EdgeInsets.fromLTRB(6, 8, 6, 6),
+                                itemCount: _visibleMessages.length + (showLoadHeader ? 1 : 0),
+                                itemBuilder: (_, i) {
+                                  if (showLoadHeader && i == 0) return _buildLoadOlderHeader();
+                                  final idx = i - (showLoadHeader ? 1 : 0);
+                                  return _buildMessageBubble(_visibleMessages[idx]);
+                                },
+                              ),
+                              if (picker != null) picker,
+                            ],
                           );
                         },
                       ),

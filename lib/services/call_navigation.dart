@@ -30,15 +30,10 @@ class CallNavigation {
     if (_isCallRouteOpen(nav)) return;
 
     await nav.push<void>(
-      PageRouteBuilder<void>(
+      MaterialPageRoute<void>(
         settings: const RouteSettings(name: '/call'),
-        opaque: true,
-        barrierDismissible: false,
         fullscreenDialog: true,
-        pageBuilder: (_, __, ___) => const CallPage(),
-        transitionsBuilder: (_, animation, __, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
+        builder: (_) => const CallPage(),
       ),
     );
   }
