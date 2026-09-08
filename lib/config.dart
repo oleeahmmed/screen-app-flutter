@@ -220,4 +220,13 @@ class AppConfig {
 
   static String get pushRegisterUrl => '$apiBaseUrl/devices/push/register/';
   static String get pushUnregisterUrl => '$apiBaseUrl/devices/push/unregister/';
+
+  // Live monitor (company admin)
+  static String get liveMonitorUrl => '$apiBaseUrl/live-monitor/';
+  static String liveMonitorEmployeeUrl(int employeeUserId) =>
+      '$apiBaseUrl/live-monitor/employees/$employeeUserId/';
+  static String liveMonitorEmployeeScreenUrl(int employeeUserId, int screen) =>
+      '$apiBaseUrl/live-monitor/employees/$employeeUserId/screens/$screen/';
+  static String get videoGenerateUrl => '$apiBaseUrl/video/generate/';
+  static String videoStatusUrl(int jobId) => '$apiBaseUrl/video/status/$jobId/';
 }

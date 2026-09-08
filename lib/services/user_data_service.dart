@@ -126,9 +126,18 @@ class UserDataService {
   /// Company owner or admin — full company vault access.
   static Future<bool> isCompanyAdmin() async {
     final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('is_superuser') == true) return true;
     if (prefs.getBool('is_admin') == true) return true;
     final role = await getRole();
     return role == 'owner' || role == 'admin';
+  }
+
+  static Future<void> saveSuperuserFlag(bool isSuperuser) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('is_superuser', isSuperuser);
+    if (isSuperuser) {
+      await prefs.setBool('is_admin', true);
+    }
   }
 
   /// Matches backend Employee.is_manager_or_above (vault privileged).

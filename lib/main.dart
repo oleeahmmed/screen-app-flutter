@@ -41,6 +41,7 @@ import 'pages/peer2peer_page.dart';
 import 'pages/daily_report_tool_page.dart';
 import 'pages/activity_tool_page.dart';
 import 'pages/attendance_report_page.dart';
+import 'pages/live_monitor_page.dart';
 import 'pages/vault_hub_page.dart';
 import 'widgets/privacy_notice_dialog.dart';
 import 'widgets/closing_report_panel.dart';
@@ -203,6 +204,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenAttendanceReport = _openAttendanceReportTool;
     AppNavigation.instance.onOpenVault = _openVaultTool;
     AppNavigation.instance.onOpenProject = _openProjectTool;
+    AppNavigation.instance.onOpenLiveMonitor = _openLiveMonitor;
     AppNavigation.instance.onOpenP2P = _openP2P;
     AppNavigation.instance.onOpenSubmitReport = _openSubmitReport;
     AppNavigation.instance.onOpenNotifications = _openNotifications;
@@ -318,6 +320,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       await prefs.setString('user_id', data['user']['id']?.toString() ?? '');
       await prefs.setString('email', data['user']['email'] ?? '');
       await prefs.setString('full_name', data['user']['full_name'] ?? username);
+      await UserDataService.saveSuperuserFlag(data['user']['is_superuser'] == true);
     }
     if (data['employee'] != null) {
       final emp = data['employee'];
@@ -881,6 +884,34 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _openLiveMonitor() async {
+    if (!await UserDataService.isCompanyAdmin()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Live Monitor is only available to company admins.')),
+      );
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AppTabShell(
+          selectedIndex: AppNavigation.instance.selectedTabIndex,
+          unreadNotifs: _unreadNotifs,
+          onLogout: _handleLogout,
+          homeStyleBackground: true,
+          child: ToolPageScaffold(
+            scrollable: false,
+            useBackground: false,
+            showHeader: false,
+            onLogout: _handleLogout,
+            child: LiveMonitorPage(apiService: _apiService),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _openP2P() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -1064,6 +1095,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenActivity = null;
     AppNavigation.instance.onOpenVault = null;
     AppNavigation.instance.onOpenProject = null;
+    AppNavigation.instance.onOpenLiveMonitor = null;
     AppNavigation.instance.onOpenP2P = null;
     AppNavigation.instance.onOpenSubmitReport = null;
     AppNavigation.instance.onOpenNotifications = null;

@@ -113,6 +113,7 @@ class _LoginPageState extends State<LoginPage> {
       await prefs.setString('email', data['user']?['email'] ?? '');
       await prefs.setString('full_name', data['user']?['full_name'] ?? username);
       await prefs.setString('designation', data['employee']?['designation'] ?? '');
+      await UserDataService.saveSuperuserFlag(data['user']?['is_superuser'] == true);
       await UserDataService.saveEmployeeRoleFlags(
         data['employee'] is Map ? Map<String, dynamic>.from(data['employee'] as Map) : null,
       );

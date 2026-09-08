@@ -2,12 +2,31 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../services/app_navigation.dart';
+import '../services/user_data_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/platform_capabilities.dart';
 
-/// Vault · P2P · Submit Report shortcuts on the home dashboard.
-class HomeQuickActions extends StatelessWidget {
+/// Vault · Monitor · P2P · Submit Report shortcuts on the home dashboard.
+class HomeQuickActions extends StatefulWidget {
   const HomeQuickActions({super.key});
+
+  @override
+  State<HomeQuickActions> createState() => _HomeQuickActionsState();
+}
+
+class _HomeQuickActionsState extends State<HomeQuickActions> {
+  bool _isAdmin = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final admin = await UserDataService.isCompanyAdmin();
+    if (mounted) setState(() => _isAdmin = admin);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -19,6 +38,14 @@ class HomeQuickActions extends StatelessWidget {
         glow: AppTheme.featureVault,
         onTap: () => AppNavigation.instance.openVault(),
       ),
+      if (_isAdmin && PlatformCapabilities.screenshotMonitoring)
+        _QuickActionTile(
+          icon: LucideIcons.monitor,
+          label: 'Monitor',
+          gradient: const [Color(0xFF34D399), Color(0xFF059669)],
+          glow: AppTheme.success,
+          onTap: () => AppNavigation.instance.openLiveMonitor(),
+        ),
       if (PlatformCapabilities.peerToPeerFileTransfer)
         _QuickActionTile(
           icon: LucideIcons.arrowLeftRight,

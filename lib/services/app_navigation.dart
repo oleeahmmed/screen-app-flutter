@@ -32,6 +32,7 @@ class AppNavigation {
   Future<void> Function()? onOpenAttendanceReport;
   Future<void> Function()? onOpenVault;
   Future<void> Function()? onOpenProject;
+  Future<void> Function()? onOpenLiveMonitor;
   Future<void> Function()? onOpenP2P;
   Future<void> Function()? onOpenSubmitReport;
   Future<void> Function()? onOpenNotifications;
@@ -81,6 +82,7 @@ class AppNavigation {
 
   Future<void> openProject() async => await onOpenProject?.call();
 
+  Future<void> openLiveMonitor() async => await onOpenLiveMonitor?.call();
   Future<void> openP2P() async => await onOpenP2P?.call();
 
   Future<void> openSubmitReport() async => await onOpenSubmitReport?.call();

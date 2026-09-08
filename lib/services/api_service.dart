@@ -3305,7 +3305,16 @@ class ApiService {
           return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
         }
       }
-      return {'success': false, 'error': 'Failed to load vaults (${response.statusCode})'};
+      String err = 'Failed to load vaults (${response.statusCode})';
+      try {
+        final body = jsonDecode(response.body);
+        if (body is Map && body['error'] != null) {
+          err = body['error'].toString();
+        } else if (body is Map && body['detail'] != null) {
+          err = body['detail'].toString();
+        }
+      } catch (_) {}
+      return {'success': false, 'error': err};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -4018,6 +4027,117 @@ class ApiService {
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
+  }
+
+  // ─── Live monitor (company admin) ───
+
+  Future<Map<String, dynamic>> getLiveMonitor({
+    int? projectId,
+    int? projectDepartmentId,
+    bool includeProjects = true,
+  }) async {
+    try {
+      final q = <String, String>{
+        if (includeProjects) 'include_projects': '1',
+        if (projectId != null) 'project': '$projectId',
+        if (projectDepartmentId != null) 'project_department': '$projectDepartmentId',
+      };
+      final uri = Uri.parse(AppConfig.liveMonitorUrl).replace(queryParameters: q);
+      final response = await _authorizedGet(uri);
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+        }
+      }
+      return {'success': false, 'error': _apiErrorBody(response, 'Failed to load live monitor')};
+    } catch (e) {
+      return {'success': false, 'error': _networkErrorMessage(e)};
+    }
+  }
+
+  Future<Map<String, dynamic>> getLiveMonitorEmployee(int userId) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.liveMonitorEmployeeUrl(userId)));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+        }
+      }
+      return {'success': false, 'error': _apiErrorBody(response, 'Failed to load employee monitor')};
+    } catch (e) {
+      return {'success': false, 'error': _networkErrorMessage(e)};
+    }
+  }
+
+  Future<Map<String, dynamic>> getLiveMonitorEmployeeScreen(int userId, int screen) async {
+    try {
+      final response = await _authorizedGet(
+        Uri.parse(AppConfig.liveMonitorEmployeeScreenUrl(userId, screen)),
+      );
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+        }
+      }
+      return {'success': false, 'error': _apiErrorBody(response, 'No screenshot for this screen')};
+    } catch (e) {
+      return {'success': false, 'error': _networkErrorMessage(e)};
+    }
+  }
+
+  Future<Map<String, dynamic>> generateMonitorVideo({
+    required int userId,
+    required String startDate,
+    required String endDate,
+  }) async {
+    try {
+      final response = await _authorizedPost(
+        Uri.parse(AppConfig.videoGenerateUrl),
+        body: jsonEncode({
+          'user_id': userId,
+          'start_date': startDate,
+          'end_date': endDate,
+        }),
+      );
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+        }
+      }
+      return {'success': false, 'error': _apiErrorBody(response, 'Video generation failed')};
+    } catch (e) {
+      return {'success': false, 'error': _networkErrorMessage(e)};
+    }
+  }
+
+  Future<Map<String, dynamic>> getMonitorVideoStatus(int jobId) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.videoStatusUrl(jobId)));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+        }
+      }
+      return {'success': false, 'error': _apiErrorBody(response, 'Failed to check video status')};
+    } catch (e) {
+      return {'success': false, 'error': _networkErrorMessage(e)};
+    }
+  }
+
+  String _apiErrorBody(http.Response response, String fallback) {
+    try {
+      final body = jsonDecode(response.body);
+      if (body is Map) {
+        if (body['error'] != null) return body['error'].toString();
+        if (body['detail'] != null) return body['detail'].toString();
+      }
+    } catch (_) {}
+    return '$fallback (${response.statusCode})';
   }
 }
 
