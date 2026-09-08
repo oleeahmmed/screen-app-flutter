@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../theme/app_theme.dart';
+import '../utils/local_time.dart';
 import '../utils/platform_capabilities.dart';
 
 /// WhatsApp-style contact / group info (right pane or full-screen sheet).
@@ -165,7 +166,7 @@ class ChatDetailsPanel extends StatelessWidget {
                       : Column(
                           children: voiceItems.take(6).map((v) {
                             final url = (v['voice_url'] ?? '').toString();
-                            final when = (v['created_at'] ?? v['timestamp'] ?? '').toString();
+                            final when = formatChatDetailTime(v['created_at'] ?? v['timestamp']);
                             return ListTile(
                               dense: true,
                               leading: const Icon(Icons.mic_rounded, color: AppTheme.accent),

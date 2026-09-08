@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../services/chat_clipboard.dart';
 import '../theme/app_theme.dart';
 import '../utils/local_file_actions.dart';
+import '../utils/local_time.dart';
 import '../utils/platform_capabilities.dart';
 
 /// WhatsApp-style fullscreen chat image viewer with reply / forward / delete / save.
@@ -103,11 +104,9 @@ class _ChatImageViewerState extends State<ChatImageViewer> {
   }
 
   String get _time {
-    final raw = (_current['timestamp'] ?? _current['created_at'] ?? '').toString();
-    if (raw.isEmpty) return '';
-    final dt = DateTime.tryParse(raw);
-    if (dt == null) return raw;
-    final local = dt.toLocal();
+    final raw = _current['timestamp'] ?? _current['created_at'];
+    final local = parseApiDateTime(raw);
+    if (local == null) return '';
     final h = local.hour % 12 == 0 ? 12 : local.hour % 12;
     final m = local.minute.toString().padLeft(2, '0');
     final ap = local.hour >= 12 ? 'PM' : 'AM';

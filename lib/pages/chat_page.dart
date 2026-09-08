@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
+import '../utils/local_time.dart';
 import '../utils/chat_emojis.dart';
 import '../services/chat_notification_router.dart';
 import '../services/notification_service.dart';
@@ -644,36 +645,14 @@ class _ChatPageState extends State<ChatPage> {
   List<dynamic> _sortUsersByRecent(List<dynamic> users) {
     final list = List<dynamic>.from(users);
     list.sort((a, b) {
-      final at = DateTime.tryParse('${a['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0);
-      final bt = DateTime.tryParse('${b['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final at = parseApiDateTime(a['last_message_at']) ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = parseApiDateTime(b['last_message_at']) ?? DateTime.fromMillisecondsSinceEpoch(0);
       return bt.compareTo(at);
     });
     return list;
   }
 
-  String _formatChatListTime(dynamic iso) {
-    DateTime? dt;
-    if (iso is DateTime) {
-      dt = iso;
-    } else {
-      dt = DateTime.tryParse('${iso ?? ''}');
-    }
-    if (dt == null) return '';
-    // Epoch / missing timestamps (shown as 1/1/70) â€” hide instead of showing junk.
-    if (dt.year < 2000) return '';
-    final local = dt.toLocal();
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final day = DateTime(local.year, local.month, local.day);
-    final t = '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
-    if (day == today) return t;
-    if (day == today.subtract(const Duration(days: 1))) return 'Yesterday';
-    if (now.difference(local).inDays < 7) {
-      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      return days[local.weekday - 1];
-    }
-    return '${local.day}/${local.month}/${local.year % 100}';
-  }
+  String _formatChatListTime(dynamic iso) => formatChatListTime(iso);
 
   String _chatPreviewText(Map user) {
     final key = 'u:${user['id']}';
@@ -685,21 +664,7 @@ class _ChatPageState extends State<ChatPage> {
     return 'Tap to chat';
   }
 
-  String _formatLastSeen(dynamic iso) {
-    final dt = DateTime.tryParse('${iso ?? ''}');
-    if (dt == null) return 'offline';
-    final local = dt.toLocal();
-    final now = DateTime.now();
-    final diff = now.difference(local);
-    if (diff.inMinutes < 1) return 'last seen just now';
-    if (diff.inMinutes < 60) return 'last seen ${diff.inMinutes} min ago';
-    final today = DateTime(now.year, now.month, now.day);
-    final day = DateTime(local.year, local.month, local.day);
-    final t = '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
-    if (day == today) return 'last seen today at $t';
-    if (day == today.subtract(const Duration(days: 1))) return 'last seen yesterday at $t';
-    return 'last seen ${local.day}/${local.month} at $t';
-  }
+  String _formatLastSeen(dynamic iso) => formatLastSeen(iso);
 
   void _onRealtimeChatMessage(Map<String, dynamic> data) {
     if (!mounted) return;
@@ -1990,8 +1955,8 @@ class _ChatPageState extends State<ChatPage> {
         if ((existing['message'] ?? '').toString() != text) continue;
         final existingReply = _asInt(existing['reply_to'] ?? existing['reply_to_id']);
         if (replyTo != existingReply) continue;
-        final ts = DateTime.tryParse(
-          '${existing['created_at'] ?? existing['timestamp'] ?? ''}',
+        final ts = parseApiDateTime(
+          existing['created_at'] ?? existing['timestamp'],
         );
         if (ts != null && now.difference(ts).inSeconds > 30) continue;
         final next = [...list];
@@ -3133,13 +3098,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     }
   }
 
-  String _formatTime(String? ts) {
-    if (ts == null || ts.isEmpty) return '';
-    try {
-      final dt = DateTime.parse(ts);
-      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    } catch (_) { return ''; }
-  }
+  String _formatTime(String? ts) => formatChatBubbleTime(ts);
 
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   /// Logo â†’ dashboard (home tab). Used when immersive chrome hides the main top bar.
@@ -3320,7 +3279,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         'data': u,
         'name': name,
         'unread': unread is int ? unread : int.tryParse('$unread') ?? 0,
-        'at': DateTime.tryParse('${u['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0),
+        'at': parseApiDateTime(u['last_message_at']) ?? DateTime.fromMillisecondsSinceEpoch(0),
         'pinKey': ChatPinPrefs.chatKey(isGroup: false, id: id),
       });
     }
@@ -3335,7 +3294,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         'data': g,
         'name': name,
         'unread': unread is int ? unread : int.tryParse('$unread') ?? 0,
-        'at': DateTime.tryParse('${g['last_message_at'] ?? ''}') ?? DateTime.fromMillisecondsSinceEpoch(0),
+        'at': parseApiDateTime(g['last_message_at']) ?? DateTime.fromMillisecondsSinceEpoch(0),
         'pinKey': ChatPinPrefs.chatKey(isGroup: true, id: id),
       });
     }
@@ -5718,7 +5677,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   void _showMessageInfo(dynamic msg) {
     if (msg is! Map) return;
     final type = (msg['message_type'] ?? 'text').toString();
-    final when = (msg['created_at'] ?? msg['timestamp'] ?? '').toString();
+    final when = formatChatDetailTime(msg['created_at'] ?? msg['timestamp']);
     final sender = msg['is_own'] == true
         ? 'You'
         : (msg['sender_name'] ?? msg['sender_full_name'] ?? msg['sender_username'] ?? 'User').toString();
@@ -6242,7 +6201,7 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
         _settingsCard([
           _infoRow('Group Name', group['name'] ?? ''),
           _infoRow('Description', group['description'] ?? 'No description'),
-          _infoRow('Created', group['created_at'] ?? ''),
+          _infoRow('Created', formatChatDetailTime(group['created_at'])),
           if (group['project_name'] != null)
             _infoRow('Project', group['project_name']),
         ], action: _canManage
