@@ -42,6 +42,8 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
             // SDK lives on NTFS (noexec) so llvm-strip cannot run.
             ndk {
                 debugSymbolLevel = "NONE"
