@@ -1,15 +1,17 @@
-// tasks_page.dart — My Task (dashboard glass theme, simple list)
+// tasks_page.dart — My Tasks (WhatsApp-style premium list, chat theme)
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
 import '../utils/responsive.dart';
 import '../utils/task_helpers.dart';
+import '../widgets/app_logo.dart';
 import '../widgets/create_task_sheet.dart';
 import '../widgets/my_task_card.dart';
 
@@ -360,11 +362,19 @@ class _TasksPageState extends State<TasksPage> {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: selected
-              ? AppTheme.loginInsetDecoration(borderRadius: 12, emphasized: true)
-              : AppTheme.loginInsetDecoration(borderRadius: 12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppTheme.primary.withValues(alpha: 0.14)
+                : Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected
+                  ? AppTheme.primaryBright.withValues(alpha: 0.35)
+                  : Colors.white.withValues(alpha: 0.08),
+            ),
+          ),
           child: Row(
             children: [
               Expanded(
@@ -373,7 +383,7 @@ class _TasksPageState extends State<TasksPage> {
                   style: TextStyle(
                     color: selected ? AppTheme.textPrimary : AppTheme.textMuted,
                     fontWeight: FontWeight.w600,
-                    fontSize: 13,
+                    fontSize: 14,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -389,17 +399,19 @@ class _TasksPageState extends State<TasksPage> {
               ),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: selected ? 0.14 : 0.08),
-                  borderRadius: BorderRadius.circular(8),
+                  color: selected ? AppTheme.accent : Colors.white.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(11),
                 ),
+                alignment: Alignment.center,
                 child: Text(
                   '$count',
                   style: TextStyle(
-                    color: selected ? AppTheme.accent : AppTheme.textMuted,
+                    color: selected ? const Color(0xFF0A1628) : AppTheme.textMuted,
                     fontSize: 11,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
@@ -410,7 +422,12 @@ class _TasksPageState extends State<TasksPage> {
     );
   }
 
-  Widget _buildTaskCard(dynamic task, {required double width, required bool compact}) {
+  Widget _buildTaskCard(
+    dynamic task, {
+    required double width,
+    required bool compact,
+    required bool inboxStyle,
+  }) {
     final meta = _metaForTask(task);
     return SizedBox(
       width: width,
@@ -420,15 +437,35 @@ class _TasksPageState extends State<TasksPage> {
         onToggleComplete: () => _toggleTask(task),
         onUpdated: () => _load(silent: true),
         compactGrid: compact,
+        inboxStyle: inboxStyle,
         stages: meta.stages,
         employees: meta.employees,
       ),
     );
   }
 
+  Widget _logoButton() {
+    return Tooltip(
+      message: 'Dashboard',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => AppNavigation.instance.goHome(),
+          borderRadius: BorderRadius.circular(10),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: AppLogo(size: 30, showBorder: false),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final pad = Responsive.pagePadding(context);
+    const pageBg = Color(0xFF0B141A);
+    final immersive = PlatformCapabilities.immersiveChatChrome;
+    const sidePad = 12.0;
     final displayTasks = _filteredTasks;
     final selectedProjectName = () {
       if (_selectedProjectId == null) return null;
@@ -441,148 +478,241 @@ class _TasksPageState extends State<TasksPage> {
     }();
     final stages = _stagesForSelectedProject();
     final stageFilterActive = _unstagedSelected || _selectedStageId != null;
-    final mobile = PlatformCapabilities.immersiveChatChrome || Responsive.isMobile(context);
+    final useInboxList = immersive || Responsive.isMobile(context);
+    final bottomInset = immersive
+        ? MediaQuery.paddingOf(context).bottom
+        : Responsive.bottomNavInset(context);
+    final fabBottom = bottomInset + 12;
 
-    final bottomSpace = Responsive.bottomNavInset(context) + 72;
-
-    return Stack(
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(pad, 6, pad, 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    return ColoredBox(
+      color: pageBg,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: bottomInset),
+        child: SafeArea(
+          top: immersive,
+          bottom: false,
+          child: Stack(
             children: [
-              _buildSearchBox(),
-              const SizedBox(height: 6),
-              _statusSegment(),
-              if (selectedProjectName != null) ...[
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: InputChip(
-                    label: Text(selectedProjectName),
-                    avatar: const Icon(Icons.folder_outlined, size: 16),
-                    onDeleted: () => setState(() {
-                      _selectedProjectId = null;
-                      _clearStageFilter();
-                    }),
-                    deleteIconColor: AppTheme.textMuted,
-                    backgroundColor: AppTheme.primary.withValues(alpha: 0.14),
-                    side: BorderSide(color: AppTheme.primaryBright.withValues(alpha: 0.3)),
-                    labelStyle: const TextStyle(
-                      color: AppTheme.primaryBright,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    visualDensity: VisualDensity.compact,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildHeader(immersive, sidePad),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(sidePad, 4, sidePad, 8),
+                    child: _buildSearchBox(),
                   ),
-                ),
-                if (stages.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  _stageChips(stages),
-                ],
-              ],
-              const SizedBox(height: 8),
-              Expanded(
-                child: _loading
-                    ? const Center(
-                        child: CircularProgressIndicator(color: AppTheme.primaryBright),
-                      )
-                    : RefreshIndicator(
-                        color: AppTheme.primaryBright,
-                        backgroundColor: AppTheme.surface,
-                        onRefresh: () => _load(),
-                        child: displayTasks.isEmpty
-                            ? ListView(
-                                physics: const AlwaysScrollableScrollPhysics(),
-                                padding: EdgeInsets.only(bottom: bottomSpace),
-                                children: [
-                                  SizedBox(height: MediaQuery.sizeOf(context).height * 0.12),
-                                  _buildEmptyState(stageFilterActive: stageFilterActive),
-                                ],
-                              )
-                            : LayoutBuilder(
-                                builder: (context, constraints) {
-                                  const gap = 10.0;
-                                  final available = constraints.maxWidth.clamp(0.0, double.infinity);
-                                  final cols = mobile ? 1 : Responsive.taskGridColumnsForWidth(available);
-                                  final itemWidth = cols == 1
-                                      ? available
-                                      : (((available - gap * (cols - 1)) / cols) - 0.5)
-                                          .clamp(120.0, available);
-                                  final compact = cols > 1;
-
-                                  if (mobile) {
-                                    return ListView.separated(
-                                      physics: const AlwaysScrollableScrollPhysics(),
-                                      padding: EdgeInsets.only(bottom: bottomSpace),
-                                      itemCount: displayTasks.length,
-                                      separatorBuilder: (_, _) => const SizedBox(height: 8),
-                                      itemBuilder: (_, i) => _buildTaskCard(
-                                        displayTasks[i],
-                                        width: itemWidth,
-                                        compact: false,
-                                      ),
-                                    );
-                                  }
-
-                                  return SingleChildScrollView(
-                                    physics: const AlwaysScrollableScrollPhysics(),
-                                    padding: EdgeInsets.only(bottom: bottomSpace),
-                                    child: Wrap(
-                                      spacing: gap,
-                                      runSpacing: gap,
-                                      children: [
-                                        for (final task in displayTasks)
-                                          _buildTaskCard(
-                                            task,
-                                            width: itemWidth,
-                                            compact: compact,
-                                          ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: sidePad),
+                    child: _statusChips(),
+                  ),
+                  if (selectedProjectName != null) ...[
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: sidePad),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: InputChip(
+                          label: Text(selectedProjectName),
+                          avatar: const Icon(Icons.folder_outlined, size: 16, color: AppTheme.primaryBright),
+                          onDeleted: () => setState(() {
+                            _selectedProjectId = null;
+                            _clearStageFilter();
+                          }),
+                          deleteIconColor: AppTheme.textMuted,
+                          backgroundColor: AppTheme.primary.withValues(alpha: 0.14),
+                          side: BorderSide(color: AppTheme.primaryBright.withValues(alpha: 0.3)),
+                          labelStyle: const TextStyle(
+                            color: AppTheme.primaryBright,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
                       ),
+                    ),
+                    if (stages.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: sidePad),
+                        child: _stageChips(stages),
+                      ),
+                    ],
+                  ],
+                  const SizedBox(height: 4),
+                  Expanded(
+                    child: _loading
+                        ? const Center(
+                            child: CircularProgressIndicator(color: AppTheme.primaryBright),
+                          )
+                        : RefreshIndicator(
+                            color: AppTheme.primaryBright,
+                            backgroundColor: const Color(0xFF1F2C34),
+                            onRefresh: () => _load(),
+                            child: displayTasks.isEmpty
+                                ? ListView(
+                                    physics: const AlwaysScrollableScrollPhysics(),
+                                    padding: EdgeInsets.only(bottom: fabBottom + 56),
+                                    children: [
+                                      SizedBox(height: MediaQuery.sizeOf(context).height * 0.12),
+                                      _buildEmptyState(stageFilterActive: stageFilterActive),
+                                    ],
+                                  )
+                                : LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      if (useInboxList) {
+                                        return ListView.separated(
+                                          physics: const AlwaysScrollableScrollPhysics(),
+                                          padding: EdgeInsets.fromLTRB(
+                                            immersive ? 4 : sidePad,
+                                            0,
+                                            immersive ? 4 : sidePad,
+                                            fabBottom + 56,
+                                          ),
+                                          itemCount: displayTasks.length,
+                                          separatorBuilder: (_, __) => Divider(
+                                            height: 1,
+                                            indent: 52,
+                                            color: Colors.white.withValues(alpha: 0.06),
+                                          ),
+                                          itemBuilder: (_, i) => _buildTaskCard(
+                                            displayTasks[i],
+                                            width: constraints.maxWidth,
+                                            compact: false,
+                                            inboxStyle: true,
+                                          ),
+                                        );
+                                      }
+
+                                      const gap = 10.0;
+                                      final available = constraints.maxWidth.clamp(0.0, double.infinity);
+                                      final cols = Responsive.taskGridColumnsForWidth(available);
+                                      final itemWidth = cols == 1
+                                          ? available
+                                          : (((available - gap * (cols - 1)) / cols) - 0.5)
+                                              .clamp(120.0, available);
+                                      final compact = cols > 1;
+
+                                      return SingleChildScrollView(
+                                        physics: const AlwaysScrollableScrollPhysics(),
+                                        padding: EdgeInsets.fromLTRB(
+                                          sidePad,
+                                          0,
+                                          sidePad,
+                                          fabBottom + 56,
+                                        ),
+                                        child: Wrap(
+                                          spacing: gap,
+                                          runSpacing: gap,
+                                          children: [
+                                            for (final task in displayTasks)
+                                              _buildTaskCard(
+                                                task,
+                                                width: itemWidth,
+                                                compact: compact,
+                                                inboxStyle: false,
+                                              ),
+                                          ],
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                  ),
+                ],
               ),
+              if (!immersive)
+                Positioned(
+                  right: sidePad,
+                  bottom: fabBottom,
+                  child: _fab(),
+                ),
             ],
           ),
         ),
-        Positioned(
-          right: pad,
-          bottom: Responsive.bottomNavInset(context) + 12,
-          child: Material(
-            color: Colors.transparent,
-            elevation: 0,
-            child: InkWell(
-              onTap: _openCreateTask,
-              borderRadius: BorderRadius.circular(16),
-              child: Ink(
-                width: 54,
-                height: 54,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFF5B9CFF), Color(0xFF3B82F6)],
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF3B82F6).withValues(alpha: 0.4),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: const Icon(Icons.add_rounded, color: Colors.white, size: 28),
+      ),
+    );
+  }
+
+  Widget _buildHeader(bool immersive, double sidePad) {
+    final projectActive = _selectedProjectId != null;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        immersive ? 4 : sidePad,
+        immersive ? 4 : 8,
+        immersive ? 4 : 8,
+        4,
+      ),
+      child: Row(
+        children: [
+          if (immersive)
+            IconButton(
+              tooltip: 'Home',
+              onPressed: () => AppNavigation.instance.goHome(),
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AppTheme.textPrimary),
+            ),
+          const Expanded(
+            child: Text(
+              'Tasks',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.3,
               ),
             ),
           ),
+          IconButton(
+            tooltip: 'Filter by project',
+            onPressed: _openFiltersSheet,
+            visualDensity: VisualDensity.compact,
+            icon: Icon(
+              Icons.folder_outlined,
+              size: 22,
+              color: projectActive ? AppTheme.primaryBright : AppTheme.textMuted,
+            ),
+          ),
+          if (immersive)
+            IconButton(
+              tooltip: 'New task',
+              onPressed: _openCreateTask,
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.add_rounded, color: AppTheme.primaryBright, size: 26),
+            ),
+          if (immersive) _logoButton(),
+        ],
+      ),
+    );
+  }
+
+  Widget _fab() {
+    return Material(
+      color: Colors.transparent,
+      elevation: 6,
+      shadowColor: AppTheme.accent.withValues(alpha: 0.45),
+      shape: const CircleBorder(),
+      child: InkWell(
+        onTap: _openCreateTask,
+        customBorder: const CircleBorder(),
+        child: Ink(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: AppTheme.accent,
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.accent.withValues(alpha: 0.35),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: const Icon(Icons.add_rounded, color: Color(0xFF0A1628), size: 28),
         ),
-      ],
+      ),
     );
   }
 
@@ -701,177 +831,103 @@ class _TasksPageState extends State<TasksPage> {
   }
 
   Widget _buildSearchBox() {
-    final hasQuery = _searchQuery.trim().isNotEmpty;
-    return Container(
-      height: 42,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Colors.white.withValues(alpha: 0.07),
-            Colors.white.withValues(alpha: 0.03),
-          ],
+    return TextField(
+      controller: _searchCtrl,
+      onChanged: (v) => setState(() => _searchQuery = v),
+      style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+      decoration: InputDecoration(
+        hintText: 'Search\u2026',
+        hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 14),
+        prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9), size: 20),
+        prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+        isDense: true,
+        filled: true,
+        fillColor: Colors.white.withValues(alpha: 0.07),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(22),
+          borderSide: BorderSide.none,
         ),
-        border: Border.all(
-          color: hasQuery
-              ? AppTheme.primaryBright.withValues(alpha: 0.45)
-              : AppTheme.primaryBright.withValues(alpha: 0.18),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(22),
+          borderSide: BorderSide.none,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.primary.withValues(alpha: hasQuery ? 0.18 : 0.08),
-            blurRadius: hasQuery ? 14 : 8,
-            offset: const Offset(0, 3),
-          ),
-        ],
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(22),
+          borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.45)),
+        ),
+        suffixIcon: _searchQuery.trim().isNotEmpty
+            ? IconButton(
+                tooltip: 'Clear',
+                onPressed: () {
+                  _searchCtrl.clear();
+                  setState(() => _searchQuery = '');
+                },
+                icon: Icon(Icons.close_rounded, size: 18, color: AppTheme.textMuted.withValues(alpha: 0.9)),
+              )
+            : null,
       ),
-      child: Row(
-        children: [
-          const SizedBox(width: 14),
-          Container(
-            width: 26,
-            height: 26,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: (hasQuery ? AppTheme.primaryBright : AppTheme.primary)
-                  .withValues(alpha: 0.16),
-            ),
-            child: Icon(
-              Icons.search_rounded,
-              size: 15,
-              color: hasQuery ? AppTheme.primaryBright : AppTheme.textMuted,
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: TextField(
-              controller: _searchCtrl,
-              onChanged: (v) => setState(() => _searchQuery = v),
-              style: const TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 13.5,
-                fontWeight: FontWeight.w500,
-              ),
-              cursorColor: AppTheme.primaryBright,
-              decoration: InputDecoration(
-                isDense: true,
-                border: InputBorder.none,
-                hintText: 'Search tasks…',
-                hintStyle: TextStyle(
-                  color: AppTheme.textMuted.withValues(alpha: 0.62),
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w500,
-                ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
-              ),
-              textInputAction: TextInputAction.search,
-            ),
-          ),
-          if (hasQuery)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () {
-                    _searchCtrl.clear();
-                    setState(() => _searchQuery = '');
-                  },
-                  customBorder: const CircleBorder(),
-                  child: Ink(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white.withValues(alpha: 0.08),
-                    ),
-                    child: Icon(
-                      Icons.close_rounded,
-                      size: 15,
-                      color: AppTheme.textMuted.withValues(alpha: 0.95),
-                    ),
-                  ),
-                ),
-              ),
-            )
-          else
-            const SizedBox(width: 14),
-        ],
-      ),
+      textInputAction: TextInputAction.search,
     );
   }
 
-  Widget _statusSegment() {
-    final projectActive = _selectedProjectId != null;
-
-    Widget tab(String label, String value, int count) {
+  Widget _statusChips() {
+    Widget chip(String label, String value, int count) {
       final active = _filter == value;
-      return Expanded(
+      return Material(
+        color: Colors.transparent,
         child: InkWell(
           onTap: () => setState(() => _filter = value),
-          borderRadius: BorderRadius.circular(8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  '$label ($count)',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: active ? AppTheme.primaryBright : AppTheme.textMuted,
-                    fontSize: 13,
-                    fontWeight: active ? FontWeight.w700 : FontWeight.w600,
-                  ),
-                ),
+          borderRadius: BorderRadius.circular(20),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              color: active
+                  ? AppTheme.primary.withValues(alpha: 0.22)
+                  : Colors.white.withValues(alpha: 0.05),
+              border: Border.all(
+                color: active
+                    ? AppTheme.primaryBright.withValues(alpha: 0.4)
+                    : Colors.white.withValues(alpha: 0.08),
               ),
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                height: 2.5,
-                margin: const EdgeInsets.symmetric(horizontal: 6),
-                decoration: BoxDecoration(
-                  color: active ? AppTheme.primaryBright : Colors.transparent,
-                  borderRadius: BorderRadius.circular(2),
-                ),
+            ),
+            child: Text(
+              '$label ($count)',
+              style: TextStyle(
+                color: active ? AppTheme.primaryBright : AppTheme.textMuted,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
               ),
-            ],
+            ),
           ),
         ),
       );
     }
 
-    return Row(
-      children: [
-        tab('To do', 'pending', _pendingCount),
-        tab('Done', 'completed', _completedCount),
-        tab('All', 'all', _searchScopedTasks.length),
-        const SizedBox(width: 4),
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: _openFiltersSheet,
-            borderRadius: BorderRadius.circular(10),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 4, 8),
-              child: Icon(
-                Icons.folder_outlined,
-                size: 22,
-                color: projectActive ? AppTheme.accent : AppTheme.textMuted,
-              ),
-            ),
-          ),
-        ),
-      ],
+    return SizedBox(
+      height: 38,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          chip('To do', 'pending', _pendingCount),
+          const SizedBox(width: 8),
+          chip('Done', 'completed', _completedCount),
+          const SizedBox(width: 8),
+          chip('All', 'all', _searchScopedTasks.length),
+        ],
+      ),
     );
   }
 
   Future<void> _openFiltersSheet() async {
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      barrierColor: AppTheme.modalBarrierColor,
+      backgroundColor: const Color(0xFF1F2C34),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       isScrollControlled: true,
       builder: (ctx) {
         return StatefulBuilder(
@@ -881,91 +937,89 @@ class _TasksPageState extends State<TasksPage> {
               setModal(() {});
             }
 
-            return AppTheme.glassBlur(
-              child: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Center(
-                        child: Container(
-                          width: 36,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Colors.white24,
-                            borderRadius: BorderRadius.circular(2),
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Filter by project',
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Then pick a stage from that project',
+                      style: TextStyle(
+                        color: AppTheme.textMuted.withValues(alpha: 0.9),
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.sizeOf(ctx).height * 0.48,
+                      ),
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: [
+                          _projectFilterTile(
+                            ctx,
+                            label: 'All Projects',
+                            count: _countInProject(null),
+                            pct: _overallPct,
+                            selected: _selectedProjectId == null,
+                            onTap: () {
+                              apply(() {
+                                _selectedProjectId = null;
+                                _clearStageFilter();
+                              });
+                              Navigator.pop(ctx);
+                            },
                           ),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      const Text(
-                        'Filter by project',
-                        style: TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Then pick a stage from that project',
-                        style: TextStyle(
-                          color: AppTheme.textMuted.withValues(alpha: 0.9),
-                          fontSize: 12,
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: MediaQuery.sizeOf(ctx).height * 0.48,
-                        ),
-                        child: ListView(
-                          shrinkWrap: true,
-                          children: [
-                            _projectFilterTile(
-                              ctx,
-                              label: 'All Projects',
-                              count: _countInProject(null),
-                              pct: _overallPct,
-                              selected: _selectedProjectId == null,
-                              onTap: () {
-                                apply(() {
-                                  _selectedProjectId = null;
-                                  _clearStageFilter();
-                                });
-                                Navigator.pop(ctx);
-                              },
-                            ),
-                            const SizedBox(height: 6),
-                            ..._projects.map(
-                              (p) => Padding(
-                                padding: const EdgeInsets.only(bottom: 6),
-                                child: _projectFilterTile(
-                                  ctx,
-                                  label: p['name']?.toString() ?? 'Project',
-                                  count: _countInProject(_projectId(p)),
-                                  pct: _projectPct(p),
-                                  selected: _selectedProjectId == _projectId(p),
-                                  onTap: () {
-                                    apply(() {
-                                      final next = _projectId(p);
-                                      if (_selectedProjectId != next) {
-                                        _clearStageFilter();
-                                      }
-                                      _selectedProjectId = next;
-                                    });
-                                    Navigator.pop(ctx);
-                                  },
-                                ),
+                          const SizedBox(height: 6),
+                          ..._projects.map(
+                            (p) => Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: _projectFilterTile(
+                                ctx,
+                                label: p['name']?.toString() ?? 'Project',
+                                count: _countInProject(_projectId(p)),
+                                pct: _projectPct(p),
+                                selected: _selectedProjectId == _projectId(p),
+                                onTap: () {
+                                  apply(() {
+                                    final next = _projectId(p);
+                                    if (_selectedProjectId != next) {
+                                      _clearStageFilter();
+                                    }
+                                    _selectedProjectId = next;
+                                  });
+                                  Navigator.pop(ctx);
+                                },
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             );
@@ -989,14 +1043,14 @@ class _TasksPageState extends State<TasksPage> {
               height: 64,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppTheme.accent.withValues(alpha: 0.12),
-                border: Border.all(color: AppTheme.accent.withValues(alpha: 0.25)),
+                color: AppTheme.primary.withValues(alpha: 0.14),
+                border: Border.all(color: AppTheme.primaryBright.withValues(alpha: 0.25)),
               ),
               child: Icon(
                 searching
                     ? Icons.search_off_rounded
                     : (filteredAway ? Icons.filter_alt_off_rounded : Icons.assignment_outlined),
-                color: AppTheme.accent,
+                color: AppTheme.primaryBright,
                 size: 30,
               ),
             ),

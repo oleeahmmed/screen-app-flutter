@@ -18,6 +18,7 @@ import 'services/screenshot_service.dart';
 import 'services/app_filter_prefs.dart';
 import 'services/notification_service.dart';
 import 'services/call_service.dart';
+import 'services/chat_p2p_file_service.dart';
 import 'services/call_navigation.dart';
 import 'services/call_notification.dart';
 import 'services/chat_notification.dart';
@@ -147,11 +148,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           onLogout: _handleLogout,
         );
       case 1:
-        _tasksPage ??= SafeArea(
-          top: false,
-          bottom: false,
-          child: TasksPage(apiService: _apiService),
-        );
+        _tasksPage ??= TasksPage(apiService: _apiService);
       case 2:
         _chatPage ??= ChatPage(
           apiService: _apiService,
@@ -503,6 +500,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     if (uid == null) return;
     await CallNotification.flushPendingDecline();
     CallService.instance.bind(
+      notificationService: _notificationService,
+      apiService: _apiService,
+      myUserId: uid,
+    );
+    ChatP2pFileService.instance.bind(
       notificationService: _notificationService,
       apiService: _apiService,
       myUserId: uid,
@@ -1021,16 +1023,18 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     _syncNavState();
 
-    final immersiveChat = PlatformCapabilities.immersiveChatChrome &&
-        _currentIndex == AppNavigation.tabChat;
+    final immersiveChrome = PlatformCapabilities.immersiveChatChrome &&
+        (_currentIndex == AppNavigation.tabChat ||
+            _currentIndex == AppNavigation.tabMyTasks ||
+            _currentIndex == AppNavigation.tabVault);
 
     return AppTabShell(
       selectedIndex: _currentIndex,
       unreadNotifs: _unreadNotifs,
       onLogout: _handleLogout,
-      showTopBar: !immersiveChat,
-      showBottomNav: !immersiveChat,
-      homeStyleBackground: immersiveChat,
+      showTopBar: !immersiveChrome,
+      showBottomNav: !immersiveChrome,
+      homeStyleBackground: immersiveChrome,
       child: IndexedStack(
         index: _currentIndex,
         children: _mainStackChildren(),

@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_session.dart';
@@ -250,21 +251,21 @@ class _DashboardPageState extends State<DashboardPage> {
                       : 'Work timer started · app window monitoring')
                   : 'Work timer started · screen monitoring active',
               type: AppToastType.success,
-              icon: Icons.how_to_reg_rounded,
+              icon: LucideIcons.userCheck,
             );
           } else if (PlatformCapabilities.screenshotMonitoring) {
             _showAttendanceToast(
               title: 'Clocked In',
               message: 'Enable screenshots under Me → Profile',
               type: AppToastType.warning,
-              icon: Icons.how_to_reg_rounded,
+              icon: LucideIcons.userCheck,
             );
           } else {
             _showAttendanceToast(
               title: 'Clocked In',
               message: 'Work timer started',
               type: AppToastType.success,
-              icon: Icons.how_to_reg_rounded,
+              icon: LucideIcons.userCheck,
             );
           }
         } else {
@@ -706,9 +707,9 @@ class _DashboardPageState extends State<DashboardPage> {
                           ),
                         ),
                         child: const Icon(
-                          Icons.how_to_reg_rounded,
+                          LucideIcons.userCheck,
                           color: Colors.white,
-                          size: 24,
+                          size: 22,
                         ),
                       ),
                       const SizedBox(width: 14),

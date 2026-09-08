@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/user_data_service.dart';
 import '../theme/app_theme.dart';
+import '../theme/vault_theme.dart';
 import '../utils/app_toast.dart';
 import 'vault/vault_category_access_sheet.dart';
 import 'vault/vault_entry_detail_sheet.dart';
@@ -461,8 +462,8 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
 
     return Material(
       color: selected
-          ? AppTheme.featureVault.withValues(alpha: 0.28)
-          : Colors.white.withValues(alpha: 0.05),
+          ? VaultTheme.violet.withValues(alpha: 0.22)
+          : Colors.white.withValues(alpha: 0.04),
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         onTap: () => _selectCategory(id),
@@ -474,8 +475,8 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
               color: selected
-                  ? AppTheme.featureVault.withValues(alpha: 0.55)
-                  : Colors.white.withValues(alpha: 0.1),
+                  ? VaultTheme.violet.withValues(alpha: 0.45)
+                  : Colors.white.withValues(alpha: 0.08),
             ),
           ),
           child: Row(
@@ -515,27 +516,25 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
         : (url.isNotEmpty ? url : 'Tap to view credentials');
 
     return Material(
-      color: Colors.white.withValues(alpha: 0.04),
+      color: Colors.transparent,
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         onTap: () => _openEntryDetail(e),
         borderRadius: BorderRadius.circular(12),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            border: Border(
+              bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+            ),
           ),
           child: Row(
             children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: AppTheme.featureVault.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(vaultEntryIcon(e), size: 18, color: AppTheme.featureVault),
+              VaultTheme.iconBox(
+                icon: vaultEntryIcon(e),
+                color: VaultTheme.isCreatedByMe(e, _currentUserId) ? VaultTheme.violet : VaultTheme.sharedBlue,
+                size: 44,
+                iconSize: 20,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -544,9 +543,11 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
                   children: [
                     Text(
                       name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w600,
                         fontSize: 14,
                       ),
                     ),
@@ -563,6 +564,11 @@ class _ProjectVaultTabState extends State<ProjectVaultTab> {
                   ],
                 ),
               ),
+              if (VaultTheme.isCreatedByMe(e, _currentUserId))
+                VaultTheme.createdByBadge()
+              else if (_currentUserId != null)
+                VaultTheme.sharedBadge(),
+              const SizedBox(width: 4),
               const Icon(Icons.chevron_right, size: 18, color: AppTheme.textMuted),
             ],
           ),

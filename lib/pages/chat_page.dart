@@ -18,6 +18,8 @@ import '../services/chat_notification_router.dart';
 import '../services/notification_service.dart';
 import '../services/call_service.dart';
 import '../services/call_navigation.dart';
+import '../services/chat_p2p_file_service.dart';
+import '../services/chat_p2p_tokens.dart';
 import '../services/user_data_service.dart';
 import '../services/voice_recorder_service.dart';
 import '../services/app_navigation.dart';
@@ -37,6 +39,8 @@ import '../widgets/chat_image_viewer.dart';
 import '../widgets/empty_state.dart';
 import '../utils/responsive.dart';
 import '../utils/platform_capabilities.dart';
+import '../utils/local_file_actions.dart';
+import '../widgets/chat_p2p_transfer_sheet.dart';
 
 int? _chatInt(dynamic v) {
   if (v == null) return null;
@@ -86,6 +90,8 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription<Map<String, dynamic>>? _chatMsgSub;
   StreamSubscription<Map<String, dynamic>>? _reactionSub;
   StreamSubscription<CallPhase>? _callPhaseSub;
+  StreamSubscription<ChatP2pTransferState>? _p2pSub;
+  ChatP2pTransferState _p2pState = const ChatP2pTransferState();
   bool _isRecording = false;
   int _recordSeconds = 0;
   Timer? _recordTimer;
@@ -213,6 +219,9 @@ class _ChatPageState extends State<ChatPage> {
       if (phase == CallPhase.incoming && mounted) {
         CallNavigation.openCallPageIfNeeded();
       }
+    });
+    _p2pSub = ChatP2pFileService.instance.stateStream.listen((s) {
+      if (mounted) setState(() => _p2pState = s);
     });
     _scrollController.addListener(_onChatScroll);
   }
@@ -521,7 +530,15 @@ class _ChatPageState extends State<ChatPage> {
       apiService: widget.apiService,
       myUserId: id,
     );
+    ChatP2pFileService.instance.bind(
+      notificationService: widget.notificationService!,
+      apiService: widget.apiService,
+      myUserId: id,
+    );
   }
+
+  bool _isHiddenSystemChatMessage(String? text) =>
+      CallService.isHiddenCallChatMessage(text) || ChatP2pTokens.isHiddenMessage(text);
 
   @override
   void dispose() {
@@ -540,6 +557,7 @@ class _ChatPageState extends State<ChatPage> {
       AppNavigation.instance.onPendingChatOpen = null;
     }
     _callPhaseSub?.cancel();
+    _p2pSub?.cancel();
     _recordTimer?.cancel();
     _recProcess?.kill();
     _voiceRecorder?.dispose();
@@ -695,7 +713,7 @@ class _ChatPageState extends State<ChatPage> {
       final senderId = _asInt(data['sender_id']);
       final isOwn = _myUserId != null && senderId == _myUserId;
       final text = (data['message'] ?? '').toString();
-      if (CallService.isHiddenCallChatMessage(text)) return;
+      if (_isHiddenSystemChatMessage(text)) return;
 
       final preview = text.trim().isEmpty
           ? _chatPreviewText({'last_message': data['message_type']})
@@ -735,7 +753,7 @@ class _ChatPageState extends State<ChatPage> {
     final senderId = _asInt(data['sender_id']);
     final receiverId = _asInt(data['receiver_id']);
     final text = (data['message'] ?? '').toString();
-    if (CallService.isHiddenCallChatMessage(text)) return;
+    if (_isHiddenSystemChatMessage(text)) return;
 
     final isOwn = _myUserId != null && senderId == _myUserId;
     final peerId = isOwn ? receiverId : senderId;
@@ -2090,7 +2108,7 @@ class _ChatPageState extends State<ChatPage> {
   List<dynamic> _hydrateMessages(List<dynamic> raw) {
     final visible = raw.where((item) {
       if (item is Map) {
-        return !CallService.isHiddenCallChatMessage(item['message']?.toString());
+        return !_isHiddenSystemChatMessage(item['message']?.toString());
       }
       return true;
     }).toList();
@@ -2655,11 +2673,111 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   ),
                 ],
               ),
+              if (_selectedUser != null && PlatformCapabilities.peerToPeerFileTransfer) ...[
+                const SizedBox(height: 10),
+                _attachDirectRow(ctx),
+              ],
             ],
           ),
         ),
       ),
     );
+  }
+
+  Widget _attachDirectRow(BuildContext ctx) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          Navigator.pop(ctx);
+          unawaited(_pickDirectFile());
+        },
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            gradient: LinearGradient(
+              colors: [
+                const Color(0xFF6366F1).withValues(alpha: 0.22),
+                const Color(0xFF22C55E).withValues(alpha: 0.14),
+              ],
+            ),
+            border: Border.all(color: const Color(0xFF6366F1).withValues(alpha: 0.35)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6366F1).withValues(alpha: 0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.bolt_rounded, color: Color(0xFF818CF8), size: 24),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Direct send',
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14.5,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'P2P — file stays off the server',
+                      style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted.withValues(alpha: 0.7)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickDirectFile() async {
+    if (_selectedUser == null) {
+      _showError('Direct send works in 1:1 chat only');
+      return;
+    }
+    if (_p2pState.isActive) {
+      _showError('A direct transfer is already in progress');
+      return;
+    }
+    final result = await FilePicker.platform.pickFiles(allowMultiple: false, withData: false);
+    if (result == null || result.files.isEmpty) return;
+    final pf = result.files.first;
+    final path = pf.path;
+    if (path == null || path.isEmpty) {
+      _showError('Could not access the selected file');
+      return;
+    }
+    var size = pf.size;
+    if (size <= 0) size = await File(path).length();
+
+    final peerId = _asInt(_selectedUser['id']);
+    if (peerId == null) return;
+    final peerName = (_selectedUser['full_name'] ?? _selectedUser['username'] ?? 'Contact').toString();
+
+    final err = await ChatP2pFileService.instance.sendFile(
+      peerId: peerId,
+      peerName: peerName,
+      filePath: path,
+      fileName: pf.name,
+      fileSize: size,
+    );
+    if (!mounted) return;
+    if (err != null) _showError(err);
   }
 
   Widget _attachTile({
@@ -2875,6 +2993,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       if (replySnapshot != null) setState(() => _replyTo = replySnapshot);
       _showError(r['error']?.toString() ?? 'Failed to send file');
     }
+  }
+
+  Future<void> _acceptP2pFile() async {
+    final err = await ChatP2pFileService.instance.acceptIncoming();
+    if (!mounted) return;
+    if (err != null) _showError(err);
   }
 
   Future<void> _pickFile() async {
@@ -4020,6 +4144,21 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       ),
                     ),
                   ],
+                ),
+              if (_p2pState.phase != ChatP2pPhase.idle)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 8,
+                  child: ChatP2pTransferSheet(
+                    state: _p2pState,
+                    onAccept: () => unawaited(_acceptP2pFile()),
+                    onReject: () => unawaited(ChatP2pFileService.instance.rejectIncoming()),
+                    onCancel: () => unawaited(ChatP2pFileService.instance.cancel()),
+                    onOpenFile: _p2pState.savedPath == null
+                        ? null
+                        : () => unawaited(LocalFileActions.openFile(_p2pState.savedPath!)),
+                  ),
                 ),
               ],
             ),

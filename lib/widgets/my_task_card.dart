@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -23,6 +25,8 @@ class MyTaskCard extends StatefulWidget {
   final bool compactGrid;
   final List<dynamic> stages;
   final List<dynamic> employees;
+  /// WhatsApp-style inbox row (matches chat list); task detail page unchanged.
+  final bool inboxStyle;
 
   const MyTaskCard({
     super.key,
@@ -33,6 +37,7 @@ class MyTaskCard extends StatefulWidget {
     this.compactGrid = false,
     this.stages = const [],
     this.employees = const [],
+    this.inboxStyle = false,
   });
 
   @override
@@ -178,9 +183,128 @@ class _MyTaskCardState extends State<MyTaskCard> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.inboxStyle) return _buildInboxRow(context);
     final simple = PlatformCapabilities.immersiveChatChrome || Responsive.isMobile(context);
     if (simple) return _buildPremiumMobile(context);
     return _buildDesktop(context);
+  }
+
+  Widget _buildInboxRow(BuildContext context) {
+    final isCompleted = taskIsCompleted(task);
+    final title = taskDisplayTitle(task);
+    final projectName = taskProjectNameFrom(task);
+    final dueLabel = _formatDueDate(task['due_date']);
+    final stageName = (task['stage_name']?.toString() ?? '').trim();
+    final people = taskAssigneeListFrom(task);
+    final firstName = people.isNotEmpty ? (people.first['name']?.toString() ?? '') : '';
+    final previewParts = <String>[
+      if (projectName.isNotEmpty) projectName,
+      if (stageName.isNotEmpty) stageName,
+      if (people.isEmpty)
+        'Unassigned'
+      else if (people.length == 1)
+        firstName
+      else
+        '${people.length} people',
+    ];
+    final preview = previewParts.join(' · ');
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openDetail(context),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: _CompleteCheck(
+                  completed: isCompleted,
+                  onTap: widget.onToggleComplete,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w600,
+                              color: isCompleted ? AppTheme.textMuted : AppTheme.textPrimary,
+                              decoration: isCompleted ? TextDecoration.lineThrough : null,
+                              decorationColor: AppTheme.textMuted,
+                            ),
+                          ),
+                        ),
+                        if (dueLabel.isNotEmpty) ...[
+                          const SizedBox(width: 6),
+                          Text(
+                            dueLabel,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isCompleted
+                                  ? AppTheme.textMuted
+                                  : AppTheme.accent,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      preview,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: isCompleted
+                            ? AppTheme.textMuted.withValues(alpha: 0.75)
+                            : AppTheme.textMuted,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              PopupMenuButton<String>(
+                tooltip: 'Quick actions',
+                padding: EdgeInsets.zero,
+                icon: Icon(
+                  Icons.more_vert_rounded,
+                  size: 18,
+                  color: AppTheme.textMuted.withValues(alpha: 0.85),
+                ),
+                color: const Color(0xFF1F2C34),
+                onSelected: (v) {
+                  if (v == 'assign') unawaited(_openAssignee());
+                  if (v == 'stage') unawaited(_openStage());
+                  if (v == 'detail') _openDetail(context);
+                },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'detail', child: Text('Open task')),
+                  const PopupMenuItem(value: 'assign', child: Text('Assign')),
+                  if (widget.stages.isNotEmpty)
+                    const PopupMenuItem(value: 'stage', child: Text('Change stage')),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildPremiumMobile(BuildContext context) {
@@ -373,7 +497,11 @@ class _MyTaskCardState extends State<MyTaskCard> {
     final pad = widget.compactGrid ? 8.0 : 14.0;
 
     return Container(
-      decoration: AppTheme.loginInsetDecoration(borderRadius: widget.compactGrid ? 12 : 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(widget.compactGrid ? 12 : 14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -496,8 +624,13 @@ class _MyTaskCardState extends State<MyTaskCard> {
 class _CompleteCheck extends StatelessWidget {
   final bool completed;
   final VoidCallback onTap;
+  final double size;
 
-  const _CompleteCheck({required this.completed, required this.onTap});
+  const _CompleteCheck({
+    required this.completed,
+    required this.onTap,
+    this.size = 30,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -509,8 +642,8 @@ class _CompleteCheck extends StatelessWidget {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
-          width: 30,
-          height: 30,
+          width: size,
+          height: size,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             gradient: completed
