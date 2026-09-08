@@ -12,3 +12,14 @@ String? monitorMediaUrl(dynamic raw) {
   if (url.startsWith('videos/')) return '$origin/media/$url';
   return '$origin/media/$url';
 }
+
+/// Append cache-buster so Flutter reloads when a new screenshot arrives at the same path.
+String? monitorMediaUrlCached(dynamic raw, {String? uploadedAt}) {
+  final base = monitorMediaUrl(raw);
+  if (base == null) return null;
+  final bust = (uploadedAt != null && uploadedAt.trim().isNotEmpty)
+      ? uploadedAt.trim()
+      : DateTime.now().millisecondsSinceEpoch.toString();
+  final uri = Uri.parse(base);
+  return uri.replace(queryParameters: {...uri.queryParameters, '_v': bust}).toString();
+}

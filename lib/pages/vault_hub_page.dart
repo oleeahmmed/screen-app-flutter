@@ -9,11 +9,12 @@ import '../theme/vault_theme.dart';
 import '../utils/platform_capabilities.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/app_tab_shell.dart';
+import '../widgets/project_vault_tab.dart';
 import '../widgets/tool_page_scaffold.dart';
 import '../widgets/vault/vault_entry_detail_sheet.dart';
 import '../widgets/vault/vault_helpers.dart';
 
-/// Vault home — two tabs: **Vault** (category access) · **Shared with me** (entry shares).
+/// Vault home — project cards; tap a project for categories (same flow as aims-webapps).
 class VaultHubPage extends StatefulWidget {
   final ApiService apiService;
   final VoidCallback? onLogout;
@@ -31,49 +32,27 @@ class VaultHubPage extends StatefulWidget {
   State<VaultHubPage> createState() => _VaultHubPageState();
 }
 
-class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderStateMixin {
-  late final TabController _tabCtrl;
-
+class _VaultHubPageState extends State<VaultHubPage> {
   bool _loadingVault = true;
-  bool _loadingShared = true;
   String? _vaultError;
-  String? _sharedError;
   bool _isAdmin = false;
-  int? _currentUserId;
-  int _sharedCount = 0;
   List<Map<String, dynamic>> _vaults = [];
-  List<Map<String, dynamic>> _sharedEntries = [];
   String _searchQuery = '';
   final _searchCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 2, vsync: this);
-    _tabCtrl.addListener(() {
-      if (mounted) setState(() {});
-    });
-    _loadUser();
-    _loadAll();
+    _loadVaultHub();
     _searchCtrl.addListener(() {
       setState(() => _searchQuery = _searchCtrl.text.trim().toLowerCase());
     });
   }
 
-  Future<void> _loadUser() async {
-    final id = int.tryParse(await UserDataService.getUserId());
-    if (mounted) setState(() => _currentUserId = id);
-  }
-
   @override
   void dispose() {
-    _tabCtrl.dispose();
     _searchCtrl.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadAll() async {
-    await Future.wait([_loadVaultHub(), _loadShared()]);
   }
 
   Future<void> _loadVaultHub() async {
@@ -97,35 +76,7 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       _isAdmin = data['is_admin'] == true;
-      _sharedCount = data['shared_with_me_count'] is int
-          ? data['shared_with_me_count'] as int
-          : int.tryParse('${data['shared_with_me_count']}') ?? _sharedCount;
       _loadingVault = false;
-    });
-  }
-
-  Future<void> _loadShared() async {
-    setState(() {
-      _loadingShared = true;
-      _sharedError = null;
-    });
-    final r = await widget.apiService.getVaultSharedWithMe();
-    if (!mounted) return;
-    if (r['success'] != true) {
-      setState(() {
-        _loadingShared = false;
-        _sharedError = r['error']?.toString() ?? 'Failed to load shares';
-      });
-      return;
-    }
-    final results = (r['results'] as List? ?? [])
-        .whereType<Map>()
-        .map((e) => Map<String, dynamic>.from(e))
-        .toList();
-    setState(() {
-      _sharedEntries = results;
-      _sharedCount = results.length;
-      _loadingShared = false;
     });
   }
 
@@ -145,43 +96,10 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
     }).toList();
   }
 
-  List<Map<String, dynamic>> _filteredShared() {
-    if (_searchQuery.isEmpty) return _sharedEntries;
-    return _sharedEntries.where((e) {
-      final hay = [
-        e['name'],
-        e['username'],
-        e['url'],
-        e['category_name'],
-        e['project_name'],
-      ].map((x) => (x ?? '').toString().toLowerCase()).join(' ');
-      return hay.contains(_searchQuery);
-    }).toList();
-  }
-
   void _openVault(Map<String, dynamic> vault) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => AppTabShell(
-          selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
-          unreadNotifs: AppNavigation.instance.unreadNotifs,
-          onLogout: widget.onLogout,
-          child: VaultCategoriesPage(
-            apiService: widget.apiService,
-            vault: vault,
-            onLogout: widget.onLogout,
-          ),
-        ),
-      ),
-    ).then((_) {
-      if (mounted) _loadVaultHub();
-    });
-  }
-
-  void _openSharedEntry(Map<String, dynamic> e) {
-    final projectId = e['project'] is int
-        ? e['project'] as int
-        : int.tryParse('${e['project']}');
+    final projectId = vault['project_id'] is int
+        ? vault['project_id'] as int
+        : int.tryParse('${vault['project_id']}');
     if (projectId == null) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -189,50 +107,21 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
           selectedIndex: AppNavigation.instance.selectedTabIndex.clamp(0, AppNavigation.tabCount - 1),
           unreadNotifs: AppNavigation.instance.unreadNotifs,
           onLogout: widget.onLogout,
-          child: VaultSharedEntryPage(
-            apiService: widget.apiService,
-            projectId: projectId,
-            entry: e,
-            canEdit: false,
-            currentUserId: _currentUserId,
+          child: ToolPageScaffold(
+            title: vault['project_name']?.toString() ?? 'Vault',
+            showHeader: false,
             onLogout: widget.onLogout,
-            onChanged: _loadShared,
+            scrollable: false,
+            child: ProjectVaultTab(
+              apiService: widget.apiService,
+              projectId: projectId,
+            ),
           ),
         ),
       ),
     ).then((_) {
-      if (mounted) _loadShared();
+      if (mounted) _loadVaultHub();
     });
-  }
-
-  Widget _segmentTabs() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-      child: Row(
-        children: [
-          Expanded(
-            child: VaultTheme.topTab(
-              label: 'My Vault',
-              icon: LucideIcons.shield,
-              active: _tabCtrl.index == 0,
-              sharedTone: false,
-              onTap: () => _tabCtrl.animateTo(0),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: VaultTheme.topTab(
-              label: 'Shared with me',
-              icon: LucideIcons.share2,
-              active: _tabCtrl.index == 1,
-              sharedTone: true,
-              badge: _sharedCount,
-              onTap: () => _tabCtrl.animateTo(1),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   Widget _searchField(String hint) {
@@ -247,16 +136,14 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
     required IconData icon,
     required String title,
     required String message,
-    bool sharedTone = false,
   }) {
-    final color = sharedTone ? VaultTheme.sharedBlue : VaultTheme.violet;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            VaultTheme.iconBox(icon: icon, color: color, size: 56, iconSize: 24),
+            VaultTheme.iconBox(icon: icon, color: VaultTheme.violet, size: 56, iconSize: 24),
             const SizedBox(height: 18),
             Text(
               title,
@@ -322,67 +209,97 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
       color: Colors.transparent,
       child: InkWell(
         onTap: () => _openVault(vault),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-            ),
-          ),
-          child: Row(
+        borderRadius: BorderRadius.circular(18),
+        child: Ink(
+          padding: const EdgeInsets.all(14),
+          decoration: AppTheme.loginInsetDecoration(borderRadius: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              VaultTheme.iconBox(
-                icon: LucideIcons.folderLock,
-                color: VaultTheme.violet,
-                size: 48,
-                iconSize: 22,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      projectName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14.5,
+              Row(
+                children: [
+                  VaultTheme.iconBox(
+                    icon: LucideIcons.folderLock,
+                    color: VaultTheme.violet,
+                    size: 40,
+                    iconSize: 18,
+                  ),
+                  const Spacer(),
+                  if (isAdmin)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: VaultTheme.violet.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(color: VaultTheme.violet.withValues(alpha: 0.3)),
+                      ),
+                      child: Text(
+                        'Admin',
+                        style: TextStyle(
+                          color: VaultTheme.violetBright,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.3,
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      [
-                        if (customerName.isNotEmpty) customerName,
-                        '$catCount categor${catCount == 1 ? 'y' : 'ies'}',
-                      ].join(' · '),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                projectName,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  height: 1.2,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              if (customerName.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  customerName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: AppTheme.textMuted.withValues(alpha: 0.92),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(
+                    LucideIcons.layers,
+                    size: 13,
+                    color: VaultTheme.violetBright.withValues(alpha: 0.85),
+                  ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      '$catCount categor${catCount == 1 ? 'y' : 'ies'}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: AppTheme.textMuted,
-                        fontSize: 13,
+                        color: VaultTheme.violetBright.withValues(alpha: 0.9),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  Icon(
+                    Icons.arrow_forward_rounded,
+                    size: 16,
+                    color: AppTheme.textMuted.withValues(alpha: 0.5),
+                  ),
+                ],
               ),
-              if (isAdmin)
-                Container(
-                  margin: const EdgeInsets.only(right: 4),
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: VaultTheme.violet.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: VaultTheme.violet.withValues(alpha: 0.25)),
-                  ),
-                  child: Text(
-                    'Admin',
-                    style: TextStyle(color: VaultTheme.violetBright, fontSize: 10, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              Icon(Icons.chevron_right_rounded, size: 20, color: AppTheme.textMuted.withValues(alpha: 0.45)),
             ],
           ),
         ),
@@ -390,7 +307,7 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
     );
   }
 
-  Widget _vaultTab({bool includeSearch = true}) {
+  Widget _projectGrid({bool includeSearch = true}) {
     if (_loadingVault) {
       return const Center(child: CircularProgressIndicator(color: VaultTheme.violet));
     }
@@ -403,7 +320,7 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (includeSearch) ...[
-          _searchField('Search vault…'),
+          _searchField('Search projects…'),
           const SizedBox(height: 12),
         ],
         Expanded(
@@ -421,119 +338,25 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
                   onRefresh: _loadVaultHub,
                   color: VaultTheme.violet,
                   backgroundColor: VaultTheme.modalBg,
-                  child: ListView(
-                    physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-                    padding: const EdgeInsets.only(bottom: 28),
-                    children: filtered.map(_vaultCard).toList(),
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final width = constraints.maxWidth;
+                      final crossAxisCount = width >= 720 ? 3 : (width >= 380 ? 2 : 1);
+                      const gap = 12.0;
 
-  Widget _sharedEntryTile(Map<String, dynamic> e) {
-    final name = e['name']?.toString() ?? 'Entry';
-    final user = e['username']?.toString() ?? '';
-    final cat = e['category_name']?.toString() ?? '';
-    final project = e['project_name']?.toString() ?? '';
-    final meta = [
-      if (project.isNotEmpty) project,
-      if (cat.isNotEmpty) cat,
-      if (user.isNotEmpty) user,
-    ].join(' · ');
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _openSharedEntry(e),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-            ),
-          ),
-          child: Row(
-            children: [
-              VaultTheme.iconBox(
-                icon: vaultEntryIcon(e),
-                color: VaultTheme.sharedBlue,
-                size: 48,
-                iconSize: 22,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14.5,
-                      ),
-                    ),
-                    if (meta.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        meta,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              VaultTheme.sharedBadge(),
-              const SizedBox(width: 4),
-              Icon(Icons.chevron_right_rounded, size: 20, color: AppTheme.textMuted.withValues(alpha: 0.45)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _sharedTab({bool includeSearch = true}) {
-    if (_loadingShared) {
-      return const Center(child: CircularProgressIndicator(color: VaultTheme.sharedBlue));
-    }
-    if (_sharedError != null && _sharedEntries.isEmpty) {
-      return _errorBox(_sharedError!, _loadShared);
-    }
-
-    final filtered = _filteredShared();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (includeSearch) ...[
-          _searchField('Search shared credentials…'),
-          const SizedBox(height: 12),
-        ],
-        Expanded(
-          child: filtered.isEmpty
-              ? _emptyState(
-                  icon: LucideIcons.share2,
-                  title: _searchQuery.isNotEmpty ? 'No matches' : 'Nothing shared yet',
-                  message: _searchQuery.isNotEmpty
-                      ? 'Try another search term.'
-                      : 'When someone shares a credential with you, it appears here.',
-                  sharedTone: true,
-                )
-              : RefreshIndicator(
-                  onRefresh: _loadShared,
-                  color: VaultTheme.sharedBlue,
-                  backgroundColor: VaultTheme.modalBg,
-                  child: ListView.builder(
-                    physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-                    padding: const EdgeInsets.only(bottom: 28),
-                    itemCount: filtered.length,
-                    itemBuilder: (_, i) => _sharedEntryTile(filtered[i]),
+                      return GridView.builder(
+                        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                        padding: const EdgeInsets.only(bottom: 28),
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: crossAxisCount,
+                          mainAxisSpacing: gap,
+                          crossAxisSpacing: gap,
+                          childAspectRatio: crossAxisCount == 1 ? 2.35 : 0.88,
+                        ),
+                        itemCount: filtered.length,
+                        itemBuilder: (_, i) => _vaultCard(filtered[i]),
+                      );
+                    },
                   ),
                 ),
         ),
@@ -560,60 +383,68 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
 
   Widget _buildHeader(bool immersive, double sidePad) {
     return Padding(
-      padding: EdgeInsets.fromLTRB(
-        immersive ? 4 : sidePad,
-        immersive ? 4 : 8,
-        immersive ? 4 : 8,
-        4,
-      ),
-      child: Row(
-        children: [
-          if (immersive)
-            IconButton(
-              tooltip: 'Home',
-              onPressed: () => AppNavigation.instance.goHome(),
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AppTheme.textPrimary),
+      padding: EdgeInsets.fromLTRB(sidePad, immersive ? 4 : 8, sidePad, 8),
+      child: AppTheme.glassCard(
+        borderRadius: 18,
+        padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (immersive)
+              IconButton(
+                tooltip: 'Home',
+                onPressed: () => AppNavigation.instance.goHome(),
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: AppTheme.textPrimary),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              ),
+            VaultTheme.iconBox(
+              icon: LucideIcons.shield,
+              color: AppTheme.featureVault,
+              size: 42,
+              iconSize: 20,
             ),
-          const Expanded(
-            child: Text(
-              'Vault',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.3,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Vault',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Secure credentials by project',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppTheme.textMuted.withValues(alpha: 0.92),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-          IconButton(
-            tooltip: 'Refresh',
-            onPressed: _loadAll,
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.refresh_rounded, size: 22, color: AppTheme.textMuted),
-          ),
-          if (immersive) _logoButton(),
-        ],
-      ),
-    );
-  }
-
-  Widget _tabBody({bool includeSearch = true}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _segmentTabs(),
-        Expanded(
-          child: TabBarView(
-            controller: _tabCtrl,
-            children: [
-              _vaultTab(includeSearch: includeSearch),
-              _sharedTab(includeSearch: includeSearch),
-            ],
-          ),
+            IconButton(
+              tooltip: 'Refresh',
+              onPressed: _loadVaultHub,
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.refresh_rounded, size: 22, color: AppTheme.textMuted),
+            ),
+            if (immersive) _logoButton(),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -624,40 +455,37 @@ class _VaultHubPageState extends State<VaultHubPage> with SingleTickerProviderSt
 
     if (immersive) {
       final bottomInset = MediaQuery.paddingOf(context).bottom;
-      return ColoredBox(
-        color: VaultTheme.pageBg,
-        child: Padding(
-          padding: EdgeInsets.only(bottom: bottomInset),
-          child: SafeArea(
-            top: true,
-            bottom: false,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildHeader(true, sidePad),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(sidePad, 4, sidePad, 8),
-                  child: _searchField(
-                    _tabCtrl.index == 0 ? 'Search vault…' : 'Search shared credentials…',
-                  ),
+      return Padding(
+        padding: EdgeInsets.only(bottom: bottomInset),
+        child: SafeArea(
+          top: true,
+          bottom: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildHeader(true, sidePad),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(sidePad, 4, sidePad, 8),
+                child: _searchField('Search projects…'),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: sidePad),
+                  child: _projectGrid(includeSearch: false),
                 ),
-                Expanded(child: _tabBody(includeSearch: false)),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       );
     }
 
-    final body = _tabBody();
+    final body = _projectGrid();
 
     if (widget.embeddedInTabs) {
-      return ColoredBox(
-        color: VaultTheme.pageBg,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
-          child: body,
-        ),
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+        child: body,
       );
     }
 

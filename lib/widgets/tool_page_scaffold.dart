@@ -26,16 +26,19 @@ class ToolPageScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AppShell(
-      title: title,
-      subtitle: subtitle,
-      showBack: false,
-      showQuickMenu: false,
-      onLogout: onLogout,
-      scrollable: scrollable,
-      useBackground: useBackground,
-      showHeader: showHeader,
-      child: child,
+    return Material(
+      color: Colors.transparent,
+      child: AppShell(
+        title: title,
+        subtitle: subtitle,
+        showBack: false,
+        showQuickMenu: false,
+        onLogout: onLogout,
+        scrollable: scrollable,
+        useBackground: useBackground,
+        showHeader: showHeader,
+        child: child,
+      ),
     );
   }
 }

@@ -57,7 +57,14 @@ class AppTabShell extends StatelessWidget {
           : null,
     );
 
-    // One ambient background for every tab / pushed shell (Home + Submit look).
+    // Dashboard tabs use gradient; pushed tool routes may still opt into flat bg.
+    if (homeStyleBackground) {
+      return ColoredBox(
+        color: AppTheme.immersivePageBg,
+        child: shell,
+      );
+    }
+
     return AppTheme.loginDashboardBackground(
       context: context,
       child: shell,

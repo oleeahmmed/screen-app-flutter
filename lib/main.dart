@@ -2,7 +2,6 @@ import 'package:aims_style_notify/aims_style_notify.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_quill/flutter_quill.dart';
-import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
@@ -41,6 +40,7 @@ import 'pages/peer2peer_page.dart';
 import 'pages/daily_report_tool_page.dart';
 import 'pages/activity_tool_page.dart';
 import 'pages/attendance_report_page.dart';
+import 'pages/reports_hub_page.dart';
 import 'pages/live_monitor_page.dart';
 import 'pages/vault_hub_page.dart';
 import 'widgets/privacy_notice_dialog.dart';
@@ -206,7 +206,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenProject = _openProjectTool;
     AppNavigation.instance.onOpenLiveMonitor = _openLiveMonitor;
     AppNavigation.instance.onOpenP2P = _openP2P;
-    AppNavigation.instance.onOpenSubmitReport = _openSubmitReport;
+    AppNavigation.instance.onOpenReportsHub = _openReportsHub;
+    AppNavigation.instance.onOpenSubmitReport = _openReportsHub;
     AppNavigation.instance.onOpenNotifications = _openNotifications;
     AppNavigation.instance.onOpenProfile = _openProfile;
     AppNavigationBridge.openChatTab = () => _navigateToTab(2);
@@ -860,27 +861,26 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _openSubmitReport() async {
+  Future<void> _openReportsHub() async {
     if (!mounted || !_isLoggedIn) return;
-    final reportsR = await _apiService.getClosingReports();
-    Map<String, dynamic>? todayReport;
-    if (reportsR['success'] == true) {
-      final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-      for (final item in reportsR['data'] as List? ?? []) {
-        if (item is! Map) continue;
-        final m = Map<String, dynamic>.from(item);
-        final d = m['report_date']?.toString();
-        if (d != null && d.startsWith(todayStr)) {
-          todayReport = m;
-          break;
-        }
-      }
-    }
-    if (!mounted) return;
-    await showClosingReportDialog(
-      context: context,
-      apiService: _apiService,
-      existingReport: todayReport,
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AppTabShell(
+          selectedIndex: AppNavigation.instance.selectedTabIndex,
+          unreadNotifs: _unreadNotifs,
+          onLogout: _handleLogout,
+          child: ToolPageScaffold(
+            scrollable: false,
+            useBackground: false,
+            showHeader: false,
+            onLogout: _handleLogout,
+            child: ReportsHubPage(
+              apiService: _apiService,
+              onLogout: _handleLogout,
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1059,13 +1059,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             _currentIndex == AppNavigation.tabMyTasks ||
             _currentIndex == AppNavigation.tabVault);
 
+    // All main tabs use dashboard gradient + glass cards (same as Home).
     return AppTabShell(
       selectedIndex: _currentIndex,
       unreadNotifs: _unreadNotifs,
       onLogout: _handleLogout,
       showTopBar: !immersiveChrome,
       showBottomNav: !immersiveChrome,
-      homeStyleBackground: immersiveChrome,
+      homeStyleBackground: false,
       child: IndexedStack(
         index: _currentIndex,
         children: _mainStackChildren(),
@@ -1097,7 +1098,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     AppNavigation.instance.onOpenProject = null;
     AppNavigation.instance.onOpenLiveMonitor = null;
     AppNavigation.instance.onOpenP2P = null;
+    AppNavigation.instance.onOpenReportsHub = null;
     AppNavigation.instance.onOpenSubmitReport = null;
+    AppNavigation.instance.onOpenAttendanceReport = null;
     AppNavigation.instance.onOpenNotifications = null;
     AppNavigation.instance.onOpenProfile = null;
     AppNavigation.instance.onLogout = null;

@@ -91,6 +91,7 @@ class AppConfig {
   static String get chatSendUrl => '$apiBaseUrl/chat/send/';
   static String get chatUnreadUrl => '$apiBaseUrl/chat/unread-count/';
   static String get chatMarkReadUrl => '$apiBaseUrl/chat/mark-read/';
+  static String get chatMarkAllReadUrl => '$apiBaseUrl/chat/mark-all-read/';
   static String get chatOnlineUrl => '$apiBaseUrl/chat/online-users/';
   static String get chatCallSignalUrl => '$apiBaseUrl/chat/call-signal/';
   static String get chatCallSignalsPendingUrl => '$apiBaseUrl/chat/call-signals/pending/';
@@ -173,6 +174,7 @@ class AppConfig {
   static String get attendanceCurrentUrl => '$apiBaseUrl/attendance/current/';
   static String get attendanceListUrl => '$apiBaseUrl/attendance/';
   static String get attendanceMyReportUrl => '$apiBaseUrl/attendance/my-report/';
+  static String get attendanceMonthlyReportUrl => '$apiBaseUrl/attendance/monthly-report/';
   static String get closingReportsUrl => '$apiBaseUrl/closing-reports/';
   static String get closingReportsPendingUrl => '$apiBaseUrl/closing-reports/pending/';
 
@@ -227,6 +229,8 @@ class AppConfig {
       '$apiBaseUrl/live-monitor/employees/$employeeUserId/';
   static String liveMonitorEmployeeScreenUrl(int employeeUserId, int screen) =>
       '$apiBaseUrl/live-monitor/employees/$employeeUserId/screens/$screen/';
+  static String projectLiveMonitorUrl(int projectId) =>
+      '$apiBaseUrl/projects/$projectId/live-monitor/';
   static String get videoGenerateUrl => '$apiBaseUrl/video/generate/';
   static String videoStatusUrl(int jobId) => '$apiBaseUrl/video/status/$jobId/';
 }

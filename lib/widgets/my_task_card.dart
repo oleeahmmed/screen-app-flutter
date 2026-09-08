@@ -195,112 +195,257 @@ class _MyTaskCardState extends State<MyTaskCard> {
     final projectName = taskProjectNameFrom(task);
     final dueLabel = _formatDueDate(task['due_date']);
     final stageName = (task['stage_name']?.toString() ?? '').trim();
+    final priority = (task['priority'] ?? 'medium').toString();
+    final priorityColor = AppTheme.taskPriorityColor(priority);
     final people = taskAssigneeListFrom(task);
     final firstName = people.isNotEmpty ? (people.first['name']?.toString() ?? '') : '';
-    final previewParts = <String>[
-      if (projectName.isNotEmpty) projectName,
-      if (stageName.isNotEmpty) stageName,
-      if (people.isEmpty)
-        'Unassigned'
-      else if (people.length == 1)
-        firstName
-      else
-        '${people.length} people',
-    ];
-    final preview = previewParts.join(' · ');
+    final hasStages = widget.stages.isNotEmpty;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _openDetail(context),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: _CompleteCheck(
-                  completed: isCompleted,
-                  onTap: widget.onToggleComplete,
-                  size: 22,
-                ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _openDetail(context),
+          borderRadius: BorderRadius.circular(16),
+          child: Ink(
+            decoration: AppTheme.loginInsetDecoration(borderRadius: 16).copyWith(
+              border: Border.all(
+                color: isCompleted
+                    ? AppTheme.success.withValues(alpha: 0.28)
+                    : priorityColor.withValues(alpha: 0.22),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 14.5,
-                              fontWeight: FontWeight.w600,
-                              color: isCompleted ? AppTheme.textMuted : AppTheme.textPrimary,
-                              decoration: isCompleted ? TextDecoration.lineThrough : null,
-                              decorationColor: AppTheme.textMuted,
-                            ),
-                          ),
+                    Container(
+                      width: 4,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: isCompleted
+                              ? [
+                                  AppTheme.success.withValues(alpha: 0.9),
+                                  AppTheme.success.withValues(alpha: 0.35),
+                                ]
+                              : [
+                                  priorityColor,
+                                  priorityColor.withValues(alpha: 0.35),
+                                ],
                         ),
-                        if (dueLabel.isNotEmpty) ...[
-                          const SizedBox(width: 6),
-                          Text(
-                            dueLabel,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: isCompleted
-                                  ? AppTheme.textMuted
-                                  : AppTheme.accent,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      preview,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: isCompleted
-                            ? AppTheme.textMuted.withValues(alpha: 0.75)
-                            : AppTheme.textMuted,
-                        fontWeight: FontWeight.w400,
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 4),
-              PopupMenuButton<String>(
-                tooltip: 'Quick actions',
-                padding: EdgeInsets.zero,
-                icon: Icon(
-                  Icons.more_vert_rounded,
-                  size: 18,
-                  color: AppTheme.textMuted.withValues(alpha: 0.85),
-                ),
-                color: const Color(0xFF1F2C34),
-                onSelected: (v) {
-                  if (v == 'assign') unawaited(_openAssignee());
-                  if (v == 'stage') unawaited(_openStage());
-                  if (v == 'detail') _openDetail(context);
-                },
-                itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'detail', child: Text('Open task')),
-                  const PopupMenuItem(value: 'assign', child: Text('Assign')),
-                  if (widget.stages.isNotEmpty)
-                    const PopupMenuItem(value: 'stage', child: Text('Change stage')),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _CompleteCheck(
+                                completed: isCompleted,
+                                onTap: widget.onToggleComplete,
+                                size: 26,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                        height: 1.3,
+                                        letterSpacing: -0.15,
+                                        color: isCompleted ? AppTheme.textMuted : AppTheme.textPrimary,
+                                        decoration: isCompleted ? TextDecoration.lineThrough : null,
+                                        decorationColor: AppTheme.textMuted,
+                                      ),
+                                    ),
+                                    if (projectName.isNotEmpty) ...[
+                                      const SizedBox(height: 5),
+                                      Row(
+                                        children: [
+                                          Icon(
+                                            Icons.folder_open_rounded,
+                                            size: 13,
+                                            color: AppTheme.primaryBright.withValues(alpha: 0.85),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Expanded(
+                                            child: Text(
+                                              projectName,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w500,
+                                                color: AppTheme.textMuted.withValues(alpha: 0.92),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  if (dueLabel.isNotEmpty)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: AppTheme.accent.withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: AppTheme.accent.withValues(alpha: 0.28),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        dueLabel,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w700,
+                                          color: isCompleted
+                                              ? AppTheme.textMuted
+                                              : AppTheme.accent,
+                                        ),
+                                      ),
+                                    ),
+                                  if (!isCompleted) ...[
+                                    const SizedBox(height: 6),
+                                    _PriorityPill(priority: priority),
+                                  ],
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              _ActionChip(
+                                onTap: _assignBusy ? null : _openAssignee,
+                                busy: _assignBusy,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (people.isEmpty)
+                                      Icon(
+                                        Icons.person_add_alt_1_rounded,
+                                        size: 15,
+                                        color: AppTheme.primaryBright.withValues(alpha: 0.95),
+                                      )
+                                    else
+                                      CircleAvatar(
+                                        radius: 8,
+                                        backgroundColor: avatarColorForName(firstName),
+                                        child: Text(
+                                          firstName.isNotEmpty ? firstName[0].toUpperCase() : '?',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      people.isEmpty
+                                          ? 'Assign'
+                                          : (people.length == 1
+                                              ? (firstName.isNotEmpty
+                                                  ? firstName.split(' ').first
+                                                  : 'Assigned')
+                                              : '${people.length} people'),
+                                      style: TextStyle(
+                                        color: AppTheme.textPrimary.withValues(alpha: 0.95),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (hasStages) ...[
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: _ActionChip(
+                                    onTap: _stageBusy ? null : _openStage,
+                                    busy: _stageBusy,
+                                    accent: true,
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.layers_rounded,
+                                          size: 14,
+                                          color: AppTheme.accent.withValues(alpha: 0.95),
+                                        ),
+                                        const SizedBox(width: 5),
+                                        Flexible(
+                                          child: Text(
+                                            stageName.isNotEmpty ? stageName : 'Stage',
+                                            style: TextStyle(
+                                              color: AppTheme.textPrimary.withValues(alpha: 0.95),
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              const Spacer(),
+                              PopupMenuButton<String>(
+                                tooltip: 'Quick actions',
+                                padding: EdgeInsets.zero,
+                                icon: Icon(
+                                  Icons.more_horiz_rounded,
+                                  size: 20,
+                                  color: AppTheme.textMuted.withValues(alpha: 0.85),
+                                ),
+                                color: const Color(0xFF1F2C34),
+                                onSelected: (v) {
+                                  if (v == 'assign') unawaited(_openAssignee());
+                                  if (v == 'stage') unawaited(_openStage());
+                                  if (v == 'detail') _openDetail(context);
+                                },
+                                itemBuilder: (_) => [
+                                  const PopupMenuItem(value: 'detail', child: Text('Open task')),
+                                  const PopupMenuItem(value: 'assign', child: Text('Assign')),
+                                  if (widget.stages.isNotEmpty)
+                                    const PopupMenuItem(value: 'stage', child: Text('Change stage')),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
+                ),
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -616,6 +761,35 @@ class _MyTaskCardState extends State<MyTaskCard> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _PriorityPill extends StatelessWidget {
+  final String priority;
+
+  const _PriorityPill({required this.priority});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = AppTheme.taskPriorityColor(priority);
+    final label = priority.isEmpty ? 'medium' : priority;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: color.withValues(alpha: 0.32)),
+      ),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          color: color,
+          fontSize: 9,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.4,
+        ),
       ),
     );
   }

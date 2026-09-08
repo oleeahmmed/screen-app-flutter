@@ -18,11 +18,14 @@ import 'data_privacy_notice_page.dart';
 class ProfilePage extends StatefulWidget {
   final ApiService apiService;
   final VoidCallback? onLogout;
+  /// When opened outside [AppTabShell] (e.g. chat settings → Account).
+  final bool standalone;
 
   const ProfilePage({
     super.key,
     required this.apiService,
     this.onLogout,
+    this.standalone = false,
   });
 
   @override
@@ -223,6 +226,37 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    final content = _buildBody();
+
+    if (!widget.standalone) return content;
+
+    return AppTheme.loginDashboardBackground(
+      context: context,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          surfaceTintColor: Colors.transparent,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded, color: AppTheme.textPrimary),
+            onPressed: () => Navigator.maybePop(context),
+          ),
+          title: const Text(
+            'Account',
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        body: content,
+      ),
+    );
+  }
+
+  Widget _buildBody() {
     final bottomPad = Responsive.bottomNavInset(context) + 20;
 
     if (_loading) {

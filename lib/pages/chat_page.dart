@@ -18,6 +18,7 @@ import '../utils/chat_emojis.dart';
 import '../services/chat_notification_router.dart';
 import '../services/notification_service.dart';
 import '../services/call_service.dart';
+import '../services/call_tokens.dart';
 import '../services/call_navigation.dart';
 import '../services/chat_p2p_file_service.dart';
 import '../services/chat_p2p_tokens.dart';
@@ -41,6 +42,7 @@ import '../widgets/empty_state.dart';
 import '../utils/responsive.dart';
 import '../utils/platform_capabilities.dart';
 import '../utils/local_file_actions.dart';
+import '../pages/chat_profile_settings_page.dart';
 import '../widgets/chat_p2p_transfer_sheet.dart';
 
 int? _chatInt(dynamic v) {
@@ -81,6 +83,10 @@ class _ChatPageState extends State<ChatPage> {
   bool _isLoadingGroups = false;
   bool _isSending = false;
   String _searchQuery = '';
+  /// WhatsApp-style inbox filters: all | unread | favorites | groups
+  String _inboxFilter = 'all';
+  /// Chat list hub: chats | calls (WhatsApp-style bottom section)
+  String _chatHubTab = 'chats';
   Timer? _refreshTimer;
   Timer? _usersPollTimer;
   Timer? _typingDebounce;
@@ -119,7 +125,7 @@ class _ChatPageState extends State<ChatPage> {
   String _inChatQuery = '';
   bool _chatDragOver = false;
   ChatWallpaperKind _wallpaperKind = ChatWallpaperKind.doodle;
-  int _wallpaperSolid = 0xFF0B141A;
+  int _wallpaperSolid = 0xFF0C1929;
   String? _wallpaperImagePath;
   Uint8List? _lastCopiedImageBytes;
   final Set<int> _selectedMessageIds = {};
@@ -295,7 +301,7 @@ class _ChatPageState extends State<ChatPage> {
     final pinned = _isChatPinned(pinKey);
     final action = await showModalBottomSheet<String>(
       context: context,
-      backgroundColor: const Color(0xFF1F2C34),
+      backgroundColor: AppTheme.dialogBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -357,17 +363,17 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _showWallpaperPicker() async {
     const presets = <int>[
-      0xFF0B141A,
-      0xFF111B21,
-      0xFF1A2E2A,
-      0xFF1F2937,
-      0xFF2D1B2E,
-      0xFF1B2533,
+      0xFF0C1929,
+      0xFF0A1628,
+      0xFF0F172A,
+      0xFF12263F,
+      0xFF152238,
+      0xFF1E3A8A,
     ];
 
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF1F2C34),
+      backgroundColor: AppTheme.dialogBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -388,8 +394,8 @@ class _ChatPageState extends State<ChatPage> {
               ),
               const SizedBox(height: 4),
               const Text(
-                'WhatsApp-style background for all chats',
-                style: TextStyle(color: Color(0xFF8696A0), fontSize: 13),
+                'Dashboard-style background for all chats',
+                style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
               ),
               const SizedBox(height: 16),
               Wrap(
@@ -435,10 +441,10 @@ class _ChatPageState extends State<ChatPage> {
                       width: 56,
                       height: 56,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF2A3942),
+                        color: AppTheme.surface2.withValues(alpha: 0.75),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Icon(Icons.photo_library_rounded, color: Color(0xFF00A884)),
+                      child: const Icon(Icons.photo_library_rounded, color: AppTheme.accent),
                     ),
                     onTap: () async {
                       Navigator.pop(ctx);
@@ -481,7 +487,7 @@ class _ChatPageState extends State<ChatPage> {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: selected ? const Color(0xFF00A884) : Colors.white.withValues(alpha: 0.08),
+                color: selected ? AppTheme.accent : Colors.white.withValues(alpha: 0.08),
                 width: selected ? 2.5 : 1,
               ),
             ),
@@ -1518,19 +1524,23 @@ class _ChatPageState extends State<ChatPage> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF0B141A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.88,
-        maxChildSize: 0.95,
-        minChildSize: 0.45,
-        expand: false,
-        builder: (ctx, scroll) => _buildChatDetailsPanel(
-          scrollController: scroll,
-          onClose: () => Navigator.pop(ctx),
-          sheetContext: ctx,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(top: MediaQuery.sizeOf(context).height * 0.04),
+        child: AppTheme.glassBlur(
+          topRadius: 22,
+          child: DraggableScrollableSheet(
+            initialChildSize: 0.9,
+            maxChildSize: 0.95,
+            minChildSize: 0.45,
+            expand: false,
+            builder: (ctx, scroll) => _buildChatDetailsPanel(
+              scrollController: scroll,
+              onClose: () => Navigator.pop(ctx),
+              sheetContext: ctx,
+            ),
+          ),
         ),
       ),
     );
@@ -2417,19 +2427,22 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _startCall(CallKind kind) async {
-    if (_selectedUser == null || !PlatformCapabilities.voiceVideoCall) return;
+    if (_selectedUser == null) return;
+    await _startCallWithPeer(_selectedUser, kind);
+  }
+
+  Future<void> _startCallWithPeer(dynamic user, CallKind kind) async {
+    if (!PlatformCapabilities.voiceVideoCall) return;
     if (CallService.instance.isInCall) {
       _showError('Already in a call');
       return;
     }
-    final peerId = _selectedUser['id'] is int
-        ? _selectedUser['id'] as int
-        : int.tryParse('${_selectedUser['id']}');
+    final peerId = user['id'] is int ? user['id'] as int : int.tryParse('${user['id']}');
     if (peerId == null) return;
 
-    final name = _selectedUser['full_name']?.toString().trim().isNotEmpty == true
-        ? _selectedUser['full_name'].toString()
-        : (_selectedUser['username']?.toString() ?? 'Contact');
+    final name = user['full_name']?.toString().trim().isNotEmpty == true
+        ? user['full_name'].toString()
+        : (user['username']?.toString() ?? 'Contact');
 
     if (widget.notificationService == null) {
       _showError('Call service unavailable');
@@ -2457,6 +2470,45 @@ class _ChatPageState extends State<ChatPage> {
     }
     if (!mounted) return;
     await CallNavigation.openCallPageIfNeeded();
+  }
+
+  Future<void> _markAllChatsRead() async {
+    final r = await widget.apiService.markAllMessagesRead();
+    if (!mounted) return;
+    if (r['success'] == true) {
+      setState(() {
+        _users = _users.map((u) {
+          if (u is Map) {
+            final m = Map<String, dynamic>.from(u);
+            m['unread_count'] = 0;
+            return m;
+          }
+          return u;
+        }).toList();
+        _groups = _groups.map((g) {
+          if (g is Map) {
+            final m = Map<String, dynamic>.from(g);
+            m['unread_count'] = 0;
+            return m;
+          }
+          return g;
+        }).toList();
+      });
+      _showSuccess('All chats marked as read');
+    } else {
+      _showError(r['error']?.toString() ?? 'Could not mark all as read');
+    }
+  }
+
+  void _openChatSettings() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ChatProfileSettingsPage(
+          apiService: widget.apiService,
+          onLogout: AppNavigation.instance.onLogout,
+        ),
+      ),
+    );
   }
 
   // â”€â”€â”€ Voice recording (Android/iOS: record package, Windows: PowerShell) â”€â”€â”€
@@ -2566,7 +2618,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final mobile = Responsive.isMobile(context);
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF1F2C34),
+      backgroundColor: AppTheme.dialogBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
@@ -2592,7 +2644,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       child: _attachTile(
                         icon: Icons.content_paste_rounded,
                         label: 'Paste',
-                        color: const Color(0xFF00A884),
+                        color: AppTheme.accent,
                         onTap: () {
                           Navigator.pop(ctx);
                           unawaited(_pasteFromClipboard());
@@ -3125,11 +3177,16 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   Widget build(BuildContext context) {
     final keyboard = MediaQuery.viewInsetsOf(context).bottom;
     final immersive = PlatformCapabilities.immersiveChatChrome;
+    final isWide = Responsive.useChatSplit(context);
+    final hasChat = _selectedUser != null || _selectedGroup != null;
+    final inMobileChat = !isWide && hasChat;
     final bottomInset = keyboard > 0
         ? 0.0
-        : (immersive
-            ? MediaQuery.paddingOf(context).bottom
-            : Responsive.bottomNavInset(context));
+        : (inMobileChat
+            ? 0.0
+            : (immersive
+                ? MediaQuery.paddingOf(context).bottom
+                : Responsive.bottomNavInset(context)));
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
@@ -3188,6 +3245,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   // â”€â”€â”€ LEFT SIDEBAR (WhatsApp-style unified inbox) â”€â”€â”€
   Widget _buildSidebar() {
     final immersive = PlatformCapabilities.immersiveChatChrome;
+    final showCallsHub = PlatformCapabilities.voiceVideoCall;
+    final onCallsTab = showCallsHub && _chatHubTab == 'calls';
     // Sidebar-local padding â€” never use full-window pagePadding (that squeezes search).
     const sidePad = 12.0;
     return Column(
@@ -3207,13 +3266,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   onPressed: () => AppNavigation.instance.goHome(),
                   icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AppTheme.textPrimary),
                 ),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Chats',
+                  onCallsTab ? 'Calls' : 'Chats',
                   textAlign: TextAlign.left,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontSize: 22,
                     fontWeight: FontWeight.w700,
@@ -3221,11 +3280,40 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   ),
                 ),
               ),
-              IconButton(
-                tooltip: 'New group',
-                onPressed: _showCreateGroupDialog,
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.group_add_rounded, color: AppTheme.primaryBright, size: 22),
+              PopupMenuButton<String>(
+                tooltip: 'More',
+                padding: EdgeInsets.zero,
+                icon: const Icon(Icons.more_vert_rounded, color: AppTheme.textPrimary, size: 24),
+                color: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                onSelected: (value) {
+                  switch (value) {
+                    case 'new_group':
+                      _showCreateGroupDialog();
+                      break;
+                    case 'read_all':
+                      unawaited(_markAllChatsRead());
+                      break;
+                    case 'settings':
+                      _openChatSettings();
+                      break;
+                  }
+                },
+                itemBuilder: (context) => [
+                  if (!onCallsTab)
+                    const PopupMenuItem(
+                      value: 'new_group',
+                      child: Text('New group', style: TextStyle(color: Color(0xFF111B21))),
+                    ),
+                  const PopupMenuItem(
+                    value: 'read_all',
+                    child: Text('Read all', style: TextStyle(color: Color(0xFF111B21))),
+                  ),
+                  const PopupMenuItem(
+                    value: 'settings',
+                    child: Text('Settings', style: TextStyle(color: Color(0xFF111B21))),
+                  ),
+                ],
               ),
               if (immersive) _dashboardLogoButton(),
             ],
@@ -3238,7 +3326,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
             style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
             decoration: InputDecoration(
-              hintText: 'Search\u2026',
+              hintText: onCallsTab ? 'Search contacts\u2026' : 'Search\u2026',
               hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 14),
               prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9), size: 20),
               prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
@@ -3261,12 +3349,14 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             ),
           ),
         ),
-        Expanded(child: _buildInboxList()),
+        if (!onCallsTab) _buildInboxFilterChips(),
+        Expanded(child: onCallsTab ? _buildCallsList() : _buildInboxList()),
+        if (showCallsHub) _buildChatHubBottomNav(),
       ],
     );
   }
 
-  List<Map<String, dynamic>> _inboxRows() {
+  List<Map<String, dynamic>> _baseInboxRows() {
     final rows = <Map<String, dynamic>>[];
     for (final u in _users) {
       if (u is! Map) continue;
@@ -3311,10 +3401,510 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     return rows;
   }
 
+  List<Map<String, dynamic>> _inboxRows() {
+    final rows = _baseInboxRows();
+    switch (_inboxFilter) {
+      case 'unread':
+        return rows.where((r) => (r['unread'] as int) > 0).toList();
+      case 'favorites':
+        return rows.where((r) => _isChatPinned(r['pinKey'] as String)).toList();
+      case 'groups':
+        return rows.where((r) => r['kind'] == 'group').toList();
+      default:
+        return rows;
+    }
+  }
+
+  ({int unread, int favorites, int groups}) _inboxFilterCounts() {
+    final rows = _baseInboxRows();
+    return (
+      unread: rows.where((r) => (r['unread'] as int) > 0).length,
+      favorites: rows.where((r) => _isChatPinned(r['pinKey'] as String)).length,
+      groups: rows.where((r) => r['kind'] == 'group').length,
+    );
+  }
+
+  Widget _buildInboxFilterChips() {
+    final counts = _inboxFilterCounts();
+    Widget chip({
+      required String label,
+      required String value,
+      int? count,
+    }) {
+      final active = _inboxFilter == value;
+      final showCount = count != null && count > 0;
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => setState(() => _inboxFilter = value),
+          borderRadius: BorderRadius.circular(18),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              color: active
+                  ? AppTheme.accent.withValues(alpha: 0.22)
+                  : Colors.white.withValues(alpha: 0.06),
+              border: Border.all(
+                color: active
+                    ? AppTheme.accent.withValues(alpha: 0.42)
+                    : Colors.white.withValues(alpha: 0.1),
+              ),
+            ),
+            child: Text(
+              showCount ? '$label $count' : label,
+              style: TextStyle(
+                color: active ? AppTheme.accent : AppTheme.textMuted,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: SizedBox(
+        height: 36,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            chip(label: 'All', value: 'all'),
+            const SizedBox(width: 8),
+            chip(label: 'Unread', value: 'unread', count: counts.unread),
+            const SizedBox(width: 8),
+            chip(label: 'Favorites', value: 'favorites', count: counts.favorites),
+            const SizedBox(width: 8),
+            chip(label: 'Groups', value: 'groups', count: counts.groups),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static const _waGreen = Color(0xFF25D366);
+  static const _waGreenLight = Color(0xFFD9FDD3);
+
+  int _totalInboxUnread() =>
+      _baseInboxRows().fold<int>(0, (sum, r) => sum + (r['unread'] as int));
+
+  Widget _buildChatHubBottomNav() {
+    final unreadTotal = _totalInboxUnread();
+    final bottomSafe = MediaQuery.paddingOf(context).bottom;
+
+    Widget tabItem({
+      required String id,
+      required IconData icon,
+      required String label,
+      int? badge,
+    }) {
+      final active = _chatHubTab == id;
+      return Expanded(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () {
+              if (_chatHubTab == id) return;
+              setState(() => _chatHubTab = id);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Stack(
+                    clipBehavior: Clip.none,
+                    alignment: Alignment.center,
+                    children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: active ? _waGreenLight.withValues(alpha: 0.42) : Colors.transparent,
+                          borderRadius: BorderRadius.circular(22),
+                        ),
+                        child: Icon(
+                          icon,
+                          size: 24,
+                          color: active ? _waGreen : AppTheme.textMuted.withValues(alpha: 0.85),
+                        ),
+                      ),
+                      if (badge != null && badge > 0)
+                        Positioned(
+                          right: 10,
+                          top: -2,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: _waGreen,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              badge > 99 ? '99+' : '$badge',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                height: 1.1,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                      color: active ? _waGreen : AppTheme.textMuted.withValues(alpha: 0.9),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+      ),
+      padding: EdgeInsets.fromLTRB(8, 4, 8, bottomSafe > 0 ? 2 : 8),
+      child: Row(
+        children: [
+          tabItem(
+            id: 'chats',
+            icon: Icons.chat_rounded,
+            label: 'Chats',
+            badge: unreadTotal,
+          ),
+          tabItem(
+            id: 'calls',
+            icon: Icons.call_rounded,
+            label: 'Calls',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Map<String, dynamic>? _parseCallListEntry(Map user) {
+    final raw = (user['last_message_raw'] ?? user['last_message'])?.toString() ?? '';
+    if (!CallTokens.isHiddenCallChatMessage(raw)) return null;
+
+    final signal = CallTokens.chatMessageToCallSignal({'message': raw});
+    if (signal == null) return null;
+
+    final at = parseApiDateTime(user['last_message_at']) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final callType = signal['call_type']?.toString() ?? 'audio';
+    final kind = callType == 'video' ? CallKind.video : CallKind.audio;
+
+    String status;
+    IconData statusIcon;
+    Color statusColor = AppTheme.textMuted;
+
+    if (raw.startsWith(CallTokens.invitePrefix)) {
+      final callerId = _asInt(signal['caller_id']) ?? _asInt(signal['sender_id']);
+      if (callerId == _myUserId) {
+        status = 'Outgoing';
+        statusIcon = Icons.call_made_rounded;
+      } else {
+        status = 'Incoming';
+        statusIcon = Icons.call_received_rounded;
+      }
+    } else if (raw.startsWith(CallTokens.rejectPrefix)) {
+      status = 'Missed';
+      statusIcon = Icons.call_missed_rounded;
+      statusColor = const Color(0xFFEF4444);
+    } else if (raw.startsWith(CallTokens.acceptPrefix)) {
+      status = 'Answered';
+      statusIcon = Icons.call_rounded;
+    } else {
+      status = 'Call ended';
+      statusIcon = Icons.call_rounded;
+    }
+
+    final kindLabel = kind == CallKind.video ? 'Video' : 'Voice';
+    return {
+      'user': user,
+      'kind': kind,
+      'status': status,
+      'statusIcon': statusIcon,
+      'statusColor': statusColor,
+      'subtitle': '$status \u2022 $kindLabel',
+      'at': at,
+    };
+  }
+
+  List<Map<String, dynamic>> _callListEntries() {
+    final entries = <Map<String, dynamic>>[];
+    for (final u in _users) {
+      if (u is! Map) continue;
+      final name = (u['full_name'] ?? u['username'] ?? 'User').toString();
+      if (_searchQuery.isNotEmpty && !name.toLowerCase().contains(_searchQuery)) continue;
+      final entry = _parseCallListEntry(Map<String, dynamic>.from(u));
+      if (entry != null) entries.add(entry);
+    }
+    entries.sort((a, b) => (b['at'] as DateTime).compareTo(a['at'] as DateTime));
+    return entries;
+  }
+
+  List<Map<String, dynamic>> _callContactRows() {
+    final rows = <Map<String, dynamic>>[];
+    for (final u in _users) {
+      if (u is! Map) continue;
+      final name = (u['full_name'] ?? u['username'] ?? 'User').toString();
+      if (_searchQuery.isNotEmpty && !name.toLowerCase().contains(_searchQuery)) continue;
+      rows.add(Map<String, dynamic>.from(u));
+    }
+    rows.sort((a, b) {
+      final an = (a['full_name'] ?? a['username'] ?? '').toString().toLowerCase();
+      final bn = (b['full_name'] ?? b['username'] ?? '').toString().toLowerCase();
+      return an.compareTo(bn);
+    });
+    return rows;
+  }
+
+  Widget _buildCallsList() {
+    if (_isLoadingUsers && _users.isEmpty) return _buildLoader('Loading calls...');
+
+    final recent = _callListEntries();
+    final contacts = _callContactRows();
+    if (recent.isEmpty && contacts.isEmpty) {
+      return _buildEmpty(_searchQuery.isNotEmpty ? 'No contacts match your search' : 'No contacts available');
+    }
+
+    final immersive = PlatformCapabilities.immersiveChatChrome;
+    final children = <Widget>[];
+
+    if (recent.isNotEmpty) {
+      children.add(
+        Padding(
+          padding: EdgeInsets.fromLTRB(immersive ? 14 : 16, 4, 16, 6),
+          child: Text(
+            'Recent',
+            style: TextStyle(
+              color: AppTheme.textMuted.withValues(alpha: 0.95),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < recent.length; i++) {
+        final entry = recent[i];
+        final user = entry['user'] as Map;
+        final name = (user['full_name'] ?? user['username'] ?? 'User').toString();
+        final kind = entry['kind'] as CallKind;
+        final subtitle = entry['subtitle'] as String;
+        final statusIcon = entry['statusIcon'] as IconData;
+        final statusColor = entry['statusColor'] as Color;
+        final timeLabel = _formatChatListTime(user['last_message_at']);
+
+        children.add(
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => unawaited(_startCallWithPeer(user, kind)),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: immersive ? 8 : 12, vertical: 10),
+                child: Row(
+                  children: [
+                    ChatAvatar(
+                      photoUrl: user['profile_photo_url']?.toString(),
+                      name: name,
+                      initials: _initials(name),
+                      backgroundColor: _avatarColor(_asInt(user['id']) ?? 0),
+                      radius: 24,
+                      showOnlineIndicator: true,
+                      isOnline: _parseOnline(user['is_online']),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: statusColor == const Color(0xFFEF4444)
+                                  ? const Color(0xFFEF4444)
+                                  : AppTheme.textPrimary,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Icon(statusIcon, size: 14, color: statusColor),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  subtitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(color: statusColor, fontSize: 13),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      timeLabel,
+                      style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: 'Voice call',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => unawaited(_startCallWithPeer(user, CallKind.audio)),
+                      icon: const Icon(Icons.call_rounded, color: _waGreen, size: 20),
+                    ),
+                    IconButton(
+                      tooltip: 'Video call',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => unawaited(_startCallWithPeer(user, CallKind.video)),
+                      icon: Icon(Icons.videocam_rounded, color: AppTheme.primaryBright, size: 20),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        if (i < recent.length - 1) {
+          children.add(Divider(height: 1, indent: 76, color: Colors.white.withValues(alpha: 0.06)));
+        }
+      }
+    }
+
+    if (contacts.isNotEmpty) {
+      children.add(
+        Padding(
+          padding: EdgeInsets.fromLTRB(immersive ? 14 : 16, recent.isEmpty ? 4 : 14, 16, 6),
+          child: Text(
+            'Contacts',
+            style: TextStyle(
+              color: AppTheme.textMuted.withValues(alpha: 0.95),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < contacts.length; i++) {
+        final user = contacts[i];
+        final name = (user['full_name'] ?? user['username'] ?? 'User').toString();
+        final designation = (user['designation'] ?? '').toString().trim();
+
+        children.add(
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => unawaited(_startCallWithPeer(user, CallKind.audio)),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: immersive ? 8 : 12, vertical: 10),
+                child: Row(
+                  children: [
+                    ChatAvatar(
+                      photoUrl: user['profile_photo_url']?.toString(),
+                      name: name,
+                      initials: _initials(name),
+                      backgroundColor: _avatarColor(_asInt(user['id']) ?? 0),
+                      radius: 24,
+                      showOnlineIndicator: true,
+                      isOnline: _parseOnline(user['is_online']),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (designation.isNotEmpty)
+                            Text(
+                              designation,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13),
+                            ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Voice call',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => unawaited(_startCallWithPeer(user, CallKind.audio)),
+                      icon: const Icon(Icons.call_rounded, color: _waGreen, size: 20),
+                    ),
+                    IconButton(
+                      tooltip: 'Video call',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => unawaited(_startCallWithPeer(user, CallKind.video)),
+                      icon: Icon(Icons.videocam_rounded, color: AppTheme.primaryBright, size: 20),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+        if (i < contacts.length - 1) {
+          children.add(Divider(height: 1, indent: 76, color: Colors.white.withValues(alpha: 0.06)));
+        }
+      }
+    }
+
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 8),
+      children: children,
+    );
+  }
+
   Widget _buildInboxList() {
     if (_isLoadingUsers && _users.isEmpty) return _buildLoader('Loading chats...');
     final rows = _inboxRows();
-    if (rows.isEmpty) return _buildEmpty('No chats yet');
+    if (rows.isEmpty) {
+      final emptyLabel = () {
+        if (_searchQuery.isNotEmpty) return 'No chats match your search';
+        switch (_inboxFilter) {
+          case 'unread':
+            return 'No unread chats';
+          case 'favorites':
+            return 'No favorite chats\nPin a chat to add it here';
+          case 'groups':
+            return 'No groups yet';
+          default:
+            return 'No chats yet';
+        }
+      }();
+      return _buildEmpty(emptyLabel);
+    }
     final immersive = PlatformCapabilities.immersiveChatChrome;
 
     return ListView.separated(
@@ -3851,8 +4441,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               height: PlatformCapabilities.immersiveChatChrome ? 66 : 74,
               padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 6),
               decoration: BoxDecoration(
-                color: const Color(0xF20B1220),
-                border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
+                color: AppTheme.surface2.withValues(alpha: 0.5),
+                border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
               ),
               child: Row(
                 children: [
@@ -3898,7 +4488,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                               showOnlineIndicator: !isGroup,
                               isOnline: isOnline,
                               onlineIndicatorSize: 13,
-                              onlineBorderColor: const Color(0xFF0B1220),
+                              onlineBorderColor: AppTheme.surface2,
                             ),
                             SizedBox(width: compact ? 8 : 12),
                             Expanded(
@@ -4051,7 +4641,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   children: [
                     if (_inChatQuery.isNotEmpty)
                       Material(
-                        color: const Color(0xFF1F2C34),
+                        color: AppTheme.dialogBg,
                         child: ListTile(
                           dense: true,
                           leading: const Icon(Icons.search_rounded, color: AppTheme.primaryBright, size: 20),
@@ -4124,51 +4714,54 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         ),
 
         if (_isRecording)
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1F2C34),
-              border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.06))),
-            ),
-            child: SafeArea(
-              top: false,
-              child: Row(children: [
-                Container(
-                  width: 10,
-                  height: 10,
-                  decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFFFF5252)),
-                ),
-                const SizedBox(width: 10),
-                const Text(
-                  'Recording',
-                  style: TextStyle(color: Color(0xFFE9EDEF), fontSize: 15, fontWeight: FontWeight.w500),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  '${_recordSeconds}s',
-                  style: const TextStyle(color: Color(0xFF8696A0), fontSize: 14),
-                ),
-                const Spacer(),
-                GestureDetector(
-                  onTap: _stopAndSendRecording,
-                  child: Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00A884),
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF00A884).withValues(alpha: 0.3),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: const Icon(Icons.send_rounded, color: Colors.white, size: 22),
+          ColoredBox(
+            color: const Color(0xFFF0F2F5),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                8,
+                8,
+                8,
+                8 + MediaQuery.paddingOf(context).bottom,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFFFF5252)),
                   ),
-                ),
-              ]),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Recording',
+                    style: TextStyle(color: Color(0xFF111B21), fontSize: 15, fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${_recordSeconds}s',
+                    style: const TextStyle(color: Color(0xFF667781), fontSize: 14),
+                  ),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: _stopAndSendRecording,
+                    child: Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00A884),
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF00A884).withValues(alpha: 0.25),
+                            blurRadius: 6,
+                            offset: const Offset(0, 1),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(Icons.send_rounded, color: Colors.white, size: 22),
+                    ),
+                  ),
+                ],
+              ),
             ),
           )
         else
@@ -4185,7 +4778,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     double size = 22,
     Color? color,
   }) {
-    final tint = color ?? const Color(0xFF8696A0);
+    final tint = color ?? AppTheme.textMuted;
     return Tooltip(
       message: tooltip,
       child: Material(
@@ -4216,276 +4809,291 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       _emojiPanelHeight = keyboard;
     }
     const waGreen = Color(0xFF00A884);
-    const waBarBg = Color(0xFF1F2C34);
-    const waInputBg = Color(0xFF2A3942);
-    const waIcon = Color(0xFF8696A0);
-    const waHint = Color(0xFF667781);
+    const barBg = Color(0xFFF0F2F5);
+    const pillBg = Color(0xFFFFFFFF);
+    const iconColor = Color(0xFF54656F);
+    const hintColor = Color(0xFF667781);
+    const textColor = Color(0xFF111B21);
 
-    return ColoredBox(
-      color: waBarBg,
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(height: 1, color: Colors.white.withValues(alpha: 0.06)),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final narrow = constraints.maxWidth < 420;
-                final padH = mobile || narrow ? 6.0 : 10.0;
-                final hint = desktop
-                    ? (narrow ? 'Message' : 'Message · Enter to send')
-                    : 'Message';
-                return Padding(
-                  padding: EdgeInsets.fromLTRB(padH, 7, padH, 8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (_replyTo != null) _buildReplyComposerBar(),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          _composerIconBtn(
-                            tooltip: _emojiOpen ? 'Keyboard' : 'Emoji',
-                            onPressed: _isSending ? null : _toggleEmojiPanel,
-                            icon: _emojiOpen
-                                ? Icons.keyboard_alt_outlined
-                                : Icons.emoji_emotions_outlined,
-                            size: narrow ? 23 : 24,
-                            color: _emojiOpen ? waGreen : waIcon,
-                          ),
-                          Expanded(
-                            child: Container(
-                              constraints: const BoxConstraints(minHeight: 44, maxHeight: 132),
-                              decoration: BoxDecoration(
-                                color: waInputBg,
-                                borderRadius: BorderRadius.circular(26),
-                                border: Border.all(color: Colors.white.withValues(alpha: 0.04)),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: barBg,
+        border: Border(
+          top: BorderSide(color: const Color(0xFFD1D7DB).withValues(alpha: 0.55)),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              6,
+              5,
+              6,
+              5 + MediaQuery.paddingOf(context).bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_replyTo != null) _buildReplyComposerBar(),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final narrow = constraints.maxWidth < 420;
+                    final hint = desktop
+                        ? (narrow ? 'Message' : 'Message · Enter to send')
+                        : 'Message';
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: Container(
+                            constraints: const BoxConstraints(minHeight: 44, maxHeight: 132),
+                            decoration: BoxDecoration(
+                              color: pillBg,
+                              borderRadius: BorderRadius.circular(24),
+                              border: Border.all(
+                                color: const Color(0xFFE9EDEF),
+                                width: 0.5,
                               ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Expanded(
-                                    child: CallbackShortcuts(
-                                      bindings: {
-                                        const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
-                                        const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
-                                        SingleActivator(LogicalKeyboardKey.keyV, control: true): () {
-                                          unawaited(_pasteFromClipboard());
-                                        },
-                                        SingleActivator(LogicalKeyboardKey.keyV, meta: true): () {
-                                          unawaited(_pasteFromClipboard());
-                                        },
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                _composerIconBtn(
+                                  tooltip: _emojiOpen ? 'Keyboard' : 'Emoji',
+                                  onPressed: _isSending ? null : _toggleEmojiPanel,
+                                  icon: _emojiOpen
+                                      ? Icons.keyboard_alt_outlined
+                                      : Icons.emoji_emotions_outlined,
+                                  size: narrow ? 22 : 23,
+                                  color: _emojiOpen ? waGreen : iconColor,
+                                ),
+                                Expanded(
+                                  child: CallbackShortcuts(
+                                    bindings: {
+                                      const SingleActivator(LogicalKeyboardKey.enter, control: true): _sendMessage,
+                                      const SingleActivator(LogicalKeyboardKey.enter, meta: true): _sendMessage,
+                                      SingleActivator(LogicalKeyboardKey.keyV, control: true): () {
+                                        unawaited(_pasteFromClipboard());
                                       },
-                                      child: Focus(
-                                        onKeyEvent: desktop
-                                            ? (node, event) {
-                                                if (event is! KeyDownEvent ||
-                                                    event.logicalKey != LogicalKeyboardKey.enter) {
-                                                  return KeyEventResult.ignored;
-                                                }
-                                                if (HardwareKeyboard.instance.isShiftPressed) {
-                                                  return KeyEventResult.ignored;
-                                                }
-                                                _sendMessage();
-                                                return KeyEventResult.handled;
+                                      SingleActivator(LogicalKeyboardKey.keyV, meta: true): () {
+                                        unawaited(_pasteFromClipboard());
+                                      },
+                                    },
+                                    child: Focus(
+                                      onKeyEvent: desktop
+                                          ? (node, event) {
+                                              if (event is! KeyDownEvent ||
+                                                  event.logicalKey != LogicalKeyboardKey.enter) {
+                                                return KeyEventResult.ignored;
                                               }
-                                            : null,
-                                        child: TextField(
-                                          controller: _msgController,
-                                          focusNode: _msgFocus,
-                                          minLines: 1,
-                                          maxLines: 6,
-                                          keyboardType: TextInputType.multiline,
-                                          textInputAction: desktop
-                                              ? TextInputAction.send
-                                              : TextInputAction.newline,
-                                          textCapitalization: TextCapitalization.sentences,
-                                          style: const TextStyle(
-                                            color: Color(0xFFE9EDEF),
-                                            fontSize: 16,
-                                            height: 1.32,
-                                            letterSpacing: 0.1,
-                                          ),
-                                          cursorColor: waGreen,
-                                          onTap: () {
-                                            if (_emojiOpen) setState(() => _emojiOpen = false);
-                                          },
-                                          contextMenuBuilder: (context, editableTextState) {
-                                            final defaults = editableTextState.contextMenuButtonItems
-                                                .where((item) => item.type != ContextMenuButtonType.paste)
-                                                .toList();
-                                            return AdaptiveTextSelectionToolbar.buttonItems(
-                                              anchors: editableTextState.contextMenuAnchors,
-                                              buttonItems: <ContextMenuButtonItem>[
-                                                ContextMenuButtonItem(
-                                                  label: 'Paste',
-                                                  onPressed: () {
-                                                    ContextMenuController.removeAny();
-                                                    unawaited(_pasteFromClipboard());
-                                                  },
-                                                ),
-                                                ...defaults,
-                                              ],
-                                            );
-                                          },
-                                          decoration: InputDecoration(
-                                            isDense: true,
-                                            hintText: hint,
-                                            hintStyle: const TextStyle(color: waHint, fontSize: 15.5),
-                                            border: InputBorder.none,
-                                            contentPadding: const EdgeInsets.fromLTRB(4, 11, 0, 11),
-                                          ),
+                                              if (HardwareKeyboard.instance.isShiftPressed) {
+                                                return KeyEventResult.ignored;
+                                              }
+                                              _sendMessage();
+                                              return KeyEventResult.handled;
+                                            }
+                                          : null,
+                                      child: TextField(
+                                        controller: _msgController,
+                                        focusNode: _msgFocus,
+                                        minLines: 1,
+                                        maxLines: 6,
+                                        keyboardType: TextInputType.multiline,
+                                        textInputAction: desktop
+                                            ? TextInputAction.send
+                                            : TextInputAction.newline,
+                                        textCapitalization: TextCapitalization.sentences,
+                                        style: const TextStyle(
+                                          color: textColor,
+                                          fontSize: 16,
+                                          height: 1.32,
+                                          letterSpacing: 0.1,
+                                        ),
+                                        cursorColor: waGreen,
+                                        onTap: () {
+                                          if (_emojiOpen) setState(() => _emojiOpen = false);
+                                        },
+                                        contextMenuBuilder: (context, editableTextState) {
+                                          final defaults = editableTextState.contextMenuButtonItems
+                                              .where((item) => item.type != ContextMenuButtonType.paste)
+                                              .toList();
+                                          return AdaptiveTextSelectionToolbar.buttonItems(
+                                            anchors: editableTextState.contextMenuAnchors,
+                                            buttonItems: <ContextMenuButtonItem>[
+                                              ContextMenuButtonItem(
+                                                label: 'Paste',
+                                                onPressed: () {
+                                                  ContextMenuController.removeAny();
+                                                  unawaited(_pasteFromClipboard());
+                                                },
+                                              ),
+                                              ...defaults,
+                                            ],
+                                          );
+                                        },
+                                        decoration: InputDecoration(
+                                          isDense: true,
+                                          filled: false,
+                                          fillColor: Colors.transparent,
+                                          hintText: hint,
+                                          hintStyle: const TextStyle(color: hintColor, fontSize: 15.5),
+                                          border: InputBorder.none,
+                                          enabledBorder: InputBorder.none,
+                                          focusedBorder: InputBorder.none,
+                                          disabledBorder: InputBorder.none,
+                                          contentPadding: const EdgeInsets.fromLTRB(0, 11, 0, 11),
                                         ),
                                       ),
                                     ),
                                   ),
+                                ),
+                                _composerIconBtn(
+                                  tooltip: 'Attach file',
+                                  onPressed: _isSending
+                                      ? null
+                                      : () {
+                                          if (_emojiOpen) setState(() => _emojiOpen = false);
+                                          unawaited(_showAttachSheet());
+                                        },
+                                  icon: Icons.attach_file_rounded,
+                                  size: 22,
+                                  color: iconColor,
+                                ),
+                                if (mobile && !canSend)
                                   _composerIconBtn(
-                                    tooltip: 'Attach file',
+                                    tooltip: 'Camera',
                                     onPressed: _isSending
                                         ? null
                                         : () {
                                             if (_emojiOpen) setState(() => _emojiOpen = false);
-                                            unawaited(_showAttachSheet());
+                                            unawaited(_takePhoto());
                                           },
-                                    icon: Icons.attach_file_rounded,
+                                    icon: Icons.photo_camera_outlined,
                                     size: 22,
+                                    color: iconColor,
                                   ),
-                                  if (!canSend && !desktop)
-                                    _composerIconBtn(
-                                      tooltip: 'Camera',
-                                      onPressed: _isSending
-                                          ? null
-                                          : () {
-                                              if (_emojiOpen) setState(() => _emojiOpen = false);
-                                              unawaited(_takePhoto());
-                                            },
-                                      icon: Icons.photo_camera_outlined,
-                                      size: 22,
-                                    ),
-                                  const SizedBox(width: 2),
+                                const SizedBox(width: 4),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: _isSending ? null : (canSend ? _sendMessage : _toggleRecording),
+                            child: Ink(
+                              width: 46,
+                              height: 46,
+                              decoration: BoxDecoration(
+                                color: waGreen,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: waGreen.withValues(alpha: 0.22),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 1),
+                                  ),
                                 ],
                               ),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
-                              customBorder: const CircleBorder(),
-                              onTap: _isSending ? null : (canSend ? _sendMessage : _toggleRecording),
-                              child: Ink(
-                                width: 46,
-                                height: 46,
-                                decoration: BoxDecoration(
-                                  color: canSend ? waGreen : waGreen.withValues(alpha: 0.92),
-                                  shape: BoxShape.circle,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: waGreen.withValues(alpha: 0.28),
-                                      blurRadius: 8,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: _isSending
-                                    ? const Padding(
-                                        padding: EdgeInsets.all(13),
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : Icon(
-                                        canSend ? Icons.send_rounded : Icons.mic_rounded,
+                              child: _isSending
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(13),
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
                                         color: Colors.white,
-                                        size: canSend ? 21 : 23,
                                       ),
-                              ),
+                                    )
+                                  : Icon(
+                                      canSend ? Icons.send_rounded : Icons.mic_rounded,
+                                      color: Colors.white,
+                                      size: canSend ? 21 : 23,
+                                    ),
                             ),
                           ),
-                        ],
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-            if (_emojiOpen)
-              SizedBox(
-                height: _emojiPanelHeight.clamp(250, 360),
-                child: ColoredBox(
-                  color: const Color(0xFF0B141A),
-                  child: Column(
-                    children: [
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-                          ),
                         ),
-                        child: Row(
-                          children: [
-                            const Text(
-                              'Emoji',
-                              style: TextStyle(
-                                color: Color(0xFF8696A0),
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.2,
-                              ),
-                            ),
-                            const Spacer(),
-                            GestureDetector(
-                              onTap: () => setState(() => _emojiOpen = false),
-                              child: const Icon(Icons.keyboard_alt_outlined, color: Color(0xFF8696A0), size: 22),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: GridView.builder(
-                          padding: const EdgeInsets.fromLTRB(10, 10, 10, 14),
-                          itemCount: kChatEmojiList.length,
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 8,
-                            mainAxisSpacing: 4,
-                            crossAxisSpacing: 4,
-                          ),
-                          itemBuilder: (_, i) {
-                            final emoji = kChatEmojiList[i];
-                            return Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                onTap: () => _insertEmoji(emoji),
-                                borderRadius: BorderRadius.circular(8),
-                                child: Center(child: _emojiText(emoji, size: 26)),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    );
+                  },
                 ),
+              ],
+            ),
+          ),
+          if (_emojiOpen)
+            SizedBox(
+              height: _emojiPanelHeight.clamp(250, 360),
+              child: ColoredBox(
+                color: barBg,
+                child: Column(
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(color: Colors.black.withValues(alpha: 0.06)),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Text(
+                          'Emoji',
+                          style: TextStyle(
+                            color: iconColor,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                        const Spacer(),
+                        GestureDetector(
+                          onTap: () => setState(() => _emojiOpen = false),
+                          child: const Icon(Icons.keyboard_alt_outlined, color: iconColor, size: 22),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(10, 10, 10, 14),
+                      itemCount: kChatEmojiList.length,
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 8,
+                        mainAxisSpacing: 4,
+                        crossAxisSpacing: 4,
+                      ),
+                      itemBuilder: (_, i) {
+                        final emoji = kChatEmojiList[i];
+                        return Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => _insertEmoji(emoji),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Center(child: _emojiText(emoji, size: 26)),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
-          ],
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildReplyComposerBar() {
     final reply = _replyTo!;
-    const accent = Color(0xFF00A884);
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFF2A3942),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        border: Border.all(color: const Color(0xFFE9EDEF), width: 0.5),
       ),
       child: IntrinsicHeight(
         child: Row(
@@ -4493,9 +5101,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           children: [
             Container(
               width: 4,
-              decoration: const BoxDecoration(
-                color: accent,
-                borderRadius: BorderRadius.horizontal(left: Radius.circular(10)),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00A884),
+                borderRadius: const BorderRadius.horizontal(left: Radius.circular(11)),
               ),
             ),
             Expanded(
@@ -4507,7 +5115,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     const Text(
                       'Reply',
                       style: TextStyle(
-                        color: accent,
+                        color: Color(0xFF00A884),
                         fontWeight: FontWeight.w700,
                         fontSize: 12.5,
                       ),
@@ -4516,7 +5124,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     Text(
                       '${reply['sender_name'] ?? 'Message'}',
                       style: const TextStyle(
-                        color: Color(0xFFE9EDEF),
+                        color: Color(0xFF111B21),
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                       ),
@@ -4526,8 +5134,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       '${reply['preview'] ?? ''}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: const Color(0xFF8696A0).withValues(alpha: 0.95),
+                      style: const TextStyle(
+                        color: Color(0xFF667781),
                         fontSize: 12.5,
                       ),
                     ),
@@ -4593,8 +5201,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       reply = null;
     }
 
-    const ownBubble = Color(0xFF005C4B);
-    const otherBubble = Color(0xFF1F2C33);
+    const ownBubble = Color(0xFF2563EB);
+    const otherBubble = Color(0xFF1E3A5F);
     final maxW = _bubbleMaxWidth(context);
     final bubbleShape = chatBubbleRadius(isOwn: isOwn);
     final isPlainText = !isDeleted &&
@@ -4899,13 +5507,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                     decoration: BoxDecoration(
                       color: isSelected
                           ? Color.alphaBlend(
-                              const Color(0xFF00A884).withValues(alpha: 0.28),
+                              AppTheme.accent.withValues(alpha: 0.28),
                               isOwn ? ownBubble : otherBubble,
                             )
                           : (isOwn ? ownBubble : otherBubble),
                       borderRadius: bubbleShape,
                       border: isSelected
-                          ? Border.all(color: const Color(0xFF00A884).withValues(alpha: 0.55), width: 1.5)
+                          ? Border.all(color: AppTheme.accent.withValues(alpha: 0.55), width: 1.5)
                           : (isOwn
                               ? null
                               : Border.all(color: Colors.white.withValues(alpha: 0.05))),
@@ -5063,7 +5671,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       height: PlatformCapabilities.immersiveChatChrome ? 66 : 74,
       padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 4),
       decoration: BoxDecoration(
-        color: const Color(0xFF1F2C34),
+        color: AppTheme.dialogBg,
         border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
       ),
       child: Row(
@@ -5897,128 +6505,38 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   // â”€â”€â”€ Create Group Dialog â”€â”€â”€
   void _showCreateGroupDialog() {
-    final nameCtrl = TextEditingController();
-    final descCtrl = TextEditingController();
-    final selectedIds = <int>{};
-    var personalInbox = false;
-
-    showDialog(
+    showModalBottomSheet<void>(
       context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          backgroundColor: AppTheme.dialogBg,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-          ),
-          title: Text('Create New Group', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold)),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Group Name', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.w600)),
-                  SizedBox(height: 8),
-                  TextField(
-                    controller: nameCtrl,
-                    style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-                    decoration: _dialogInputDecor('e.g., Development Team'),
-                  ),
-                  SizedBox(height: 16),
-                  Text('Description (Optional)', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.w600)),
-                  SizedBox(height: 8),
-                  TextField(
-                    controller: descCtrl,
-                    style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-                    maxLines: 3,
-                    decoration: _dialogInputDecor("What's this group about?"),
-                  ),
-                  SizedBox(height: 12),
-                    SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: personalInbox,
-                    onChanged: (v) => setDialogState(() => personalInbox = v),
-                    activeThumbColor: AppTheme.primary,
-                    title: Text(
-                      'Personal inbox',
-                      style: TextStyle(color: AppTheme.textPrimary, fontSize: 14, fontWeight: FontWeight.w600),
-                    ),
-                    subtitle: Text(
-                      'Members only see messages they sent or received. Creator/admins/managers see everything.',
-                      style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
-                    ),
-                  ),
-                  SizedBox(height: 8),
-                  Text('Add Members', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.w600)),
-                  SizedBox(height: 8),
-                  Container(
-                    constraints: BoxConstraints(maxHeight: 200),
-                    decoration: BoxDecoration(
-                      color: AppTheme.surface.withValues(alpha: 0.7),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                    ),
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: _users.length,
-                      itemBuilder: (_, i) {
-                        final u = _users[i];
-                        final uid = _chatInt(u is Map ? u['id'] : null);
-                        if (uid == null) return const SizedBox.shrink();
-                        final uname = (u is Map ? (u['full_name'] ?? u['username']) : null) ?? 'User';
-                        return CheckboxListTile(
-                          dense: true,
-                          value: selectedIds.contains(uid),
-                          onChanged: (v) => setDialogState(() {
-                            v == true ? selectedIds.add(uid) : selectedIds.remove(uid);
-                          }),
-                          title: Text(uname, style: TextStyle(color: AppTheme.textPrimary.withValues(alpha: 0.85), fontSize: 14)),
-                          activeColor: AppTheme.primary,
-                          checkColor: Colors.white,
-                          controlAffinity: ListTileControlAffinity.leading,
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (nameCtrl.text.trim().isEmpty) { _showError('Group name is required'); return; }
-                Navigator.pop(context);
-                _createGroup(
-                  nameCtrl.text.trim(),
-                  descCtrl.text.trim(),
-                  selectedIds.toList(),
-                  visibilityMode: personalInbox ? 'personal' : 'shared',
-                );
-              },
-              style: AppTheme.primaryButton(radius: 12),
-              child: const Text('Create Group'),
-            ),
-          ],
-        ),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (ctx) => _CreateGroupSheet(
+        users: _users,
+        onCreate: (name, desc, memberIds, {required String visibilityMode}) {
+          _createGroup(name, desc, memberIds, visibilityMode: visibilityMode);
+        },
       ),
     );
   }
 
   InputDecoration _dialogInputDecor(String hint) => InputDecoration(
     hintText: hint,
-    hintStyle: TextStyle(color: AppTheme.textMuted, fontSize: 14),
-    filled: true, fillColor: AppTheme.surface.withValues(alpha: 0.85),
-    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
-    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
-    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.primary)),
+    hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 14),
+    filled: true,
+    fillColor: Colors.white.withValues(alpha: 0.06),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.65), width: 1.5),
+    ),
   );
 
   // â”€â”€â”€ Group Settings â”€â”€â”€
@@ -6085,6 +6603,561 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           iconColor: AppTheme.featureChat,
         ),
       );
+}
+
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// Create Group Sheet (dashboard glass theme)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+class _CreateGroupSheet extends StatefulWidget {
+  final List<dynamic> users;
+  final void Function(
+    String name,
+    String desc,
+    List<int> memberIds, {
+    required String visibilityMode,
+  }) onCreate;
+
+  const _CreateGroupSheet({
+    required this.users,
+    required this.onCreate,
+  });
+
+  @override
+  State<_CreateGroupSheet> createState() => _CreateGroupSheetState();
+}
+
+class _CreateGroupSheetState extends State<_CreateGroupSheet> {
+  final _nameCtrl = TextEditingController();
+  final _descCtrl = TextEditingController();
+  final _searchCtrl = TextEditingController();
+  final _selectedIds = <int>{};
+  var _personalInbox = false;
+  String _memberQuery = '';
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _descCtrl.dispose();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    if (parts.isNotEmpty) return parts[0][0].toUpperCase();
+    return '?';
+  }
+
+  Color _avatarColor(int id) {
+    const palette = [
+      Color(0xFF3B82F6),
+      Color(0xFF8B5CF6),
+      Color(0xFF06B6D4),
+      Color(0xFF10B981),
+      Color(0xFFF59E0B),
+      Color(0xFFEC4899),
+    ];
+    return palette[id.abs() % palette.length];
+  }
+
+  List<Map<String, dynamic>> _filteredUsers() {
+    final rows = <Map<String, dynamic>>[];
+    for (final u in widget.users) {
+      if (u is! Map) continue;
+      final id = _chatInt(u['id']);
+      if (id == null) continue;
+      final name = (u['full_name'] ?? u['username'] ?? 'User').toString();
+      if (_memberQuery.isNotEmpty && !name.toLowerCase().contains(_memberQuery)) continue;
+      rows.add(Map<String, dynamic>.from(u));
+    }
+    rows.sort((a, b) {
+      final an = (a['full_name'] ?? a['username'] ?? '').toString().toLowerCase();
+      final bn = (b['full_name'] ?? b['username'] ?? '').toString().toLowerCase();
+      return an.compareTo(bn);
+    });
+    return rows;
+  }
+
+  void _toggleMember(int id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+  }
+
+  void _selectAllVisible() {
+    setState(() {
+      for (final u in _filteredUsers()) {
+        final id = _chatInt(u['id']);
+        if (id != null) _selectedIds.add(id);
+      }
+    });
+  }
+
+  void _clearSelection() => setState(_selectedIds.clear);
+
+  void _submit() {
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Group name is required'),
+          backgroundColor: AppTheme.dialogBg,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    Navigator.pop(context);
+    widget.onCreate(
+      name,
+      _descCtrl.text.trim(),
+      _selectedIds.toList(),
+      visibilityMode: _personalInbox ? 'personal' : 'shared',
+    );
+  }
+
+  Widget _sectionLabel(String text) {
+    return Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        color: AppTheme.textMuted.withValues(alpha: 0.9),
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.1,
+      ),
+    );
+  }
+
+  InputDecoration _fieldDecor(String hint, {IconData? prefix}) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 14),
+      prefixIcon: prefix == null ? null : Icon(prefix, size: 20, color: AppTheme.textMuted),
+      filled: true,
+      fillColor: Colors.white.withValues(alpha: 0.06),
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: AppTheme.primaryBright.withValues(alpha: 0.7), width: 1.5),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final filtered = _filteredUsers();
+
+    return Padding(
+      padding: EdgeInsets.only(top: MediaQuery.sizeOf(context).height * 0.05),
+      child: AppTheme.glassBlur(
+        topRadius: 24,
+        child: DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.9,
+          minChildSize: 0.55,
+          maxChildSize: 0.95,
+          builder: (context, scrollController) {
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  AppTheme.primary.withValues(alpha: 0.95),
+                                  AppTheme.accent.withValues(alpha: 0.85),
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppTheme.primary.withValues(alpha: 0.28),
+                                  blurRadius: 14,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(Icons.groups_rounded, color: Colors.white, size: 26),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Create new group',
+                                  style: TextStyle(
+                                    color: AppTheme.textPrimary,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.3,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Add teammates and start collaborating',
+                                  style: TextStyle(
+                                    color: AppTheme.textMuted.withValues(alpha: 0.92),
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Close',
+                            onPressed: () => Navigator.pop(context),
+                            icon: Icon(Icons.close_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ListView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                    children: [
+                      AppTheme.glassCard(
+                        borderRadius: 16,
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _sectionLabel('Group details'),
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: _nameCtrl,
+                              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                              textCapitalization: TextCapitalization.sentences,
+                              decoration: _fieldDecor('Group name', prefix: Icons.badge_outlined),
+                            ),
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: _descCtrl,
+                              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+                              minLines: 2,
+                              maxLines: 3,
+                              textCapitalization: TextCapitalization.sentences,
+                              decoration: _fieldDecor('Description (optional)', prefix: Icons.notes_rounded),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => setState(() => _personalInbox = !_personalInbox),
+                          borderRadius: BorderRadius.circular(16),
+                          child: Ink(
+                            decoration: AppTheme.loginInsetDecoration(borderRadius: 16).copyWith(
+                              border: Border.all(
+                                color: _personalInbox
+                                    ? AppTheme.primaryBright.withValues(alpha: 0.45)
+                                    : const Color(0xFF93C5FD).withValues(alpha: 0.22),
+                              ),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 40,
+                                    height: 40,
+                                    decoration: BoxDecoration(
+                                      color: (_personalInbox ? AppTheme.primary : AppTheme.textMuted)
+                                          .withValues(alpha: 0.18),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      Icons.inbox_rounded,
+                                      color: _personalInbox ? AppTheme.primaryBright : AppTheme.textMuted,
+                                      size: 22,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Personal inbox',
+                                          style: TextStyle(
+                                            color: AppTheme.textPrimary,
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Members only see their own messages. Admins see everything.',
+                                          style: TextStyle(
+                                            color: AppTheme.textMuted.withValues(alpha: 0.9),
+                                            fontSize: 12,
+                                            height: 1.3,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Switch.adaptive(
+                                    value: _personalInbox,
+                                    onChanged: (v) => setState(() => _personalInbox = v),
+                                    activeThumbColor: AppTheme.primaryBright,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(child: _sectionLabel('Add members')),
+                          if (_selectedIds.isNotEmpty)
+                            Container(
+                              margin: const EdgeInsets.only(left: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primary.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: AppTheme.primaryBright.withValues(alpha: 0.35)),
+                              ),
+                              child: Text(
+                                '${_selectedIds.length} selected',
+                                style: const TextStyle(
+                                  color: AppTheme.primaryBright,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _searchCtrl,
+                        onChanged: (v) => setState(() => _memberQuery = v.toLowerCase()),
+                        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+                        decoration: _fieldDecor('Search members…', prefix: Icons.search_rounded),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          TextButton.icon(
+                            onPressed: filtered.isEmpty ? null : _selectAllVisible,
+                            icon: const Icon(Icons.done_all_rounded, size: 18),
+                            label: const Text('Select all'),
+                            style: TextButton.styleFrom(foregroundColor: AppTheme.primaryBright),
+                          ),
+                          TextButton(
+                            onPressed: _selectedIds.isEmpty ? null : _clearSelection,
+                            child: Text(
+                              'Clear',
+                              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9)),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      if (filtered.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 28),
+                          child: Center(
+                            child: Text(
+                              _memberQuery.isEmpty ? 'No members available' : 'No members match your search',
+                              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9)),
+                            ),
+                          ),
+                        )
+                      else
+                        ...filtered.map((u) {
+                          final id = _chatInt(u['id'])!;
+                          final name = (u['full_name'] ?? u['username'] ?? 'User').toString();
+                          final designation = (u['designation'] ?? '').toString().trim();
+                          final selected = _selectedIds.contains(id);
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => _toggleMember(id),
+                                borderRadius: BorderRadius.circular(14),
+                                child: Ink(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(14),
+                                    gradient: selected
+                                        ? LinearGradient(
+                                            colors: [
+                                              AppTheme.primary.withValues(alpha: 0.22),
+                                              AppTheme.accent.withValues(alpha: 0.12),
+                                            ],
+                                          )
+                                        : null,
+                                    color: selected ? null : Colors.white.withValues(alpha: 0.05),
+                                    border: Border.all(
+                                      color: selected
+                                          ? AppTheme.primaryBright.withValues(alpha: 0.42)
+                                          : Colors.white.withValues(alpha: 0.1),
+                                    ),
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    child: Row(
+                                      children: [
+                                        ChatAvatar(
+                                          photoUrl: u['profile_photo_url']?.toString(),
+                                          name: name,
+                                          initials: _initials(name),
+                                          backgroundColor: _avatarColor(id),
+                                          radius: 20,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                name,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: AppTheme.textPrimary,
+                                                  fontSize: 15,
+                                                  fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                                                ),
+                                              ),
+                                              if (designation.isNotEmpty)
+                                                Text(
+                                                  designation,
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                    color: AppTheme.textMuted.withValues(alpha: 0.9),
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                        AnimatedContainer(
+                                          duration: const Duration(milliseconds: 160),
+                                          width: 26,
+                                          height: 26,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: selected
+                                                ? AppTheme.primaryBright
+                                                : Colors.white.withValues(alpha: 0.06),
+                                            border: Border.all(
+                                              color: selected
+                                                  ? AppTheme.primaryBright
+                                                  : Colors.white.withValues(alpha: 0.2),
+                                            ),
+                                          ),
+                                          child: selected
+                                              ? const Icon(Icons.check_rounded, color: Colors.white, size: 16)
+                                              : null,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: EdgeInsets.fromLTRB(16, 10, 16, 12 + bottomInset),
+                  decoration: BoxDecoration(
+                    border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        const Color(0xFF0F172A).withValues(alpha: 0.4),
+                        const Color(0xFF0A1628).withValues(alpha: 0.92),
+                      ],
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.textMuted,
+                            side: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton.icon(
+                          onPressed: _submit,
+                          icon: const Icon(Icons.group_add_rounded, size: 20),
+                          label: const Text('Create group'),
+                          style: AppTheme.primaryButton(radius: 14).copyWith(
+                            padding: WidgetStateProperty.all(
+                              const EdgeInsets.symmetric(vertical: 14),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
 }
 
 

@@ -22,6 +22,9 @@ class AppTheme {
   static const Color textPrimary = Color(0xFFFAFAFA);
   static const Color textMuted = Color(0xFF94A3B8);
 
+  /// WhatsApp-style immersive tab background (chat, tasks, vault).
+  static const Color immersivePageBg = Color(0xFF0B141A);
+
   // Semantic tokens (status, priority, feature accents)
   static const Color statusActive = success;
   static const Color statusPending = warning;

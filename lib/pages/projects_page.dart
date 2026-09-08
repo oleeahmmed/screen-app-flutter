@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -16,6 +17,8 @@ import '../widgets/task_action_buttons.dart';
 import '../widgets/task_status_dropdown.dart';
 import '../widgets/kanban_assignee_picker.dart';
 import '../widgets/project_vault_tab.dart';
+import '../widgets/project_monitor_tab.dart';
+import '../widgets/project_kanban_board.dart';
 import 'task_detail_page.dart';
 
 int? _parseUserId(dynamic v) {
@@ -163,15 +166,6 @@ int? coerceAssigneeDropdownValue(int? desired, List<DropdownMenuItem<int?>> item
   if (desired == null) return null;
   if (allowed.contains(desired)) return desired;
   return null;
-}
-
-/// Drag-and-drop payload for moving tasks between stages (Kanban).
-class TaskDragPayload {
-  final int taskId;
-  /// `null` = task had no stage (unassigned).
-  final int? sourceStageId;
-
-  TaskDragPayload({required this.taskId, this.sourceStageId});
 }
 
 enum _ProjectTasksView { kanban, calendar, list }
@@ -1143,13 +1137,12 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   DateTime _calMonth = DateTime.now();
   _ProjectTasksView _tasksView = _ProjectTasksView.kanban;
   late final TextEditingController _taskSearchCtrl;
-  /// Horizontal Kanban board scroll — must be shared with [Scrollbar] for dragging/sync.
-  final ScrollController _boardHScrollController = ScrollController();
+  /// Horizontal Kanban board scroll — managed inside [ProjectKanbanBoard].
 
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 2, vsync: this);
+    _tabCtrl = TabController(length: 4, vsync: this);
     _taskSearchCtrl = TextEditingController();
     _load();
   }
@@ -1157,7 +1150,6 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   @override
   void dispose() {
     _taskSearchCtrl.dispose();
-    _boardHScrollController.dispose();
     _tabCtrl.dispose();
     super.dispose();
   }
@@ -2201,6 +2193,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   Widget build(BuildContext context) {
     final stats = _project?['stats'] as Map<String, dynamic>? ?? {};
     final totalTasks = stats['total_tasks'] ?? 0;
+    final comp = (_project?['completion_percentage'] ?? 0).toDouble();
     final pad = Responsive.pagePadding(context);
 
     return Scaffold(
@@ -2229,14 +2222,15 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                           backgroundColor: Colors.transparent,
                           valueColor: AlwaysStoppedAnimation(AppTheme.featureVault),
                         ),
-                      _buildHeader(),
                       Padding(
-                        padding: EdgeInsets.fromLTRB(pad, 10, pad, 8),
+                        padding: EdgeInsets.fromLTRB(pad, 8, pad, 6),
                         child: Container(
                           padding: const EdgeInsets.all(4),
                           decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
                           child: TabBar(
                             controller: _tabCtrl,
+                            isScrollable: Responsive.isMobile(context),
+                            tabAlignment: Responsive.isMobile(context) ? TabAlignment.start : TabAlignment.fill,
                             indicatorSize: TabBarIndicatorSize.tab,
                             dividerColor: Colors.transparent,
                             indicator: BoxDecoration(
@@ -2251,8 +2245,8 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                             ),
                             labelColor: Colors.white,
                             unselectedLabelColor: AppTheme.textMuted,
-                            labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-                            unselectedLabelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                            labelStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+                            unselectedLabelStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500),
                             tabs: [
                               Tab(
                                 child: FittedBox(
@@ -2266,6 +2260,32 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                                   child: Text('Vault'),
                                 ),
                               ),
+                              const Tab(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.monitor_rounded, size: 14),
+                                      const SizedBox(width: 5),
+                                      Text('Monitor'),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              Tab(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.insights_outlined, size: 14),
+                                      const SizedBox(width: 5),
+                                      Text('${comp.toInt()}%'),
+                                    ],
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -2273,6 +2293,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                       Expanded(
                         child: TabBarView(
                           controller: _tabCtrl,
+                          physics: const BouncingScrollPhysics(),
                           children: [
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2281,7 +2302,16 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                                 Expanded(child: _buildTasksContent()),
                               ],
                             ),
-                            ProjectVaultTab(apiService: widget.apiService, projectId: widget.projectId),
+                            ProjectVaultTab(
+                              apiService: widget.apiService,
+                              projectId: widget.projectId,
+                            ),
+                            ProjectMonitorTab(
+                              apiService: widget.apiService,
+                              projectId: widget.projectId,
+                              projectName: _displayStr(_project?['name']),
+                            ),
+                            _buildOverviewTab(),
                           ],
                         ),
                       ),
@@ -2291,187 +2321,147 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildOverviewTab() {
+    final pad = Responsive.pagePadding(context);
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+      padding: EdgeInsets.fromLTRB(pad, 4, pad, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildProgressCard(),
+          const SizedBox(height: 12),
+          _buildProjectMetaCard(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProgressCard() {
     final p = _project!;
     final comp = (p['completion_percentage'] ?? 0).toDouble();
-    final st = (p['status'] ?? 'planning').toString();
-    final subtitle = _projectSubtitle(p);
     final s = p['stats'] as Map<String, dynamic>? ?? {};
     final total = (s['total_tasks'] ?? 0) as num;
     final done = (s['completed_tasks'] ?? 0) as num;
     final pending = (total - done).clamp(0, 999999);
-    final pad = Responsive.pagePadding(context);
 
-    Color statusColor(String status) {
-      switch (status) {
-        case 'active':
-          return AppTheme.success;
-        case 'planning':
-          return AppTheme.primary;
-        case 'on_hold':
-          return AppTheme.warning;
-        case 'completed':
-          return AppTheme.featureVault;
-        default:
-          return AppTheme.textMuted;
-      }
-    }
-
-    final sc = statusColor(st);
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(pad, 6, pad, 4),
-      child: Container(
-        decoration: AppTheme.loginShell().copyWith(borderRadius: BorderRadius.circular(20)),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    AppTheme.primary.withValues(alpha: 0.35),
-                    AppTheme.featureVault.withValues(alpha: 0.22),
-                    Colors.transparent,
-                  ],
-                ),
+    return Container(
+      decoration: AppTheme.loginShell().copyWith(borderRadius: BorderRadius.circular(18)),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(
+                '${comp.toInt()}% complete',
+                style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15, fontWeight: FontWeight.w800),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _displayStr(p['name']),
-                              style: TextStyle(
-                                color: AppTheme.textPrimary,
-                                fontSize: Responsive.isMobile(context) ? 20 : 22,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.4,
-                                height: 1.15,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            if (subtitle.isNotEmpty) ...[
-                              const SizedBox(height: 4),
-                              Text(
-                                subtitle,
-                                style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.95), fontSize: 12.5),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      PopupMenuButton<String>(
-                        icon: const Icon(Icons.more_vert, color: AppTheme.textMuted, size: 22),
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                        color: AppTheme.surface2,
-                        onSelected: (v) {
-                          if (v == 'add_stage') _showAddStageDialog();
-                          else if (v == 'edit') _showEditProjectDialog();
-                          else if (v == 'delete') _deleteProject();
-                          else if (v == 'refresh') _load();
-                        },
-                        itemBuilder: (_) => [
-                          const PopupMenuItem(value: 'add_stage', child: Text('Add Stage')),
-                          const PopupMenuItem(value: 'edit', child: Text('Edit Project')),
-                          const PopupMenuItem(value: 'refresh', child: Text('Refresh')),
-                          if (_isManager) const PopupMenuItem(value: 'delete', child: Text('Delete Project', style: TextStyle(color: Colors.redAccent))),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: sc.withValues(alpha: 0.18),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: sc.withValues(alpha: 0.4)),
-                        ),
-                        child: Text(
-                          st.replaceAll('_', ' ').toUpperCase(),
-                          style: TextStyle(color: sc, fontSize: 10, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                      if ((p['priority'] ?? '').toString().isNotEmpty)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.06),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-                          ),
-                          child: Text(
-                            (p['priority'] ?? '').toString().toUpperCase(),
-                            style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.95), fontSize: 10, fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
+              const Spacer(),
+              Text(
+                '$done / $total tasks',
+                style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12),
               ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: (comp / 100).clamp(0.0, 1.0),
+              minHeight: 8,
+              backgroundColor: Colors.white.withValues(alpha: 0.08),
+              valueColor: const AlwaysStoppedAnimation(AppTheme.primaryBright),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        '${comp.toInt()}% complete',
-                        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                      const Spacer(),
-                      Text(
-                        '$done / $total tasks',
-                        style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 11.5),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: LinearProgressIndicator(
-                      value: (comp / 100).clamp(0.0, 1.0),
-                      minHeight: 7,
-                      backgroundColor: Colors.white.withValues(alpha: 0.08),
-                      valueColor: const AlwaysStoppedAnimation(AppTheme.primaryBright),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(child: _headerStatTile('$pending', 'Pending', AppTheme.warning, Icons.pending_actions_outlined)),
-                      const SizedBox(width: 6),
-                      Expanded(child: _headerStatTile('$done', 'Done', AppTheme.success, Icons.check_circle_outline)),
-                      const SizedBox(width: 6),
-                      Expanded(child: _headerStatTile('$total', 'Total', AppTheme.primaryBright, Icons.layers_outlined)),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(child: _headerStatTile('$pending', 'Pending', AppTheme.warning, Icons.pending_actions_outlined)),
+              const SizedBox(width: 6),
+              Expanded(child: _headerStatTile('$done', 'Done', AppTheme.success, Icons.check_circle_outline)),
+              const SizedBox(width: 6),
+              Expanded(child: _headerStatTile('$total', 'Total', AppTheme.primaryBright, Icons.layers_outlined)),
+            ],
+          ),
+        ],
       ),
+    );
+  }
+
+  Widget _buildProjectMetaCard() {
+    final p = _project!;
+    final desc = _displayStr(p['description']);
+    final manager = _displayStr(p['project_manager'] ?? p['project_manager_name']);
+    final start = _formatShortDate(p['start_date']?.toString());
+    final end = _formatShortDate(p['end_date']?.toString());
+
+    return Container(
+      decoration: AppTheme.loginInsetDecoration(borderRadius: 16),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'Project details',
+                style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700, fontSize: 13),
+              ),
+              const Spacer(),
+              PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert, color: AppTheme.textMuted, size: 20),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                color: AppTheme.surface2,
+                onSelected: (v) {
+                  if (v == 'add_stage') _showAddStageDialog();
+                  else if (v == 'edit') _showEditProjectDialog();
+                  else if (v == 'delete') _deleteProject();
+                  else if (v == 'refresh') _load();
+                },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'add_stage', child: Text('Add Stage')),
+                  const PopupMenuItem(value: 'edit', child: Text('Edit Project')),
+                  const PopupMenuItem(value: 'refresh', child: Text('Refresh')),
+                  if (_isManager) const PopupMenuItem(value: 'delete', child: Text('Delete Project', style: TextStyle(color: Colors.redAccent))),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (start.isNotEmpty || end.isNotEmpty)
+            _overviewMetaRow(Icons.date_range_outlined, 'Timeline', '$start → $end'),
+          if (manager.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _overviewMetaRow(Icons.person_outline, 'Manager', manager),
+          ],
+          if (desc.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _overviewMetaRow(Icons.notes_outlined, 'Description', desc),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _overviewMetaRow(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: AppTheme.textMuted.withValues(alpha: 0.85)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 10.5, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Text(value, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12.5, height: 1.35)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -2506,7 +2496,6 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
 
   Widget _buildTasksToolbar() {
     final pad = Responsive.pagePadding(context);
-    final stageCount = _stages.length;
     return Padding(
       padding: EdgeInsets.fromLTRB(pad, 8, pad, 8),
       child: LayoutBuilder(
@@ -2543,16 +2532,8 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
               ],
             ),
           );
-          final addBtn = FilledButton.icon(
-            onPressed: _showQuickAddTask,
-            icon: const Icon(Icons.add, size: 16),
-            label: const Text('Add Task'),
-            style: FilledButton.styleFrom(
-              backgroundColor: AppTheme.success,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            ),
-          );
+          final addTaskBtn = _toolbarActionPill('Add Task', Icons.add, _showQuickAddTask);
+          final addStageBtn = _toolbarActionPill('Add Stage', Icons.account_tree_outlined, _showAddStageDialog);
           if (wide) {
             return Row(
               children: [
@@ -2567,14 +2548,9 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                 const SizedBox(width: 8),
                 viewToggle,
                 const SizedBox(width: 8),
-                addBtn,
+                addTaskBtn,
                 const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  onPressed: _showAddStageDialog,
-                  icon: const Icon(Icons.account_tree_outlined, size: 16),
-                  label: Text('Stages ($stageCount)'),
-                  style: OutlinedButton.styleFrom(foregroundColor: AppTheme.textMuted, side: BorderSide(color: Colors.white.withValues(alpha: 0.12))),
-                ),
+                addStageBtn,
               ],
             );
           }
@@ -2589,18 +2565,44 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
                   children: [
                     viewToggle,
                     const SizedBox(width: 8),
-                    addBtn,
+                    addTaskBtn,
                     const SizedBox(width: 8),
-                    OutlinedButton(
-                      onPressed: _showAddStageDialog,
-                      child: Text('Stages ($stageCount)'),
-                    ),
+                    addStageBtn,
                   ],
                 ),
               ),
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _toolbarActionPill(String label, IconData icon, VoidCallback onPressed) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: AppTheme.bgDeep),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.bgDeep,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2696,6 +2698,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     }
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+      physics: const BouncingScrollPhysics(),
       itemCount: tasks.length,
       itemBuilder: (ctx, i) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
@@ -2705,79 +2708,68 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
   }
 
   Widget _buildBoard() {
-    final stages = _stages;
-    final unassigned = (_project!['unassigned_tasks'] as List?) ?? [];
-    if (stages.isEmpty && unassigned.isEmpty) {
-      return Center(
+    final stages = _stages.map((s) {
+      final m = Map<String, dynamic>.from(s as Map);
+      m['tasks'] = _filteredTasks((s['tasks'] as List?) ?? []);
+      return m;
+    }).toList();
+    final unassigned = _filteredTasks((_project!['unassigned_tasks'] as List?) ?? []);
+
+    return ProjectKanbanBoard(
+      stages: stages,
+      unassignedTasks: unassigned,
+      onMoveTask: _onTaskDropOnStage,
+      onTaskTap: _openTaskDetailPage,
+      onCreateTask: _showCreateTaskInStageDialog,
+      onAddStage: _showAddStageDialog,
+      onDeleteStage: _deleteStage,
+      onAssigneeTap: _showKanbanAssigneePicker,
+      onTaskMenu: _showKanbanTaskMenu,
+    );
+  }
+
+  void _showKanbanTaskMenu(Map<String, dynamic> t) {
+    final done = taskIsCompleted(t);
+    final canDelete = t['can_delete'] == true;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: AppTheme.loginShell().copyWith(borderRadius: BorderRadius.circular(20)),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.view_column, size: 64, color: Colors.white24),
-            SizedBox(height: 12),
-            Text('No stages yet', style: TextStyle(color: AppTheme.textMuted, fontSize: 16)),
-            SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: _showAddStageDialog,
-              icon: Icon(Icons.add, size: 18),
-              label: Text('Add Stage'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.featureVault,
-                foregroundColor: Colors.white,
-                disabledForegroundColor: AppTheme.textPrimary.withValues(alpha: 0.7),
-                elevation: 0,
-                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
+            ListTile(
+              leading: const Icon(Icons.visibility_outlined, color: AppTheme.textPrimary),
+              title: const Text('View details', style: TextStyle(color: AppTheme.textPrimary)),
+              onTap: () { Navigator.pop(ctx); _showTaskViewKanban(t); },
             ),
-            SizedBox(height: 14),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 24),
-              child: Text(
-                'Long-press a task, drag onto another column to move (same as web).',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white30, fontSize: 12),
-              ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined, color: AppTheme.textPrimary),
+              title: const Text('Edit', style: TextStyle(color: AppTheme.textPrimary)),
+              onTap: () { Navigator.pop(ctx); _showEditTaskKanban(t); },
             ),
+            ListTile(
+              leading: const Icon(Icons.upload_file_outlined, color: AppTheme.textPrimary),
+              title: const Text('Upload file', style: TextStyle(color: AppTheme.textPrimary)),
+              onTap: () { Navigator.pop(ctx); _uploadTaskFileFromKanban(t); },
+            ),
+            ListTile(
+              leading: Icon(done ? Icons.restore : Icons.check_circle_outline, color: AppTheme.success),
+              title: Text(done ? 'Restore task' : 'Mark complete', style: const TextStyle(color: AppTheme.textPrimary)),
+              onTap: () { Navigator.pop(ctx); _toggleTaskComplete(t); },
+            ),
+            if (canDelete)
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                title: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                onTap: () { Navigator.pop(ctx); _deleteTask(t); },
+              ),
           ],
         ),
-      );
-    }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final h = constraints.maxHeight.isFinite && constraints.maxHeight > 140
-            ? constraints.maxHeight
-            : 400.0;
-        final colW = Responsive.kanbanColumnWidth(context);
-        return Scrollbar(
-          controller: _boardHScrollController,
-          thumbVisibility: true,
-          trackVisibility: true,
-          interactive: true,
-          thickness: 8,
-          radius: const Radius.circular(8),
-          child: ListView(
-            controller: _boardHScrollController,
-            primary: false,
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.fromLTRB(12, 8, 12, 16),
-            children: [
-              ...stages.map(
-                (s) => SizedBox(
-                  width: colW,
-                  height: h,
-                  child: _stageColumnDnD(s),
-                ),
-              ),
-              if (unassigned.isNotEmpty)
-                SizedBox(
-                  width: colW,
-                  height: h,
-                  child: _unassignedKanbanColumn(_filteredTasks(unassigned)),
-                ),
-            ],
-          ),
-        );
-      },
+      ),
     );
   }
 
@@ -2791,204 +2783,11 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
     final r = await widget.apiService.moveTask(data.taskId, targetStageId);
     if (!mounted) return;
     if (r['success'] == true) {
-      _load(silent: true);
+      HapticFeedback.lightImpact();
     } else {
       _restoreProject(snapshot);
       AppToast.updateFailed(context, r['error']?.toString());
     }
-  }
-
-  Widget _stageColumnDnD(dynamic stage) {
-    final stageId = stage['id'] as int;
-    final tasks = _filteredTasks((stage['tasks'] as List?) ?? []);
-    final color = _parseHex(stage['color'] ?? '#3B82F6');
-    final allowDnD = PlatformCapabilities.kanbanTaskDragDrop;
-
-    Widget column({bool highlighted = false}) {
-      return Container(
-        margin: const EdgeInsets.only(right: 12),
-        decoration: AppTheme.taskCardDecoration(borderRadius: 14).copyWith(
-          border: Border.all(
-            color: highlighted ? AppTheme.success : Colors.white.withValues(alpha: 0.08),
-            width: highlighted ? 2 : 1,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              height: 4,
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
-              ),
-            ),
-            _kanbanStageHeader(stage, color, stageId, tasks.length),
-            Expanded(
-              child: tasks.isEmpty
-                  ? Center(
-                      child: Text(
-                        allowDnD
-                            ? (highlighted ? 'Release to drop' : 'Drag tasks here')
-                            : 'No tasks',
-                        style: TextStyle(
-                          color: highlighted ? AppTheme.success : Colors.white24,
-                          fontSize: 11,
-                        ),
-                      ),
-                    )
-                  : ListView.builder(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      itemCount: tasks.length,
-                      itemBuilder: (ctx, i) => _draggableTaskWrap(tasks[i], color, stageId),
-                    ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-              child: TextButton.icon(
-                onPressed: () => _showCreateTaskInStageDialog(stageId),
-                icon: const Icon(Icons.add, size: 16, color: AppTheme.success),
-                label: const Text('Create', style: TextStyle(color: AppTheme.success, fontWeight: FontWeight.w600)),
-                style: TextButton.styleFrom(
-                  backgroundColor: Colors.white.withValues(alpha: 0.04),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (!allowDnD) return column();
-
-    return DragTarget<TaskDragPayload>(
-      onWillAcceptWithDetails: (details) => !_sameStage(details.data, stageId),
-      onAcceptWithDetails: (details) => _onTaskDropOnStage(details.data, stageId),
-      builder: (context, candidate, rejected) => column(highlighted: candidate.isNotEmpty),
-    );
-  }
-
-  Widget _kanbanStageHeader(dynamic stage, Color color, int stageId, int taskCount) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(12, 10, 4, 6),
-      child: Row(
-        children: [
-          Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
-          SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              (stage['name'] ?? '').toString().toUpperCase(),
-              style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1),
-            ),
-          ),
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(10)),
-            child: Text('$taskCount', style: TextStyle(color: AppTheme.textMuted, fontSize: 10, fontWeight: FontWeight.bold)),
-          ),
-          SizedBox(width: 2),
-          Tooltip(
-            message: 'Add task to this stage',
-            child: IconButton(
-              onPressed: () => _showCreateTaskInStageDialog(stageId),
-              icon: Icon(Icons.add_task, color: AppTheme.success, size: 20),
-              padding: EdgeInsets.zero,
-              visualDensity: VisualDensity.compact,
-              constraints: BoxConstraints.tightFor(width: 32, height: 32),
-            ),
-          ),
-          PopupMenuButton<String>(
-            icon: Icon(Icons.more_vert, color: Colors.white30, size: 18),
-            color: AppTheme.surface2,
-            padding: EdgeInsets.zero,
-            onSelected: (v) {
-              if (v == 'add_task') _showCreateTaskInStageDialog(stageId);
-              if (v == 'delete') _deleteStage(stageId, stage['name'] ?? '');
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem(
-                value: 'add_task',
-                child: Row(children: [Icon(Icons.add_task, color: AppTheme.success, size: 16), SizedBox(width: 8), Text('Add Task', style: TextStyle(color: Colors.white, fontSize: 13))]),
-              ),
-              PopupMenuItem(
-                value: 'delete',
-                child: Row(children: [Icon(Icons.delete, color: Colors.redAccent, size: 16), SizedBox(width: 8), Text('Delete Stage', style: TextStyle(color: Colors.redAccent, fontSize: 13))]),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _unassignedKanbanColumn(List<Map<String, dynamic>> tasks) {
-    final color = _parseHex('#64748B');
-    return Container(
-      margin: EdgeInsets.only(right: 12),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: EdgeInsets.fromLTRB(12, 10, 12, 6),
-            child: Row(
-              children: [
-                Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'NO STAGE',
-                    style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1),
-                  ),
-                ),
-                Text('${tasks.length}', style: TextStyle(color: AppTheme.textMuted, fontSize: 10, fontWeight: FontWeight.bold)),
-              ],
-            ),
-          ),
-          Expanded(
-            child: ListView.builder(
-              padding: EdgeInsets.only(bottom: 12),
-              itemCount: tasks.length,
-              itemBuilder: (ctx, i) => _draggableTaskWrap(tasks[i], color, null),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _draggableTaskWrap(dynamic t, Color stageColor, int? sourceStageId) {
-    final taskMap = Map<String, dynamic>.from(t as Map);
-    Widget card() => _taskCard(taskMap, stageColor, withSideMargin: false);
-    final child = PlatformCapabilities.kanbanTaskDragDrop
-        ? Draggable<TaskDragPayload>(
-            data: TaskDragPayload(taskId: t['id'] as int, sourceStageId: sourceStageId),
-            feedback: Material(
-              color: Colors.transparent,
-              elevation: 10,
-              shadowColor: Colors.black54,
-              borderRadius: BorderRadius.circular(12),
-              child: SizedBox(width: 268, child: card()),
-            ),
-            childWhenDragging: Opacity(opacity: 0.35, child: card()),
-            child: card(),
-          )
-        : card();
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 220),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      child: Padding(
-        key: ValueKey('task_${t['id']}_$sourceStageId'),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        child: child,
-      ),
-    );
   }
 
   Widget _taskCard(Map<String, dynamic> t, Color stageColor, {bool withSideMargin = true}) {

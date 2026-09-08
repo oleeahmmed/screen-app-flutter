@@ -55,11 +55,11 @@ class _HomeQuickActionsState extends State<HomeQuickActions> {
           onTap: () => AppNavigation.instance.openP2P(),
         ),
       _QuickActionTile(
-        icon: LucideIcons.clipboardCheck,
-        label: 'Report',
+        icon: LucideIcons.barChart3,
+        label: 'Reports',
         gradient: const [Color(0xFF60A5FA), Color(0xFF2563EB)],
         glow: AppTheme.primaryBright,
-        onTap: () => AppNavigation.instance.openSubmitReport(),
+        onTap: () => AppNavigation.instance.openReportsHub(),
       ),
     ];
 

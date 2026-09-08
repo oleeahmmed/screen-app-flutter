@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_theme.dart';
 import '../utils/local_time.dart';
 import '../utils/platform_capabilities.dart';
+import 'chat_avatar.dart';
 
 /// WhatsApp-style contact / group info (right pane or full-screen sheet).
 class ChatDetailsPanel extends StatelessWidget {
@@ -72,13 +73,15 @@ class ChatDetailsPanel extends StatelessWidget {
     this.scrollController,
   });
 
+  static const _accent = Color(0xFF00A884);
+
   @override
   Widget build(BuildContext context) {
     final desc = (description ?? '').trim();
     final hasPhoto = (photoUrl ?? '').trim().isNotEmpty;
 
     return ColoredBox(
-      color: const Color(0xFF0B141A),
+      color: Colors.transparent,
       child: Column(
         children: [
           _header(),
@@ -87,18 +90,18 @@ class ChatDetailsPanel extends StatelessWidget {
               controller: scrollController,
               padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
               children: [
-                const SizedBox(height: 24),
-                Center(child: _avatar(hasPhoto)),
-                const SizedBox(height: 18),
-                _nameRow(),
-                const SizedBox(height: 8),
-                _subtitleRow(),
-                const SizedBox(height: 24),
-                _actionRow(),
                 const SizedBox(height: 20),
+                Center(child: _avatar(hasPhoto)),
+                const SizedBox(height: 16),
+                _nameRow(),
+                const SizedBox(height: 6),
+                _subtitleRow(),
+                const SizedBox(height: 20),
+                _actionRow(),
+                const SizedBox(height: 16),
                 if (isGroup) _groupDescriptionRow(desc),
                 if (!isGroup) _contactAboutCard(desc),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 _mediaSection(
                   title: 'Media',
                   count: mediaItems.length,
@@ -116,16 +119,19 @@ class ChatDetailsPanel extends StatelessWidget {
                           ),
                           itemBuilder: (_, i) {
                             final url = (mediaItems[i]['image_url'] ?? '').toString();
-                            return InkWell(
-                              onTap: () => onOpenMediaUrl?.call(url),
-                              child: Image.network(
-                                url,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, error, stack) => ColoredBox(
-                                  color: AppTheme.surface2,
-                                  child: Icon(
-                                    Icons.broken_image_outlined,
-                                    color: AppTheme.textMuted.withValues(alpha: 0.6),
+                            return ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: InkWell(
+                                onTap: () => onOpenMediaUrl?.call(url),
+                                child: Image.network(
+                                  url,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, error, stack) => ColoredBox(
+                                    color: Colors.white.withValues(alpha: 0.06),
+                                    child: Icon(
+                                      Icons.broken_image_outlined,
+                                      color: AppTheme.textMuted.withValues(alpha: 0.6),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -186,17 +192,24 @@ class ChatDetailsPanel extends StatelessWidget {
                 if (isGroup && onOpenMembers != null)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                    child: ListTile(
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      tileColor: AppTheme.surface2.withValues(alpha: 0.55),
-                      leading: const Icon(Icons.people_outline_rounded, color: AppTheme.primaryBright),
-                      title: const Text('Members', style: TextStyle(color: AppTheme.textPrimary)),
-                      subtitle: Text(
-                        '$memberCount members',
-                        style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: onOpenMembers,
+                        borderRadius: BorderRadius.circular(14),
+                        child: Ink(
+                          decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
+                          child: ListTile(
+                            leading: const Icon(Icons.people_outline_rounded, color: AppTheme.primaryBright),
+                            title: const Text('Members', style: TextStyle(color: AppTheme.textPrimary)),
+                            subtitle: Text(
+                              '$memberCount members',
+                              style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+                            ),
+                            trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted),
+                          ),
+                        ),
                       ),
-                      trailing: const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted),
-                      onTap: onOpenMembers,
                     ),
                   ),
               ],
@@ -212,8 +225,7 @@ class ChatDetailsPanel extends StatelessWidget {
       height: 56,
       padding: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
-        color: const Color(0xF20B1220),
-        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
+        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
       ),
       child: Row(
         children: [
@@ -228,7 +240,8 @@ class ChatDetailsPanel extends StatelessWidget {
               style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 17,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.2,
               ),
             ),
           ),
@@ -242,35 +255,66 @@ class ChatDetailsPanel extends StatelessWidget {
       onTap: canEdit && isGroup ? onChangePhoto : null,
       child: Stack(
         clipBehavior: Clip.none,
+        alignment: Alignment.center,
         children: [
-          CircleAvatar(
-            radius: 58,
-            backgroundColor: isGroup ? const Color(0xFF3B4A54) : avatarColor,
-            backgroundImage: hasPhoto ? NetworkImage(photoUrl!) : null,
-            child: hasPhoto
-                ? null
-                : (isGroup
-                    ? const Icon(Icons.group_rounded, color: Colors.white70, size: 52)
-                    : Text(
-                        initials,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 38,
-                        ),
-                      )),
+          Container(
+            width: 124,
+            height: 124,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  AppTheme.primary.withValues(alpha: 0.85),
+                  AppTheme.accent.withValues(alpha: 0.75),
+                ],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.primary.withValues(alpha: 0.25),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            padding: const EdgeInsets.all(3),
+            child: isGroup
+                ? CircleAvatar(
+                    backgroundColor: avatarColor,
+                    backgroundImage: hasPhoto ? NetworkImage(photoUrl!) : null,
+                    child: hasPhoto
+                        ? null
+                        : const Icon(Icons.group_rounded, color: Colors.white, size: 48),
+                  )
+                : ChatAvatar(
+                    photoUrl: photoUrl,
+                    name: name,
+                    initials: initials,
+                    backgroundColor: avatarColor,
+                    radius: 58,
+                    showOnlineIndicator: true,
+                    isOnline: isOnline,
+                  ),
           ),
           if (canEdit && isGroup)
             Positioned(
-              right: 2,
-              bottom: 2,
+              right: 4,
+              bottom: 4,
               child: Container(
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF00A884),
+                  color: _accent,
                   shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFF0B141A), width: 2),
+                  border: Border.all(color: AppTheme.bgDeep, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _accent.withValues(alpha: 0.35),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: const Icon(Icons.photo_camera_rounded, color: Colors.white, size: 18),
               ),
@@ -282,7 +326,7 @@ class ChatDetailsPanel extends StatelessWidget {
 
   Widget _nameRow() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -291,21 +335,22 @@ class ChatDetailsPanel extends StatelessWidget {
               name,
               textAlign: TextAlign.center,
               style: const TextStyle(
-                color: Colors.white,
-                fontSize: 24,
+                color: AppTheme.textPrimary,
+                fontSize: 22,
                 fontWeight: FontWeight.w700,
                 height: 1.2,
+                letterSpacing: -0.3,
               ),
             ),
           ),
           if (canEdit && isGroup && onEditName != null) ...[
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
             IconButton(
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
               onPressed: onEditName,
-              icon: Icon(Icons.edit_outlined, size: 18, color: Colors.white.withValues(alpha: 0.65)),
+              icon: Icon(Icons.edit_outlined, size: 18, color: AppTheme.textMuted.withValues(alpha: 0.9)),
             ),
           ],
         ],
@@ -318,66 +363,90 @@ class ChatDetailsPanel extends StatelessWidget {
       return RichText(
         textAlign: TextAlign.center,
         text: TextSpan(
-          style: TextStyle(fontSize: 14, color: AppTheme.textMuted),
+          style: TextStyle(fontSize: 14, color: AppTheme.textMuted.withValues(alpha: 0.95)),
           children: [
             const TextSpan(text: 'Group · '),
             TextSpan(
               text: '$memberCount members',
-              style: const TextStyle(color: Color(0xFF00A884)),
+              style: const TextStyle(color: _accent, fontWeight: FontWeight.w600),
             ),
           ],
         ),
       );
     }
-    return Text(
-      subtitle,
-      textAlign: TextAlign.center,
-      style: TextStyle(
-        color: isOnline ? const Color(0xFF00A884) : AppTheme.textMuted,
-        fontSize: 14,
-      ),
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        if (isOnline)
+          Container(
+            width: 8,
+            height: 8,
+            margin: const EdgeInsets.only(right: 6),
+            decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
+          ),
+        Text(
+          subtitle,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: isOnline ? _accent : AppTheme.textMuted.withValues(alpha: 0.95),
+            fontSize: 14,
+            fontWeight: isOnline ? FontWeight.w600 : FontWeight.w500,
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _actionRow() {
-    if (isGroup) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            if (PlatformCapabilities.voiceVideoCall)
-              _ActionChip(icon: Icons.call_rounded, label: 'Voice', onTap: onVoiceCall),
-            if (PlatformCapabilities.voiceVideoCall)
-              _ActionChip(icon: Icons.videocam_rounded, label: 'Video', onTap: onVideoCall),
-            _ActionChip(icon: Icons.person_add_alt_1_rounded, label: 'Add', onTap: onAddMembers),
-            _ActionChip(icon: Icons.search_rounded, label: 'Search', onTap: onSearchInChat),
-            _ActionChip(
-              icon: isPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
-              label: isPinned ? 'Unpin' : 'Pin',
-              onTap: onTogglePin,
-            ),
-            _ActionChip(icon: Icons.wallpaper_rounded, label: 'Wallpaper', onTap: onChangeWallpaper),
-          ],
-        ),
-      );
+  List<Widget> _actionButtons() {
+    final chips = <Widget>[];
+
+    void add(IconData icon, String label, VoidCallback? onTap) {
+      if (onTap == null) return;
+      chips.add(_ActionChip(icon: icon, label: label, onTap: onTap));
     }
+
+    if (isGroup) {
+      if (PlatformCapabilities.voiceVideoCall) {
+        add(Icons.call_rounded, 'Voice', onVoiceCall);
+        add(Icons.videocam_rounded, 'Video', onVideoCall);
+      }
+      add(Icons.person_add_alt_1_rounded, 'Add', onAddMembers);
+      add(Icons.search_rounded, 'Search', onSearchInChat);
+      add(
+        isPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+        isPinned ? 'Unpin' : 'Pin',
+        onTogglePin,
+      );
+      add(Icons.wallpaper_rounded, 'Wallpaper', onChangeWallpaper);
+    } else {
+      if (PlatformCapabilities.voiceVideoCall) {
+        add(Icons.videocam_rounded, 'Video', onVideoCall);
+        add(Icons.call_rounded, 'Audio', onVoiceCall);
+      }
+      add(Icons.search_rounded, 'Search', onSearchInChat);
+      add(
+        isPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+        isPinned ? 'Unpin' : 'Pin',
+        onTogglePin,
+      );
+      add(Icons.wallpaper_rounded, 'Wallpaper', onChangeWallpaper);
+    }
+
+    return chips;
+  }
+
+  Widget _actionRow() {
+    final buttons = _actionButtons();
+    if (buttons.isEmpty) return const SizedBox.shrink();
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 40),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          if (PlatformCapabilities.voiceVideoCall)
-            _ActionChip(icon: Icons.videocam_rounded, label: 'Video', onTap: onVideoCall),
-          if (PlatformCapabilities.voiceVideoCall)
-            _ActionChip(icon: Icons.call_rounded, label: 'Audio', onTap: onVoiceCall),
-          _ActionChip(icon: Icons.search_rounded, label: 'Search', onTap: onSearchInChat),
-          _ActionChip(
-            icon: isPinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
-            label: isPinned ? 'Unpin' : 'Pin',
-            onTap: onTogglePin,
-          ),
-          _ActionChip(icon: Icons.wallpaper_rounded, label: 'Wallpaper', onTap: onChangeWallpaper),
+          for (var i = 0; i < buttons.length; i++) ...[
+            if (i > 0) const SizedBox(width: 6),
+            Expanded(child: buttons[i]),
+          ],
         ],
       ),
     );
@@ -388,29 +457,31 @@ class ChatDetailsPanel extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Material(
-        color: AppTheme.surface2.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(10),
+        color: Colors.transparent,
         child: InkWell(
           onTap: canEdit ? onEditDescription : null,
-          borderRadius: BorderRadius.circular(10),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Text(
-                    empty ? 'Add group description' : desc,
-                    style: TextStyle(
-                      color: empty ? const Color(0xFF00A884) : AppTheme.textPrimary,
-                      fontSize: 15,
-                      height: 1.35,
+          borderRadius: BorderRadius.circular(14),
+          child: Ink(
+            decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      empty ? 'Add group description' : desc,
+                      style: TextStyle(
+                        color: empty ? _accent : AppTheme.textPrimary,
+                        fontSize: 15,
+                        height: 1.35,
+                      ),
                     ),
                   ),
-                ),
-                if (canEdit && onEditDescription != null)
-                  Icon(Icons.edit_outlined, size: 18, color: Colors.white.withValues(alpha: 0.5)),
-              ],
+                  if (canEdit && onEditDescription != null)
+                    Icon(Icons.edit_outlined, size: 18, color: AppTheme.textMuted.withValues(alpha: 0.7)),
+                ],
+              ),
             ),
           ),
         ),
@@ -435,13 +506,12 @@ class ChatDetailsPanel extends StatelessWidget {
       isOnline ? 'Online' : subtitle,
     ));
     if (tiles.isEmpty) return const SizedBox.shrink();
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppTheme.surface2.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(12),
-        ),
+      child: AppTheme.glassCard(
+        borderRadius: 16,
+        padding: const EdgeInsets.symmetric(vertical: 4),
         child: Column(children: tiles),
       ),
     );
@@ -450,9 +520,20 @@ class ChatDetailsPanel extends StatelessWidget {
   Widget _infoTile(IconData icon, String label, String value) {
     return ListTile(
       dense: true,
-      leading: Icon(icon, color: AppTheme.textMuted, size: 22),
-      title: Text(label, style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-      subtitle: Text(value, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15)),
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(icon, color: AppTheme.primaryBright, size: 20),
+      ),
+      title: Text(label, style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12)),
+      subtitle: Text(
+        value,
+        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15, fontWeight: FontWeight.w500),
+      ),
     );
   }
 
@@ -463,14 +544,10 @@ class ChatDetailsPanel extends StatelessWidget {
     Widget? child,
   }) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-        decoration: BoxDecoration(
-          color: AppTheme.surface2.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(12),
-        ),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: AppTheme.glassCard(
+        borderRadius: 16,
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -480,18 +557,28 @@ class ChatDetailsPanel extends StatelessWidget {
                   title,
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                     fontSize: 15,
                   ),
                 ),
                 const Spacer(),
-                Text('$count', style: const TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '$count',
+                    style: const TextStyle(color: AppTheme.primaryBright, fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 10),
             if (child == null)
               Padding(
-                padding: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.only(bottom: 6),
                 child: Text(
                   empty,
                   style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 13),
@@ -513,24 +600,53 @@ class _ActionChip extends StatelessWidget {
 
   const _ActionChip({required this.icon, required this.label, this.onTap});
 
+  static const _accent = Color(0xFF00A884);
+
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFF1F2C34),
-      borderRadius: BorderRadius.circular(50),
+      color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(50),
-        child: SizedBox(
-          width: 72,
-          height: 72,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: const Color(0xFF00A884), size: 24),
-              const SizedBox(height: 6),
-              Text(label, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 12)),
-            ],
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 2),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        _accent.withValues(alpha: 0.22),
+                        AppTheme.primary.withValues(alpha: 0.16),
+                      ],
+                    ),
+                    border: Border.all(color: _accent.withValues(alpha: 0.28)),
+                  ),
+                  child: Icon(icon, color: _accent, size: 21),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

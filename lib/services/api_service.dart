@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import 'image_compress_util.dart';
 import 'user_data_service.dart';
+import 'vault_hub_loader.dart';
+import '../utils/vault_models.dart';
 
 class ApiService {
   String? _token;
@@ -604,6 +606,90 @@ class ApiService {
     }
   }
 
+  List<Map<String, dynamic>> _deriveProjectsFromTasks(List<dynamic> tasks) {
+    final byId = <int, Map<String, dynamic>>{};
+    for (final t in tasks) {
+      if (t is! Map) continue;
+      final pid = int.tryParse('${t['project_id'] ?? t['project'] ?? ''}');
+      if (pid == null || pid <= 0) continue;
+      byId.putIfAbsent(pid, () => {
+            'id': pid,
+            'name': t['project_name']?.toString() ?? 'Project',
+            'task_count': 0,
+            'pending_count': 0,
+            'completed_count': 0,
+            'stages': <Map<String, dynamic>>[],
+          });
+      final bucket = byId[pid]!;
+      bucket['task_count'] = (bucket['task_count'] as int) + 1;
+      final done = t['completed'] == true ||
+          const {'completed', 'done'}.contains((t['status'] ?? '').toString().toLowerCase());
+      if (done) {
+        bucket['completed_count'] = (bucket['completed_count'] as int) + 1;
+      } else {
+        bucket['pending_count'] = (bucket['pending_count'] as int) + 1;
+      }
+    }
+    final list = byId.values.toList();
+    list.sort((a, b) => (a['name']?.toString() ?? '').compareTo(b['name']?.toString() ?? ''));
+    return list;
+  }
+
+  Map<String, dynamic> _packageMyTasksData({
+    required List<dynamic> tasks,
+    List<Map<String, dynamic>> projects = const [],
+    int? pendingCount,
+    int? completedCount,
+    int? count,
+  }) {
+    final normalizedTasks = _normalizeTaskList(tasks);
+    final normalizedProjects = projects.isNotEmpty
+        ? projects
+        : _deriveProjectsFromTasks(normalizedTasks);
+    final pending = pendingCount ??
+        normalizedTasks.where((t) {
+          if (t is! Map) return false;
+          if (t['completed'] == true) return false;
+          final status = (t['status'] ?? '').toString().toLowerCase();
+          return status != 'completed' && status != 'done';
+        }).length;
+    final completed = completedCount ??
+        normalizedTasks.where((t) {
+          if (t is! Map) return false;
+          if (t['completed'] == true) return true;
+          final status = (t['status'] ?? '').toString().toLowerCase();
+          return status == 'completed' || status == 'done';
+        }).length;
+    return {
+      'success': true,
+      'data': {
+        'tasks': normalizedTasks,
+        'projects': normalizedProjects,
+        'pending_count': pending,
+        'completed_count': completed,
+        'count': count ?? normalizedTasks.length,
+      },
+    };
+  }
+
+  Map<String, dynamic> _wrapMyTasksEnvelope(Map<String, dynamic> result) {
+    if (result['success'] != true) return result;
+    final raw = result['data'];
+    if (raw is Map<String, dynamic>) {
+      return _packageMyTasksData(
+        tasks: _extractJsonList(raw['tasks'] ?? raw),
+        projects: (raw['projects'] as List? ?? [])
+            .whereType<Map>()
+            .map((p) => Map<String, dynamic>.from(p))
+            .toList(),
+        pendingCount: (raw['pending_count'] as num?)?.toInt(),
+        completedCount: (raw['completed_count'] as num?)?.toInt(),
+        count: (raw['count'] as num?)?.toInt(),
+      );
+    }
+    return _packageMyTasksData(tasks: _extractJsonList(raw));
+  }
+
   Future<Map<String, dynamic>> getMyTasks({String? status, int? projectId}) async {
     try {
       final query = <String, String>{};
@@ -615,25 +701,23 @@ class ApiService {
       if (response.statusCode == 200) {
         final decoded = _decodeJsonBody(response.body, context: 'GET ${AppConfig.myTasksUrl}');
         if (decoded is Map<String, dynamic>) {
-          final tasks = _normalizeTaskList(decoded['tasks'] ?? decoded);
-          final projects = (decoded['projects'] as List? ?? [])
-              .whereType<Map>()
-              .map((p) => Map<String, dynamic>.from(p))
-              .toList();
-          return {
-            'success': true,
-            'data': {
-              'tasks': tasks,
-              'projects': projects,
-              'pending_count': decoded['pending_count'],
-              'completed_count': decoded['completed_count'],
-              'count': decoded['count'],
-            },
-          };
+          return _packageMyTasksData(
+            tasks: _extractJsonList(decoded['tasks'] ?? decoded),
+            projects: (decoded['projects'] as List? ?? [])
+                .whereType<Map>()
+                .map((p) => Map<String, dynamic>.from(p))
+                .toList(),
+            pendingCount: (decoded['pending_count'] as num?)?.toInt(),
+            completedCount: (decoded['completed_count'] as num?)?.toInt(),
+            count: (decoded['count'] as num?)?.toInt(),
+          );
+        }
+        if (decoded is List) {
+          return _packageMyTasksData(tasks: decoded);
         }
       }
       if (response.statusCode == 404) {
-        return getTasks(mineOnly: true);
+        return _wrapMyTasksEnvelope(await getTasks(mineOnly: true));
       }
       return {
         'success': false,
@@ -1175,6 +1259,25 @@ class ApiService {
         return {'success': true};
       }
       return {'success': false, 'error': 'Failed to mark read'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  Future<Map<String, dynamic>> markAllMessagesRead() async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.chatMarkAllReadUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return {'success': true, 'data': data};
+      }
+      return {'success': false, 'error': 'Failed to mark all as read (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -3215,6 +3318,50 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getMonthlyAttendanceReport({
+    required String dateFrom,
+    required String dateTo,
+    List<int>? weeklyOffDays,
+    bool includeCompanyHolidays = true,
+    bool includeApprovedLeave = true,
+    int? userId,
+    bool companySummary = false,
+  }) async {
+    try {
+      await ensureAuth();
+      final params = <String, String>{
+        'date_from': dateFrom,
+        'date_to': dateTo,
+        'include_company_holidays': includeCompanyHolidays.toString(),
+        'include_approved_leave': includeApprovedLeave.toString(),
+      };
+      if (weeklyOffDays != null && weeklyOffDays.isNotEmpty) {
+        params['weekly_off'] = weeklyOffDays.join(',');
+      }
+      if (companySummary) {
+        params['scope'] = 'company';
+      } else if (userId != null) {
+        params['user_id'] = '$userId';
+      }
+      final uri = Uri.parse(AppConfig.attendanceMonthlyReportUrl).replace(queryParameters: params);
+      final response = await _authorizedGet(uri);
+      if (response.statusCode != 200) {
+        final decoded = _safeJsonDecode(response.body);
+        if (decoded is Map && decoded['error'] != null) {
+          return {'success': false, 'error': decoded['error'].toString()};
+        }
+        return {'success': false, 'error': 'Failed to load monthly report (${response.statusCode})'};
+      }
+      final decoded = _safeJsonDecode(response.body);
+      if (decoded is! Map) {
+        return {'success': false, 'error': 'Unexpected monthly report response format'};
+      }
+      return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> startBreak({DateTime? expectedBack}) async {
     try {
       await ensureAuth();
@@ -3297,50 +3444,67 @@ class ApiService {
   // ─── Project vault APIs ───
 
   Future<Map<String, dynamic>> getVaultMyHub() async {
+    // aims-webapps never calls /vault/my/ — compose from project vault APIs.
     try {
-      final response = await _authorizedGet(Uri.parse(AppConfig.vaultMyHubUrl));
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        if (decoded is Map) {
-          return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
-        }
-      }
-      String err = 'Failed to load vaults (${response.statusCode})';
-      try {
-        final body = jsonDecode(response.body);
-        if (body is Map && body['error'] != null) {
-          err = body['error'].toString();
-        } else if (body is Map && body['detail'] != null) {
-          err = body['detail'].toString();
-        }
-      } catch (_) {}
-      return {'success': false, 'error': err};
+      return await VaultHubLoader(this).composeMyHub();
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
   }
 
+  String _vaultApiError(http.Response response) {
+    String err = 'Failed to load vaults (${response.statusCode})';
+    try {
+      final body = jsonDecode(response.body);
+      if (body is Map && body['error'] != null) {
+        err = body['error'].toString();
+      } else if (body is Map && body['detail'] != null) {
+        err = body['detail'].toString();
+      }
+    } catch (_) {}
+    return err;
+  }
+
   Future<Map<String, dynamic>> getVaultSharedWithMe({int? projectId}) async {
     try {
-      final uri = projectId != null
-          ? Uri.parse(AppConfig.vaultProjectSharedWithMeUrl(projectId))
-          : Uri.parse(AppConfig.vaultSharedWithMeUrl);
+      if (projectId == null) {
+        return await VaultHubLoader(this).composeSharedInbox();
+      }
+      final uri = Uri.parse(AppConfig.vaultProjectSharedWithMeUrl(projectId));
       final response = await _authorizedGet(uri);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
         if (decoded is Map) {
+          final results = (decoded['results'] as List? ?? [])
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
           return {
             'success': true,
             'data': Map<String, dynamic>.from(decoded),
-            'count': decoded['count'] ?? 0,
-            'results': decoded['results'] is List ? decoded['results'] : [],
+            'count': decoded['count'] ?? results.length,
+            'results': results,
           };
         }
         if (decoded is List) {
-          return {'success': true, 'data': {'count': decoded.length, 'results': decoded}, 'results': decoded};
+          return {
+            'success': true,
+            'data': {'count': decoded.length, 'results': decoded},
+            'results': decoded,
+            'count': decoded.length,
+          };
         }
       }
-      return {'success': false, 'error': 'Failed to load shared entries (${response.statusCode})'};
+      final err = _vaultApiError(response);
+      if (VaultHubLoader.isAccessesFieldError(err)) {
+        return {
+          'success': true,
+          'data': {'count': 0, 'results': <dynamic>[], 'project_id': projectId},
+          'count': 0,
+          'results': <dynamic>[],
+        };
+      }
+      return {'success': false, 'error': err};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -3351,9 +3515,13 @@ class ApiService {
       final response = await _authorizedGet(Uri.parse(AppConfig.vaultCategoriesUrl(projectId)));
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
+        final list = decoded is List ? decoded : _extractJsonList(decoded);
         return {
           'success': true,
-          'data': decoded is List ? decoded : _extractJsonList(decoded),
+          'data': list
+              .whereType<Map>()
+              .map((c) => normalizeVaultCategory(Map<String, dynamic>.from(c)))
+              .toList(),
         };
       }
       return {'success': false, 'error': 'Failed to load vault categories (${response.statusCode})'};
@@ -3530,12 +3698,16 @@ class ApiService {
       final response = await _authorizedGet(uri);
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
+        final list = decoded is List ? decoded : _extractJsonList(decoded);
         return {
           'success': true,
-          'data': decoded is List ? decoded : _extractJsonList(decoded),
+          'data': list
+              .whereType<Map>()
+              .map((e) => normalizeVaultEntry(Map<String, dynamic>.from(e)))
+              .toList(),
         };
       }
-      return {'success': false, 'error': 'Failed to load vault entries (${response.statusCode})'};
+      return {'success': false, 'error': _parseApiErrorBody(response.body, response.statusCode) ?? 'Failed to load vault entries (${response.statusCode})'};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }
@@ -4056,6 +4228,21 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> getProjectLiveMonitor(int projectId) async {
+    try {
+      final response = await _authorizedGet(Uri.parse(AppConfig.projectLiveMonitorUrl(projectId)));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {'success': true, 'data': Map<String, dynamic>.from(decoded)};
+        }
+      }
+      return {'success': false, 'error': _apiErrorBody(response, 'Failed to load project monitor')};
+    } catch (e) {
+      return {'success': false, 'error': _networkErrorMessage(e)};
+    }
+  }
+
   Future<Map<String, dynamic>> getLiveMonitorEmployee(int userId) async {
     try {
       final response = await _authorizedGet(Uri.parse(AppConfig.liveMonitorEmployeeUrl(userId)));
@@ -4071,10 +4258,10 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> getLiveMonitorEmployeeScreen(int userId, int screen) async {
+  Future<Map<String, dynamic>> getLiveMonitorEmployeeScreen(int employeeId, int screen) async {
     try {
       final response = await _authorizedGet(
-        Uri.parse(AppConfig.liveMonitorEmployeeScreenUrl(userId, screen)),
+        Uri.parse(AppConfig.liveMonitorEmployeeScreenUrl(employeeId, screen)),
       );
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
@@ -4089,18 +4276,23 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> generateMonitorVideo({
-    required int userId,
+    required int employeeId,
     required String startDate,
     required String endDate,
+    String? startTime,
+    String? endTime,
   }) async {
     try {
+      final body = <String, dynamic>{
+        'employee_id': employeeId,
+        'start_date': startDate,
+        'end_date': endDate,
+      };
+      if (startTime != null && startTime.isNotEmpty) body['start_time'] = startTime;
+      if (endTime != null && endTime.isNotEmpty) body['end_time'] = endTime;
       final response = await _authorizedPost(
         Uri.parse(AppConfig.videoGenerateUrl),
-        body: jsonEncode({
-          'user_id': userId,
-          'start_date': startDate,
-          'end_date': endDate,
-        }),
+        body: jsonEncode(body),
       );
       if (response.statusCode == 201 || response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
@@ -4111,6 +4303,17 @@ class ApiService {
       return {'success': false, 'error': _apiErrorBody(response, 'Video generation failed')};
     } catch (e) {
       return {'success': false, 'error': _networkErrorMessage(e)};
+    }
+  }
+
+  Future<Uint8List?> downloadMediaBytes(String url) async {
+    try {
+      await ensureAuth();
+      final response = await http.get(Uri.parse(url), headers: _authHeaderOnly());
+      if (response.statusCode == 200) return response.bodyBytes;
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 

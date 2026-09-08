@@ -149,7 +149,7 @@ class Responsive {
     if (w >= 1200) return 320;
     if (w >= 900) return 300;
     if (w >= 600) return 280;
-    return 260;
+    return (w * 0.82).clamp(236.0, 280.0);
   }
 
   static double timerFontSize(BuildContext context) {

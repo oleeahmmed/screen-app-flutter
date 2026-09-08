@@ -1,13 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:lucide_icons/lucide_icons.dart';
 
 import '../services/api_service.dart';
 import '../services/user_data_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/monitor_media_url.dart';
-import '../widgets/monitor_playback_sheet.dart';
+import '../widgets/monitor_ui.dart';
 
 class LiveMonitorPage extends StatefulWidget {
   final ApiService apiService;
@@ -47,7 +46,7 @@ class _LiveMonitorPageState extends State<LiveMonitorPage> {
     });
     if (!allowed) return;
     _load();
-    _poll = Timer.periodic(const Duration(seconds: 15), (_) => _load(silent: true));
+    _poll = Timer.periodic(const Duration(seconds: 10), (_) => _load(silent: true));
   }
 
   @override
@@ -140,16 +139,15 @@ class _LiveMonitorPageState extends State<LiveMonitorPage> {
     return _employees.where((e) => e['status'] == status).length;
   }
 
-  void _openPlayback(Map<String, dynamic> emp) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => MonitorPlaybackSheet(
-        apiService: widget.apiService,
-        employee: emp,
-      ),
-    );
+  List<MonitorScreenItem> get _screenItems =>
+      _filtered.expand((e) => flattenEmployeeScreens(e)).toList();
+
+  void _openLive(MonitorScreenItem item) {
+    showMonitorLiveDialog(context, apiService: widget.apiService, item: item);
+  }
+
+  void _openReport(MonitorScreenItem item) {
+    showMonitorReportSheet(context, apiService: widget.apiService, item: item);
   }
 
   @override
@@ -195,9 +193,9 @@ class _LiveMonitorPageState extends State<LiveMonitorPage> {
         ? 4
         : width >= 1100
             ? 3
-            : width >= 720
+            : width >= 520
                 ? 2
-                : 1;
+                : 2;
 
     return ColoredBox(
       color: _pageBg,
@@ -294,7 +292,7 @@ class _LiveMonitorPageState extends State<LiveMonitorPage> {
                   ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryBright))
                   : _error != null
                       ? _errorView()
-                      : _filtered.isEmpty
+                      : _screenItems.isEmpty
                           ? Center(
                               child: Text(
                                 'No employees match your filters',
@@ -307,13 +305,18 @@ class _LiveMonitorPageState extends State<LiveMonitorPage> {
                                 crossAxisCount: crossAxisCount,
                                 mainAxisSpacing: 10,
                                 crossAxisSpacing: 10,
-                                childAspectRatio: crossAxisCount == 1 ? 1.35 : 1.05,
+                                childAspectRatio: 0.78,
                               ),
-                              itemCount: _filtered.length,
-                              itemBuilder: (_, i) => _MonitorCard(
-                                emp: _filtered[i],
-                                onTap: () => _openPlayback(_filtered[i]),
-                              ),
+                              itemCount: _screenItems.length,
+                              itemBuilder: (_, i) {
+                                final item = _screenItems[i];
+                                return MonitorScreenCard(
+                                  item: item,
+                                  apiService: widget.apiService,
+                                  onLiveTap: () => _openLive(item),
+                                  onReportTap: () => _openReport(item),
+                                );
+                              },
                             ),
             ),
           ],
@@ -361,124 +364,6 @@ class _LiveMonitorPageState extends State<LiveMonitorPage> {
           fontSize: 12,
         ),
         side: BorderSide(color: active ? c.withValues(alpha: 0.4) : Colors.white.withValues(alpha: 0.08)),
-      ),
-    );
-  }
-}
-
-class _MonitorCard extends StatelessWidget {
-  final Map<String, dynamic> emp;
-  final VoidCallback onTap;
-
-  const _MonitorCard({required this.emp, required this.onTap});
-
-  Color _statusColor(String status) {
-    switch (status) {
-      case 'online':
-        return const Color(0xFF22C55E);
-      case 'idle':
-        return const Color(0xFFF59E0B);
-      case 'break':
-        return const Color(0xFF60A5FA);
-      default:
-        return AppTheme.textMuted;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final status = emp['status']?.toString() ?? 'offline';
-    final color = _statusColor(status);
-    final img = emp['screenshot']?.toString();
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Ink(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            color: Colors.white.withValues(alpha: 0.04),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(15)),
-                  child: img != null && img.isNotEmpty
-                      ? Image.network(
-                          img,
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          errorBuilder: (_, __, ___) => _placeholder(),
-                        )
-                      : _placeholder(),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            emp['name']?.toString() ?? 'Employee',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: AppTheme.textPrimary,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                        if ((emp['screen_count'] as int? ?? 0) > 1)
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(LucideIcons.monitor, size: 12, color: AppTheme.textMuted),
-                              const SizedBox(width: 2),
-                              Text(
-                                '${emp['screen_count']}',
-                                style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
-                              ),
-                            ],
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      emp['last_seen']?.toString() ?? '',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _placeholder() {
-    return Container(
-      color: const Color(0xFF1F2C34),
-      child: const Center(
-        child: Icon(LucideIcons.monitor, color: AppTheme.textMuted, size: 28),
       ),
     );
   }

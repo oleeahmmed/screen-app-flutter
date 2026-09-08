@@ -3,17 +3,19 @@ import 'package:intl/intl.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/glass_card.dart';
+import '../widgets/report_ui.dart';
 import '../widgets/tool_page_scaffold.dart';
 
 class AttendanceReportPage extends StatefulWidget {
   final ApiService apiService;
   final VoidCallback? onLogout;
+  final DateTime? initialDate;
 
   const AttendanceReportPage({
     super.key,
     required this.apiService,
     this.onLogout,
+    this.initialDate,
   });
 
   @override
@@ -21,7 +23,8 @@ class AttendanceReportPage extends StatefulWidget {
 }
 
 class _AttendanceReportPageState extends State<AttendanceReportPage> {
-  bool _loading = true;
+  bool _loading = false;
+  bool _generated = false;
   String? _error;
   DateTime _selectedDate = DateTime.now();
   Map<String, dynamic>? _report;
@@ -29,7 +32,10 @@ class _AttendanceReportPageState extends State<AttendanceReportPage> {
   @override
   void initState() {
     super.initState();
-    _load();
+    if (widget.initialDate != null) {
+      _selectedDate = widget.initialDate!;
+      _load();
+    }
   }
 
   String get _dateParam => DateFormat('yyyy-MM-dd').format(_selectedDate);
@@ -38,6 +44,7 @@ class _AttendanceReportPageState extends State<AttendanceReportPage> {
     setState(() {
       _loading = true;
       _error = null;
+      _generated = false;
     });
     final r = await widget.apiService.getMyAttendanceReport(date: _dateParam);
     if (!mounted) return;
@@ -51,6 +58,7 @@ class _AttendanceReportPageState extends State<AttendanceReportPage> {
       setState(() {
         _report = data;
         _loading = false;
+        _generated = true;
       });
     } else {
       setState(() {
@@ -78,7 +86,6 @@ class _AttendanceReportPageState extends State<AttendanceReportPage> {
     );
     if (picked == null) return;
     setState(() => _selectedDate = picked);
-    await _load();
   }
 
   String _dur(dynamic block) {
@@ -110,219 +117,279 @@ class _AttendanceReportPageState extends State<AttendanceReportPage> {
 
     return ToolPageScaffold(
       title: 'Work Report',
-      subtitle: 'Net work and break hours for your work day',
+      subtitle: 'Daily clock in, break & net work',
       onLogout: widget.onLogout,
+      useBackground: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _dateBar(sched),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            ReportUi.glossCard(
+              child: Text(_error!, style: const TextStyle(color: AppTheme.danger, decoration: TextDecoration.none)),
+            ),
+          ],
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: Center(child: CircularProgressIndicator(color: AppTheme.primaryBright)),
+            )
+          else if (_generated && _report != null) ...[
+            const SizedBox(height: 12),
+            _heroSummary(summary),
+            const SizedBox(height: 14),
+            ReportUi.sectionLabel('Sessions', count: sessions.length),
+            const SizedBox(height: 8),
+            _sessionsTable(sessions),
+            const SizedBox(height: 14),
+            ReportUi.sectionLabel('Breaks', count: breaks.length),
+            const SizedBox(height: 8),
+            _breaksTable(breaks),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _dateBar(Map<String, dynamic>? sched) {
+    return ReportUi.glossCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
               Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _loading ? null : _pickDate,
-                  icon: const Icon(Icons.calendar_today_rounded, size: 18),
-                  label: Text(DateFormat('EEE, d MMM yyyy').format(_selectedDate)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppTheme.textPrimary,
-                    side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
-                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _loading ? null : _pickDate,
+                    borderRadius: BorderRadius.circular(10),
+                    child: Row(
+                      children: [
+                        ReportUi.iconBox(icon: Icons.calendar_today_rounded, color: AppTheme.primaryBright, size: 36),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Work day', style: ReportUi.mutedStyle.copyWith(fontSize: 10.5)),
+                              Text(
+                                DateFormat('EEE, d MMM yyyy').format(_selectedDate),
+                                style: const TextStyle(
+                                  color: AppTheme.textPrimary,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                  decoration: TextDecoration.none,
+                                ),
+                              ),
+                              if (sched != null && _generated)
+                                Text(
+                                  'Shift ${_scheduleLabel(sched)}',
+                                  style: ReportUi.mutedStyle.copyWith(fontSize: 11),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(width: 10),
-              IconButton.filledTonal(
-                onPressed: _loading ? null : _load,
-                icon: const Icon(Icons.refresh_rounded),
-                style: IconButton.styleFrom(
-                  foregroundColor: AppTheme.primaryBright,
-                  backgroundColor: Colors.white.withValues(alpha: 0.08),
+              if (_generated)
+                IconButton(
+                  onPressed: _loading ? null : _load,
+                  icon: const Icon(Icons.refresh_rounded, size: 20),
+                  color: AppTheme.textMuted,
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.white.withValues(alpha: 0.06),
+                  ),
                 ),
-              ),
             ],
           ),
-          if (sched != null) ...[
-            const SizedBox(height: 10),
-            Text(
-              'Expected: ${_scheduleLabel(sched)}',
-              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 12),
-            ),
-          ],
-          const SizedBox(height: 16),
-          if (_loading)
-            const Padding(
-              padding: EdgeInsets.all(32),
-              child: Center(child: CircularProgressIndicator(color: AppTheme.primaryBright)),
-            )
-          else if (_error != null)
-            GlassCard(
-              padding: const EdgeInsets.all(20),
-              child: Text(_error!, style: const TextStyle(color: AppTheme.danger)),
-            )
-          else ...[
-            Row(
-              children: [
-                Expanded(child: _statCard('Net Work', _dur(summary['net_work_duration']), AppTheme.success)),
-                const SizedBox(width: 10),
-                Expanded(child: _statCard('Break', _dur(summary['break_duration']), AppTheme.warning)),
-              ],
-            ),
-            const SizedBox(height: 10),
-            _statCard('Gross Work', _dur(summary['gross_work_duration']), AppTheme.primaryBright, fullWidth: true),
-            const SizedBox(height: 20),
-            _sectionTitle('Sessions', sessions.length),
-            const SizedBox(height: 8),
-            if (sessions.isEmpty)
-              _emptyNote('No clock-in sessions for this work day.')
-            else
-              ...sessions.map((s) => _sessionTile(s)),
-            const SizedBox(height: 20),
-            _sectionTitle('Breaks', breaks.length),
-            const SizedBox(height: 8),
-            if (breaks.isEmpty)
-              _emptyNote('No breaks recorded for this work day.')
-            else
-              ...breaks.map((b) => _breakTile(b)),
-          ],
+          const SizedBox(height: 14),
+          FilledButton(
+            onPressed: _loading ? null : _load,
+            style: ReportUi.primaryButton(),
+            child: _loading
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Text(
+                    'View report',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, decoration: TextDecoration.none),
+                  ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _sectionTitle(String title, int count) {
-    return Text(
-      '$title ($count)',
-      style: const TextStyle(
-        color: AppTheme.textPrimary,
-        fontSize: 14,
-        fontWeight: FontWeight.w700,
-      ),
-    );
-  }
+  Widget _heroSummary(Map<String, dynamic> summary) {
+    final net = _dur(summary['net_work_duration']);
+    final gross = _dur(summary['gross_work_duration']);
+    final breakT = _dur(summary['break_duration']);
 
-  Widget _statCard(String label, String value, Color color, {bool fullWidth = false}) {
-    return GlassCard(
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
-      borderRadius: 12,
+    return ReportUi.glossCard(
+      padding: const EdgeInsets.fromLTRB(18, 20, 18, 16),
       child: Column(
-        crossAxisAlignment: fullWidth ? CrossAxisAlignment.center : CrossAxisAlignment.start,
         children: [
           Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-              color: AppTheme.textMuted.withValues(alpha: 0.85),
-              letterSpacing: 1.1,
+            net,
+            style: const TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 34,
+              fontWeight: FontWeight.w800,
+              height: 1,
+              decoration: TextDecoration.none,
+              fontFeatures: [FontFeature.tabularFigures()],
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-              color: color,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
+          const SizedBox(height: 4),
+          Text('Net work', style: ReportUi.mutedStyle.copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(child: _miniStat('Gross', gross, AppTheme.primaryBright)),
+              Container(width: 1, height: 28, color: Colors.white.withValues(alpha: 0.1)),
+              Expanded(child: _miniStat('Break', breakT, AppTheme.warning)),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _emptyNote(String text) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: AppTheme.taskFieldDecoration(borderRadius: 10),
-      child: Text(text, style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 12)),
+  Widget _miniStat(String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            decoration: TextDecoration.none,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(label, style: ReportUi.mutedStyle.copyWith(fontSize: 11)),
+      ],
     );
   }
 
-  Widget _sessionTile(dynamic raw) {
-    if (raw is! Map) return const SizedBox.shrink();
-    final s = Map<String, dynamic>.from(raw);
-    final inDt = DateTime.tryParse(s['check_in']?.toString() ?? '')?.toLocal();
-    final outDt = DateTime.tryParse(s['check_out']?.toString() ?? '')?.toLocal();
-    final isOpen = s['is_open'] == true;
-    final dur = s['gross_duration'] is Map
-        ? Map<String, dynamic>.from(s['gross_duration'] as Map)['formatted']?.toString() ?? ''
-        : '';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: GlassCard(
-        padding: const EdgeInsets.all(14),
-        borderRadius: 10,
-        child: Row(
-          children: [
-            Icon(
-              isOpen ? Icons.play_circle_outline : Icons.check_circle_outline,
-              color: isOpen ? AppTheme.success : AppTheme.textMuted,
-              size: 20,
+  Widget _sessionsTable(List<dynamic> sessions) {
+    const columns = [
+      ReportTableColumn(label: '#', width: 24, flex: 1, align: TextAlign.center),
+      ReportTableColumn(label: 'IN', width: 48, flex: 2, align: TextAlign.center),
+      ReportTableColumn(label: 'OUT', width: 48, flex: 2, align: TextAlign.center),
+      ReportTableColumn(label: 'TIME', width: 56, flex: 2, align: TextAlign.center),
+      ReportTableColumn(label: 'STAT', width: 52, flex: 2, align: TextAlign.center),
+    ];
+
+    final rows = <ReportTableRow>[];
+    for (var i = 0; i < sessions.length; i++) {
+      final raw = sessions[i];
+      if (raw is! Map) continue;
+      final s = Map<String, dynamic>.from(raw);
+      final inDt = DateTime.tryParse(s['check_in']?.toString() ?? '')?.toLocal();
+      final outDt = DateTime.tryParse(s['check_out']?.toString() ?? '')?.toLocal();
+      final isOpen = s['is_open'] == true;
+      final dur = s['gross_duration'] is Map
+          ? Map<String, dynamic>.from(s['gross_duration'] as Map)['formatted']?.toString() ?? '—'
+          : '—';
+
+      rows.add(
+        ReportTableRow(
+          cells: [
+            ReportTableCell(text: '${i + 1}', muted: true),
+            ReportTableCell(
+              text: inDt != null ? DateFormat('HH:mm').format(inDt) : '—',
+              color: AppTheme.success,
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    inDt != null ? DateFormat('HH:mm').format(inDt) : '—',
-                    style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
-                  ),
-                  Text(
-                    outDt != null
-                        ? 'Out ${DateFormat('HH:mm').format(outDt)}'
-                        : (isOpen ? 'Still clocked in' : '—'),
-                    style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 11),
-                  ),
-                ],
+            ReportTableCell(
+              text: outDt != null
+                  ? DateFormat('HH:mm').format(outDt)
+                  : (isOpen ? 'Open' : '—'),
+              muted: outDt == null && !isOpen,
+              color: outDt != null ? AppTheme.primaryBright : (isOpen ? AppTheme.warning : null),
+            ),
+            ReportTableCell(text: dur, color: AppTheme.primaryBright),
+            ReportTableCell(
+              child: ReportUi.statusChip(
+                isOpen ? 'Active' : 'Done',
+                isOpen ? AppTheme.success : AppTheme.textMuted,
               ),
             ),
-            Text(dur, style: const TextStyle(color: AppTheme.primaryBright, fontWeight: FontWeight.w600)),
           ],
         ),
-      ),
+      );
+    }
+
+    return ReportUi.dataTable(
+      columns: columns,
+      rows: rows,
+      emptyMessage: 'No clock-in sessions for this day',
     );
   }
 
-  Widget _breakTile(dynamic raw) {
-    if (raw is! Map) return const SizedBox.shrink();
-    final b = Map<String, dynamic>.from(raw);
-    final start = DateTime.tryParse(b['break_start']?.toString() ?? '')?.toLocal();
-    final back = DateTime.tryParse(b['actual_back']?.toString() ?? '')?.toLocal();
-    final isActive = b['is_active'] == true;
-    final dur = b['duration'] is Map
-        ? Map<String, dynamic>.from(b['duration'] as Map)['formatted']?.toString() ?? ''
-        : '';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: GlassCard(
-        padding: const EdgeInsets.all(14),
-        borderRadius: 10,
-        child: Row(
-          children: [
-            Icon(Icons.free_breakfast_rounded, color: isActive ? AppTheme.warning : AppTheme.textMuted, size: 20),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    start != null ? DateFormat('HH:mm').format(start) : '—',
-                    style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
-                  ),
-                  Text(
-                    back != null
-                        ? 'Back ${DateFormat('HH:mm').format(back)}'
-                        : (isActive ? 'On break now' : '—'),
-                    style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 11),
-                  ),
-                ],
+  Widget _breaksTable(List<dynamic> breaks) {
+    const columns = [
+      ReportTableColumn(label: '#', width: 24, flex: 1, align: TextAlign.center),
+      ReportTableColumn(label: 'START', width: 48, flex: 2, align: TextAlign.center),
+      ReportTableColumn(label: 'BACK', width: 48, flex: 2, align: TextAlign.center),
+      ReportTableColumn(label: 'TIME', width: 56, flex: 2, align: TextAlign.center),
+      ReportTableColumn(label: 'STAT', width: 52, flex: 2, align: TextAlign.center),
+    ];
+
+    final rows = <ReportTableRow>[];
+    for (var i = 0; i < breaks.length; i++) {
+      final raw = breaks[i];
+      if (raw is! Map) continue;
+      final b = Map<String, dynamic>.from(raw);
+      final start = DateTime.tryParse(b['break_start']?.toString() ?? '')?.toLocal();
+      final back = DateTime.tryParse(b['actual_back']?.toString() ?? '')?.toLocal();
+      final isActive = b['is_active'] == true;
+      final dur = b['duration'] is Map
+          ? Map<String, dynamic>.from(b['duration'] as Map)['formatted']?.toString() ?? '—'
+          : '—';
+
+      rows.add(
+        ReportTableRow(
+          cells: [
+            ReportTableCell(text: '${i + 1}', muted: true),
+            ReportTableCell(
+              text: start != null ? DateFormat('HH:mm').format(start) : '—',
+              color: AppTheme.warning,
+            ),
+            ReportTableCell(
+              text: back != null
+                  ? DateFormat('HH:mm').format(back)
+                  : (isActive ? 'On break' : '—'),
+              muted: back == null && !isActive,
+              color: back != null ? AppTheme.primaryBright : (isActive ? AppTheme.warning : null),
+            ),
+            ReportTableCell(text: dur, color: AppTheme.warning),
+            ReportTableCell(
+              child: ReportUi.statusChip(
+                isActive ? 'Active' : 'Done',
+                isActive ? AppTheme.warning : AppTheme.textMuted,
               ),
             ),
-            Text(dur, style: const TextStyle(color: AppTheme.warning, fontWeight: FontWeight.w600)),
           ],
         ),
-      ),
+      );
+    }
+
+    return ReportUi.dataTable(
+      columns: columns,
+      rows: rows,
+      emptyMessage: 'No breaks recorded',
     );
   }
 }

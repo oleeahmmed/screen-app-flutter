@@ -5,7 +5,7 @@ import 'app_theme.dart';
 
 /// aims-webapps ProjectVault.jsx visual language for Flutter vault screens.
 abstract final class VaultTheme {
-  static const pageBg = Color(0xFF0B141A);
+  static const pageBg = AppTheme.immersivePageBg;
   static const panelBg = Color(0xFF111B21);
   static const modalBg = Color(0xFF1F2C34);
 
@@ -28,6 +28,29 @@ abstract final class VaultTheme {
         color: Colors.white.withValues(alpha: 0.03),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      );
+
+  /// Premium project tile on the vault hub grid.
+  static BoxDecoration projectHubCard({bool admin = false}) => BoxDecoration(
+        borderRadius: BorderRadius.circular(18),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: admin ? 0.09 : 0.07),
+            violet.withValues(alpha: admin ? 0.12 : 0.05),
+          ],
+        ),
+        border: Border.all(
+          color: (admin ? violetBright : Colors.white).withValues(alpha: admin ? 0.28 : 0.1),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: violet.withValues(alpha: 0.12),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
       );
 
   static Widget topTab({

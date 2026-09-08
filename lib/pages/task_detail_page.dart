@@ -6,12 +6,14 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_service.dart';
 import '../services/app_navigation.dart';
 import '../widgets/app_tab_shell.dart';
 import '../theme/app_theme.dart';
+import '../theme/vault_theme.dart';
 import '../utils/responsive.dart';
 import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
@@ -147,7 +149,7 @@ void openTaskDetailPage(
           onLogout: onLogout,
           showTopBar: !immersive,
           showBottomNav: !immersive,
-          homeStyleBackground: true,
+          homeStyleBackground: false,
           child: page,
         );
       },
@@ -901,35 +903,64 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (immersive)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                children: [
+          AppTheme.glassCard(
+            borderRadius: 18,
+            padding: EdgeInsets.fromLTRB(compact ? 4 : 8, 8, compact ? 4 : 8, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (immersive)
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.arrow_back_rounded),
+                    icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
                     color: AppTheme.textPrimary,
                     visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                     tooltip: 'Back',
                   ),
-                  Expanded(
-                    child: Text(
-                      project.isNotEmpty ? project : 'Task',
-                      style: TextStyle(
-                        color: AppTheme.textMuted.withValues(alpha: 0.95),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                VaultTheme.iconBox(
+                  icon: LucideIcons.listChecks,
+                  color: AppTheme.accent,
+                  size: 40,
+                  iconSize: 19,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        project.isNotEmpty ? project : 'Task details',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
+                        ),
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                      const SizedBox(height: 2),
+                      Text(
+                        done ? 'Completed task' : 'Open assignment',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppTheme.textMuted.withValues(alpha: 0.92),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
                   ),
-                  if (_dirty)
-                    TextButton(
-                      onPressed: _saving ? null : _discard,
-                      child: const Text('Discard'),
-                    ),
+                ),
+                if (_dirty)
+                  TextButton(
+                    onPressed: _saving ? null : _discard,
+                    child: const Text('Discard'),
+                  ),
+                if (immersive)
                   TaskCompleteButton(
                     isCompleted: done,
                     onPressed: _saving ? null : _toggleComplete,
@@ -937,9 +968,10 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
                     dense: true,
                     expand: false,
                   ),
-                ],
-              ),
+              ],
             ),
+          ),
+          const SizedBox(height: 8),
           _buildPremiumTitle(immersive: immersive, compact: compact, done: done),
           if (!immersive) ...[
             const SizedBox(height: 10),
@@ -961,124 +993,429 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     required bool compact,
     required bool done,
   }) {
+    final t = _task!;
+    final priorityColor = AppTheme.taskPriorityColor(_priority);
+    final taskKey = taskDisplayKey(t);
+    final refLabel = taskKey.isNotEmpty
+        ? taskKey
+        : ((t['task_number']?.toString().trim().isNotEmpty == true)
+            ? t['task_number'].toString()
+            : 'Task #${widget.taskId}');
+    final stageName = (t['stage_name'] ?? '').toString().trim();
+    final projectName = widget.projectName.trim().isNotEmpty
+        ? widget.projectName.trim()
+        : (t['project_name']?.toString().trim() ?? '');
+    final dueLabel = _dueDate != null && _dueDate!.isNotEmpty ? _fmtDateDisplay(_dueDate) : null;
+    final progress = _progressPct(t);
+    final statusLabel = done ? 'Completed' : _statusLabel(_status);
+    final statusColor = done ? AppTheme.success : _statusColor(_status);
+
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Colors.white.withValues(alpha: 0.07),
-            Colors.white.withValues(alpha: 0.025),
-          ],
-        ),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.18),
+            color: priorityColor.withValues(alpha: 0.16),
+            blurRadius: 28,
+            offset: const Offset(0, 10),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.22),
             blurRadius: 18,
-            offset: const Offset(0, 8),
+            offset: const Offset(0, 6),
           ),
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                width: 3.5,
+        borderRadius: BorderRadius.circular(20),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -36,
+              right: -24,
+              child: Container(
+                width: 132,
+                height: 132,
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: done
-                        ? const [Color(0xFF34D399), Color(0xFF059669)]
-                        : const [Color(0xFF60A5FA), Color(0xFF2563EB)],
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    compact ? 12 : 16,
-                    compact ? 12 : 14,
-                    compact ? 12 : 16,
-                    compact ? 12 : 14,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Text(
-                            'TASK TITLE',
-                            style: TextStyle(
-                              color: AppTheme.textMuted.withValues(alpha: 0.72),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.1,
-                            ),
-                          ),
-                          if (done) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF10B981).withValues(alpha: 0.18),
-                                borderRadius: BorderRadius.circular(99),
-                                border: Border.all(
-                                  color: const Color(0xFF10B981).withValues(alpha: 0.35),
-                                ),
-                              ),
-                              child: const Text(
-                                'Done',
-                                style: TextStyle(
-                                  color: Color(0xFF6EE7B7),
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _titleCtrl,
-                        style: TextStyle(
-                          color: done
-                              ? AppTheme.textPrimary.withValues(alpha: 0.72)
-                              : AppTheme.textPrimary,
-                          fontSize: immersive ? 19 : (compact ? 20 : 22),
-                          fontWeight: FontWeight.w800,
-                          height: 1.28,
-                          letterSpacing: -0.4,
-                          decoration: done ? TextDecoration.lineThrough : null,
-                          decorationColor: AppTheme.textMuted.withValues(alpha: 0.55),
-                        ),
-                        decoration: InputDecoration(
-                          border: InputBorder.none,
-                          isDense: true,
-                          hintText: 'What needs to be done?',
-                          hintStyle: TextStyle(
-                            color: AppTheme.textMuted.withValues(alpha: 0.4),
-                            fontWeight: FontWeight.w600,
-                          ),
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                        maxLines: immersive ? 3 : 4,
-                        minLines: 1,
-                      ),
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      priorityColor.withValues(alpha: 0.22),
+                      priorityColor.withValues(alpha: 0),
                     ],
                   ),
                 ),
               ),
-            ],
+            ),
+            Positioned(
+              bottom: -28,
+              left: -18,
+              child: Container(
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      AppTheme.primaryBright.withValues(alpha: 0.12),
+                      AppTheme.primaryBright.withValues(alpha: 0),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            DecoratedBox(
+              decoration: AppTheme.loginInsetDecoration(borderRadius: 20).copyWith(
+                border: Border.all(
+                  color: done
+                      ? AppTheme.success.withValues(alpha: 0.32)
+                      : priorityColor.withValues(alpha: 0.26),
+                ),
+              ),
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  compact ? 12 : 14,
+                  compact ? 12 : 14,
+                  compact ? 12 : 14,
+                  compact ? 12 : 14,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        _titleRefBadge(refLabel, priorityColor),
+                        const Spacer(),
+                        _titleStatusPill(label: _priorityLabel(_priority), color: priorityColor),
+                        const SizedBox(width: 6),
+                        _titleStatusPill(label: statusLabel, color: statusColor, filled: done),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _titleCompleteButton(
+                          done: done,
+                          color: priorityColor,
+                          onTap: _saving ? null : _toggleComplete,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Task title',
+                                style: TextStyle(
+                                  color: AppTheme.textMuted.withValues(alpha: 0.78),
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 0.9,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              TextField(
+                                controller: _titleCtrl,
+                                style: TextStyle(
+                                  color: done
+                                      ? AppTheme.textPrimary.withValues(alpha: 0.68)
+                                      : AppTheme.textPrimary,
+                                  fontSize: immersive ? 20 : (compact ? 21 : 23),
+                                  fontWeight: FontWeight.w800,
+                                  height: 1.22,
+                                  letterSpacing: -0.55,
+                                  decoration: done ? TextDecoration.lineThrough : null,
+                                  decorationColor: AppTheme.textMuted.withValues(alpha: 0.5),
+                                  decorationThickness: 1.4,
+                                ),
+                                decoration: InputDecoration(
+                                  border: InputBorder.none,
+                                  isDense: true,
+                                  hintText: 'What needs to be done?',
+                                  hintStyle: TextStyle(
+                                    color: AppTheme.textMuted.withValues(alpha: 0.38),
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: immersive ? 20 : (compact ? 21 : 23),
+                                    letterSpacing: -0.4,
+                                  ),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                                maxLines: immersive ? 3 : 4,
+                                minLines: 1,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (projectName.isNotEmpty || stageName.isNotEmpty || dueLabel != null) ...[
+                      const SizedBox(height: 14),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          if (projectName.isNotEmpty)
+                            _titleMetaChip(
+                              icon: Icons.folder_open_rounded,
+                              label: projectName,
+                              color: AppTheme.primaryBright,
+                            ),
+                          if (stageName.isNotEmpty)
+                            _titleMetaChip(
+                              icon: Icons.layers_outlined,
+                              label: stageName,
+                              color: AppTheme.accent,
+                            ),
+                          if (dueLabel != null)
+                            _titleMetaChip(
+                              icon: Icons.event_rounded,
+                              label: dueLabel,
+                              color: done ? AppTheme.textMuted : AppTheme.warning,
+                            ),
+                        ],
+                      ),
+                    ],
+                    if (progress > 0 || _subtasks.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      _titleProgressStrip(progress: progress, label: _progressLabel(t), done: done),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _priorityLabel(String priority) {
+    switch (priority.toLowerCase()) {
+      case 'high':
+        return 'High';
+      case 'low':
+        return 'Low';
+      default:
+        return 'Medium';
+    }
+  }
+
+  String _statusLabel(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed':
+      case 'done':
+        return 'Completed';
+      case 'in_progress':
+      case 'in progress':
+        return 'In progress';
+      case 'pending':
+      case 'to_do':
+      case 'todo':
+        return 'To do';
+      default:
+        return status.isEmpty ? 'Open' : status.replaceAll('_', ' ');
+    }
+  }
+
+  Color _statusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed':
+      case 'done':
+        return AppTheme.success;
+      case 'in_progress':
+      case 'in progress':
+        return AppTheme.primaryBright;
+      case 'high':
+        return AppTheme.danger;
+      default:
+        return AppTheme.accent;
+    }
+  }
+
+  Widget _titleRefBadge(String label, Color accent) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(10),
+        gradient: LinearGradient(
+          colors: [
+            accent.withValues(alpha: 0.18),
+            AppTheme.primaryBright.withValues(alpha: 0.08),
+          ],
+        ),
+        border: Border.all(color: accent.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(LucideIcons.hash, size: 12, color: accent.withValues(alpha: 0.95)),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              color: AppTheme.textPrimary.withValues(alpha: 0.92),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _titleStatusPill({
+    required String label,
+    required Color color,
+    bool filled = false,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(99),
+        color: filled ? color.withValues(alpha: 0.2) : Colors.white.withValues(alpha: 0.05),
+        border: Border.all(color: color.withValues(alpha: filled ? 0.42 : 0.24)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: filled ? color : AppTheme.textPrimary.withValues(alpha: 0.88),
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.15,
+        ),
+      ),
+    );
+  }
+
+  Widget _titleCompleteButton({
+    required bool done,
+    required Color color,
+    required VoidCallback? onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(13),
+            gradient: done
+                ? LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      AppTheme.success,
+                      AppTheme.success.withValues(alpha: 0.72),
+                    ],
+                  )
+                : null,
+            color: done ? null : Colors.white.withValues(alpha: 0.05),
+            border: Border.all(
+              color: done ? AppTheme.success.withValues(alpha: 0.7) : color.withValues(alpha: 0.42),
+              width: 1.8,
+            ),
+            boxShadow: done
+                ? [
+                    BoxShadow(
+                      color: AppTheme.success.withValues(alpha: 0.28),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Icon(
+            done ? Icons.check_rounded : Icons.check_outlined,
+            color: done ? Colors.white : color.withValues(alpha: 0.9),
+            size: 22,
           ),
         ),
       ),
+    );
+  }
+
+  Widget _titleMetaChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 220),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(11),
+        color: color.withValues(alpha: 0.1),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: color.withValues(alpha: 0.95)),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppTheme.textPrimary.withValues(alpha: 0.9),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _titleProgressStrip({
+    required int progress,
+    required String label,
+    required bool done,
+  }) {
+    final barColor = done ? AppTheme.success : AppTheme.accent;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text(
+              'Progress',
+              style: TextStyle(
+                color: AppTheme.textMuted.withValues(alpha: 0.88),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              label,
+              style: TextStyle(
+                color: AppTheme.textMuted.withValues(alpha: 0.82),
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(99),
+          child: LinearProgressIndicator(
+            value: progress / 100,
+            minHeight: 6,
+            backgroundColor: Colors.white.withValues(alpha: 0.07),
+            color: barColor,
+          ),
+        ),
+      ],
     );
   }
 
@@ -1120,14 +1457,10 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     final subCount = _subtasks.length;
     final fileCount = _attachments.length;
     return Padding(
-      padding: EdgeInsets.fromLTRB(compact ? 10 : 16, immersive ? 6 : 8, compact ? 10 : 16, 0),
-      child: Container(
-        padding: const EdgeInsets.all(3),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          color: Colors.white.withValues(alpha: 0.04),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-        ),
+      padding: EdgeInsets.fromLTRB(compact ? 12 : 16, 6, compact ? 12 : 16, 0),
+      child: AppTheme.glassCard(
+        borderRadius: 16,
+        padding: const EdgeInsets.all(4),
         child: TabBar(
           controller: _tabCtrl,
           isScrollable: true,
@@ -1135,7 +1468,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
           indicatorSize: TabBarIndicatorSize.tab,
           dividerColor: Colors.transparent,
           indicator: BoxDecoration(
-            borderRadius: BorderRadius.circular(9),
+            borderRadius: BorderRadius.circular(10),
             color: AppTheme.primary.withValues(alpha: 0.22),
             border: Border.all(color: AppTheme.primaryBright.withValues(alpha: 0.28)),
           ),
@@ -1224,7 +1557,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1e293b),
+        backgroundColor: const Color(0xFF152238),
         title: const Text('Delete attachment?', style: TextStyle(color: Colors.white)),
         content: Text('Remove "$name"?', style: const TextStyle(color: Colors.white70)),
         actions: [
@@ -1259,9 +1592,9 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
       padding: EdgeInsets.all(_attachments.isEmpty ? 18 : 4),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        color: Colors.black.withValues(alpha: 0.16),
+        color: Colors.white.withValues(alpha: 0.04),
         border: Border.all(
-          color: _attachmentsDragOver ? AppTheme.primary : Colors.white.withValues(alpha: 0.06),
+          color: _attachmentsDragOver ? AppTheme.primaryBright : Colors.white.withValues(alpha: 0.08),
           width: _attachmentsDragOver ? 1.5 : 1,
         ),
       ),
@@ -1427,11 +1760,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     final priority = st['priority']?.toString() ?? '';
 
     return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        color: done
-            ? Colors.white.withValues(alpha: 0.025)
-            : Colors.white.withValues(alpha: 0.05),
+      decoration: AppTheme.loginInsetDecoration(borderRadius: 14).copyWith(
         border: Border.all(
           color: done
               ? AppTheme.success.withValues(alpha: 0.22)
@@ -1652,11 +1981,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        color: Colors.white.withValues(alpha: 0.04),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
-      ),
+      decoration: AppTheme.loginInsetDecoration(borderRadius: 12),
       child: Row(
         children: [
           CircleAvatar(
@@ -1877,11 +2202,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
         final dt = DateTime.tryParse(ts);
         if (dt != null) when = DateFormat('d MMM · HH:mm').format(dt.toLocal());
         return Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            color: Colors.white.withValues(alpha: 0.04),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
-          ),
+          decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1925,32 +2246,8 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
 
   Widget _buildFooter() {
     final compact = MediaQuery.sizeOf(context).width < 640;
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            const Color(0xFF0B1F3A).withValues(alpha: 0.98),
-            const Color(0xFF071526),
-          ],
-        ),
-        border: Border(
-          top: BorderSide(color: AppTheme.accent.withValues(alpha: 0.28), width: 1.2),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.accent.withValues(alpha: 0.12),
-            blurRadius: 24,
-            offset: const Offset(0, -6),
-          ),
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.45),
-            blurRadius: 20,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
+    return AppTheme.footerBlueGlass(
+      topRadius: 18,
       child: SafeArea(
         top: false,
         child: Padding(

@@ -6,7 +6,7 @@ import '../theme/app_theme.dart';
 import 'app_logo.dart';
 import 'app_quick_menu.dart';
 
-/// Persistent top bar: logo → home, optional Select Apps, report / P2P / alerts / profile / logout.
+/// Persistent top bar: logo → home, optional Select Apps, report / P2P / alerts / logout.
 class AppTopBar extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onSelected;

@@ -92,18 +92,18 @@ class AppLogoutButton extends StatelessWidget {
   }
 }
 
-/// Submit daily report — opens closing report bottom sheet (same pattern as Take Break).
+/// Reports hub — attendance, work hours, daily closing report.
 class AppSubmitReportButton extends StatelessWidget {
   const AppSubmitReportButton({super.key});
 
   Future<void> _open() async {
-    await AppNavigation.instance.openSubmitReport();
+    await AppNavigation.instance.openReportsHub();
   }
 
   @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: 'Submit report',
+      message: 'Reports',
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -113,7 +113,7 @@ class AppSubmitReportButton extends StatelessWidget {
             padding: const EdgeInsets.all(8),
             decoration: AppTheme.loginInsetDecoration(borderRadius: 20),
             child: const Icon(
-              LucideIcons.clipboardCheck,
+              LucideIcons.barChart3,
               size: 18,
               color: AppTheme.accent,
             ),
@@ -124,7 +124,7 @@ class AppSubmitReportButton extends StatelessWidget {
   }
 }
 
-/// Submit report · P2P · notifications · profile · logout.
+/// Reports · P2P · notifications · logout.
 class AppHeaderMenuActions extends StatelessWidget {
   final VoidCallback? onLogout;
   final Color? iconColor;
@@ -162,12 +162,6 @@ class AppHeaderMenuActions extends StatelessWidget {
             label: Text(unreadNotifs > 9 ? '9+' : '$unreadNotifs'),
             child: Icon(Icons.notifications_outlined, color: muted, size: iconSize),
           ),
-        ),
-        IconButton(
-          onPressed: () => AppNavigation.instance.goProfile(),
-          tooltip: 'Profile',
-          visualDensity: VisualDensity.compact,
-          icon: Icon(Icons.person_outline_rounded, color: muted, size: iconSize),
         ),
         AppLogoutButton(
           onLogout: onLogout,

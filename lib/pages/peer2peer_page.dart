@@ -22,7 +22,6 @@ import '../services/api_service.dart';
 import '../services/p2p_received_store.dart';
 import '../theme/app_theme.dart';
 import '../widgets/p2p_ui.dart';
-import '../widgets/vault/vault_helpers.dart';
 
 class Peer2PeerPage extends StatefulWidget {
   final ApiService apiService;
@@ -1173,11 +1172,17 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     }
 
     if (widget.embedded) {
-      return _body();
+      return PopScope(
+        canPop: _mode == 'home',
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && _mode != 'home') _cancel();
+        },
+        child: _body(),
+      );
     }
 
-    return Container(
-      decoration: AppTheme.screenGradient(),
+    return AppTheme.loginDashboardBackground(
+      context: context,
       child: SafeArea(
         child: Column(
           children: [
@@ -1191,10 +1196,8 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
 
   Widget _header() {
     return Container(
-      height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+      padding: const EdgeInsets.fromLTRB(8, 8, 16, 8),
       decoration: BoxDecoration(
-        color: AppTheme.surface.withValues(alpha: 0.35),
         border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
       ),
       child: Row(
@@ -1202,26 +1205,50 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
           if (_mode != 'home')
             IconButton(
               onPressed: _cancel,
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppTheme.textMuted, size: 20),
+              icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppTheme.textPrimary, size: 20),
             ),
           Container(
-            width: 36,
-            height: 36,
+            width: 40,
+            height: 40,
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [AppTheme.accent, AppTheme.primary]),
-              borderRadius: BorderRadius.circular(10),
+              gradient: const LinearGradient(
+                colors: [AppTheme.primary, AppTheme.accent],
+              ),
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.primary.withValues(alpha: 0.25),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
             ),
             child: const Icon(Icons.swap_horiz_rounded, color: Colors.white, size: 20),
           ),
           const SizedBox(width: 12),
-          const Text('Peer2Peer', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-          const Spacer(),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'File transfer',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+                ),
+                Text(
+                  _mode == 'home' ? 'Direct device-to-device' : _statusText.isNotEmpty ? _statusText : 'Peer2Peer',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: AppTheme.textMuted.withValues(alpha: 0.9)),
+                ),
+              ],
+            ),
+          ),
           if (_isConnected)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                color: AppTheme.success.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(12),
+                color: AppTheme.success.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: AppTheme.success.withValues(alpha: 0.35)),
               ),
               child: Row(
@@ -1229,7 +1256,7 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                 children: [
                   Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppTheme.success, shape: BoxShape.circle)),
                   const SizedBox(width: 6),
-                  const Text('Connected', style: TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w600)),
+                  const Text('Live', style: TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
@@ -1258,59 +1285,45 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          vaultSectionLabel('Transfer'),
-          const SizedBox(height: 10),
-          vaultSurfaceCard(
-            padding: const EdgeInsets.all(16),
+          P2pHubCard(
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                P2pSendReceiveHero(
+                  onSend: _startSendFlow,
+                  onReceive: () => setState(() => _mode = 'receiving'),
+                ),
+                const SizedBox(height: 14),
                 Text(
-                  'Send or receive files directly between devices',
+                  'Direct, secure transfer — no cloud upload',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: AppTheme.textMuted.withValues(alpha: 0.95),
-                    fontSize: 13.5,
-                    height: 1.35,
+                    fontSize: 12,
+                    height: 1.4,
+                    color: AppTheme.textMuted.withValues(alpha: 0.85),
                   ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _bigAction(
-                        color: AppTheme.primary,
-                        icon: Icons.upload_rounded,
-                        label: 'Send',
-                        onTap: _startSendFlow,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _bigAction(
-                        color: AppTheme.success,
-                        icon: Icons.download_rounded,
-                        label: 'Receive',
-                        onTap: () => setState(() => _mode = 'receiving'),
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ),
           ),
           const SizedBox(height: 22),
-          vaultSectionLabel('Received files'),
-          const SizedBox(height: 10),
+          const P2pSectionLabel('Received files'),
           if (_received.isEmpty)
-            vaultSurfaceCard(
+            P2pHubCard(
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 28),
               child: Column(
                 children: [
                   Icon(Icons.inbox_outlined, size: 36, color: AppTheme.textMuted.withValues(alpha: 0.55)),
                   const SizedBox(height: 10),
-          Text(
+                  Text(
                     'No files received yet',
                     style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13.5),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Accepted transfers appear here',
+                    style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.65), fontSize: 12),
                   ),
                 ],
               ),
@@ -1322,98 +1335,17 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     );
   }
 
-  Widget _bigAction({
-    required Color color,
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Ink(
-          height: 108,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [color.withValues(alpha: 0.95), color.withValues(alpha: 0.7)],
-            ),
-            boxShadow: [
-              BoxShadow(color: color.withValues(alpha: 0.35), blurRadius: 14, offset: const Offset(0, 6)),
-            ],
-          ),
-                child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-              Icon(icon, color: Colors.white, size: 32),
-              const SizedBox(height: 8),
-              Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _receivedTile(Map<String, dynamic> item) {
     final name = item['name']?.toString() ?? 'File';
     final path = item['path']?.toString() ?? '';
     final contentUri = item['contentUri']?.toString();
     final size = item['size'] is int ? item['size'] as int : int.tryParse('${item['size']}') ?? 0;
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: path.isEmpty ? null : () => _openLocalFile(path, contentUri: contentUri),
-          onLongPress: path.isEmpty ? null : () => _openLocalFolder(path, contentUri: contentUri),
-          borderRadius: BorderRadius.circular(14),
-          child: Ink(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              color: Colors.white.withValues(alpha: 0.04),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.insert_drive_file_rounded, size: 22, color: AppTheme.textMuted.withValues(alpha: 0.9)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14.5,
-                        ),
-                      ),
-                      if (size > 0) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          _fmtSize(size),
-                          style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 12),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                Icon(Icons.chevron_right_rounded, size: 20, color: AppTheme.textMuted.withValues(alpha: 0.55)),
-              ],
-            ),
-          ),
-        ),
-      ),
+    return P2pReceivedFileTile(
+      name: name,
+      sizeLabel: size > 0 ? _fmtSize(size) : '',
+      onTap: path.isEmpty ? null : () => _openLocalFile(path, contentUri: contentUri),
+      onLongPress: path.isEmpty ? null : () => _openLocalFolder(path, contentUri: contentUri),
     );
   }
 
@@ -1422,54 +1354,69 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          vaultSectionLabel('Send'),
-          const SizedBox(height: 10),
-          vaultSurfaceCard(
+          P2pHubCard(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  _selectedFileName ?? 'File',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700, fontSize: 16),
+                P2pFilePreview(
+                  fileName: _selectedFileName ?? 'File',
+                  fileSize: _fmtSize(_selectedFileSize),
+                  icon: LucideIcons.fileUp,
+                  gradient: const [Color(0xFF3B82F6), Color(0xFF60A5FA)],
                 ),
-                const SizedBox(height: 4),
-                Text(_fmtSize(_selectedFileSize), style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13)),
-          if (_sessionId != null) ...[
-                  const SizedBox(height: 18),
-            Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
-              child: QrImageView(
-                data: _sessionId!,
-                version: QrVersions.auto,
-                size: 200,
-                backgroundColor: Colors.white,
+                if (_sessionId != null) ...[
+                  const SizedBox(height: 20),
+                  Center(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.12),
+                            blurRadius: 16,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: QrImageView(
+                        data: _sessionId!,
+                        version: QrVersions.auto,
+                        size: 200,
+                        backgroundColor: Colors.white,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 14),
                   P2pSessionCodeBadge(code: _sessionId!, onCopy: _copySessionCode),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 10),
                   Text(
-                    'Ask them to tap Receive → Scan QR',
+                    'Receiver: tap Receive → Scan QR',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13),
                   ),
                 ],
-                const SizedBox(height: 14),
-                Text(
-                  !_signalingOk
+                const SizedBox(height: 16),
+                P2pStatusSteps(
+                  steps: [
+                    (label: 'Signaling', done: _signalingOk, active: !_signalingOk),
+                    (label: 'Peer found', done: _peerFound, active: _signalingOk && !_peerFound),
+                    (label: 'Secure link', done: _webrtcReady, active: _peerFound && !_webrtcReady),
+                    (label: 'Ready', done: _webrtcReady, active: false),
+                  ],
+                  statusText: !_signalingOk
                       ? 'Connecting…'
-                      : !_peerFound
-                          ? 'Waiting for the other phone…'
-                          : (_webrtcReady ? (_statusText.isEmpty ? 'Connected' : _statusText) : 'Linking devices…${_iceState.isEmpty ? '' : ' ($_iceState)'}'),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: AppTheme.primaryBright.withValues(alpha: 0.95), fontSize: 13, fontWeight: FontWeight.w600),
+                      : (!_peerFound
+                          ? 'Waiting for receiver…'
+                          : (_webrtcReady ? (_statusText.isEmpty ? 'Connected' : _statusText) : 'Linking devices…${_iceState.isEmpty ? '' : ' ($_iceState)'}')),
+                  iceState: _iceState.isEmpty ? null : _iceState,
                 ),
               ],
             ),
           ),
           const SizedBox(height: 14),
-          P2pGhostButton(label: 'Cancel', icon: LucideIcons.x, onTap: _cancel),
+          P2pGhostButton(label: 'Cancel send', icon: LucideIcons.x, onTap: _cancel),
         ],
       ),
     );
@@ -1481,27 +1428,35 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            vaultSectionLabel('Receive'),
-            const SizedBox(height: 10),
-            vaultSurfaceCard(
+            P2pHubCard(
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
                     _awaitingAccept ? 'Incoming file' : 'Connecting…',
+                    textAlign: TextAlign.center,
                     style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w800, fontSize: 18),
                   ),
-            if (_peerName != null) ...[
+                  if (_peerName != null) ...[
                     const SizedBox(height: 6),
-                    Text('From $_peerName', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9))),
-            ],
+                    Text(
+                      'From $_peerName',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9)),
+                    ),
+                  ],
                   const SizedBox(height: 16),
-            if (_awaitingAccept) ...[
-                    Text(_rxFileName, textAlign: TextAlign.center, style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
-                    Text(_fmtSize(_expectedSize), style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85))),
+                  if (_awaitingAccept) ...[
+                    P2pFilePreview(
+                      fileName: _rxFileName,
+                      fileSize: _fmtSize(_expectedSize),
+                      icon: LucideIcons.fileDown,
+                      gradient: const [Color(0xFF10B981), Color(0xFF059669)],
+                    ),
                     const SizedBox(height: 18),
                     P2pPrimaryButton(
-                      label: 'Accept',
-                      icon: LucideIcons.check,
+                      label: 'Receive file',
+                      icon: LucideIcons.download,
                       onTap: _acceptIncoming,
                       gradient: const [Color(0xFF10B981), Color(0xFF047857)],
                     ),
@@ -1510,24 +1465,18 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
                       steps: [
                         (label: 'Signaling', done: _signalingOk, active: !_signalingOk),
                         (label: 'Peer found', done: _peerFound, active: _signalingOk && !_peerFound),
-                        (
-                          label: 'WebRTC',
-                          done: _webrtcReady,
-                          active: _peerFound && !_webrtcReady,
-                        ),
-                        (
-                          label: 'Connected',
-                          done: _webrtcReady && (_awaitingAccept || _mode == 'transferring'),
-                          active: false,
-                        ),
+                        (label: 'Secure link', done: _webrtcReady, active: _peerFound && !_webrtcReady),
+                        (label: 'Connected', done: _webrtcReady && (_awaitingAccept || _mode == 'transferring'), active: false),
                       ],
                       statusText: _statusText,
                       iceState: _iceState.isEmpty ? null : _iceState,
                     ),
                     const SizedBox(height: 12),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8),
-                      child: CircularProgressIndicator(color: AppTheme.success),
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: CircularProgressIndicator(color: AppTheme.success),
+                      ),
                     ),
                   ],
                 ],
@@ -1546,59 +1495,37 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          vaultSectionLabel('Receive'),
-          const SizedBox(height: 10),
+          if (canScan)
+            P2pPrimaryButton(
+              label: 'Scan QR code',
+              icon: LucideIcons.qrCode,
+              onTap: _scanQrAndJoin,
+              gradient: const [Color(0xFF10B981), Color(0xFF047857)],
+            ),
           if (canScan) ...[
-            Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: _scanQrAndJoin,
-                borderRadius: BorderRadius.circular(18),
-                child: Ink(
-                  height: 120,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(18),
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF10B981), Color(0xFF059669)],
-                    ),
-                    boxShadow: [
-                      BoxShadow(color: AppTheme.success.withValues(alpha: 0.35), blurRadius: 16, offset: const Offset(0, 6)),
-                    ],
-                  ),
-                  child: const Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.qr_code_scanner_rounded, color: Colors.white, size: 40),
-                      SizedBox(height: 10),
-                      Text('Scan QR code', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17)),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
             Center(
-              child: Text('or enter code', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12.5)),
+              child: Text('or enter transfer code', style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 12.5)),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
           ],
-          vaultSurfaceCard(
+          P2pHubCard(
             child: Column(
               children: [
                 P2pJoinField(
-            controller: _joinCtrl,
-            onSubmitted: (v) {
-              if (v.trim().isNotEmpty) _startReceiveFlow(v.trim());
-            },
-          ),
+                  controller: _joinCtrl,
+                  onSubmitted: (v) {
+                    if (v.trim().isNotEmpty) _startReceiveFlow(v.trim());
+                  },
+                ),
                 const SizedBox(height: 12),
                 P2pPrimaryButton(
-                  label: 'Join',
+                  label: 'Join & receive',
                   icon: LucideIcons.logIn,
                   onTap: () {
-                final c = _joinCtrl.text.trim();
-                if (c.isNotEmpty) _startReceiveFlow(c);
-              },
+                    final c = _joinCtrl.text.trim();
+                    if (c.isNotEmpty) _startReceiveFlow(c);
+                  },
                   gradient: const [Color(0xFF10B981), Color(0xFF047857)],
                 ),
               ],
@@ -1612,55 +1539,15 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
   }
 
   Widget _xferView() {
-    final pct = (_progress * 100).clamp(0, 100);
     return P2pPageFrame(
       center: true,
       scroll: false,
-      child: vaultSurfaceCard(
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 96,
-              height: 96,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  CircularProgressIndicator(
-                    value: _progress > 0 ? _progress : null,
-                    strokeWidth: 7,
-                    color: AppTheme.primaryBright,
-                      backgroundColor: Colors.white.withValues(alpha: 0.08),
-                    ),
-                  Text(
-                    _progress > 0 ? '${pct.toStringAsFixed(0)}%' : '…',
-                    style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w800, fontSize: 18),
-                  ),
-                    ],
-                  ),
-              ),
-            const SizedBox(height: 18),
-            Text(
-              _selectedFileName ?? _rxFileName,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700, fontSize: 15),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _statusText,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13),
-            ),
-            if (_bytesTransferred > 0) ...[
-              const SizedBox(height: 6),
-              Text(
-                _fmtSize(_bytesTransferred),
-                style: TextStyle(color: AppTheme.primaryBright.withValues(alpha: 0.95), fontSize: 12, fontWeight: FontWeight.w600),
-              ),
-            ],
-          ],
-        ),
+      child: P2pProgressPanel(
+        progress: _progress,
+        fileName: _selectedFileName ?? _rxFileName,
+        statusText: _statusText,
+        bytesLabel: _bytesTransferred > 0 ? _fmtSize(_bytesTransferred) : null,
+        peerName: _peerName,
       ),
     );
   }
@@ -1672,112 +1559,86 @@ class _Peer2PeerPageState extends State<Peer2PeerPage> {
     final sizeBytes = _expectedSize > 0
         ? _expectedSize
         : (_selectedFileSize > 0 ? _selectedFileSize : _rxSize);
-    final sizeLabel = sizeBytes > 0 ? _fmtSize(sizeBytes) : null;
+    final sizeLabel = sizeBytes > 0 ? _fmtSize(sizeBytes) : '';
 
     return P2pPageFrame(
-        child: Column(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-          const SizedBox(height: 28),
-          Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 56),
-          const SizedBox(height: 14),
-          Text(
-            isReceived ? 'Saved' : 'Sent',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: AppTheme.textPrimary,
-              fontWeight: FontWeight.w700,
-              fontSize: 22,
-              letterSpacing: -0.3,
-            ),
-          ),
-          if (isReceived) ...[
-            const SizedBox(height: 6),
-            Text(
-              Platform.isAndroid ? 'Download / Aims' : (_statusText.isNotEmpty ? _statusText : ''),
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 13),
-            ),
-            const SizedBox(height: 28),
-            if (path != null)
-            Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  color: Colors.white.withValues(alpha: 0.04),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.description_outlined, size: 22, color: AppTheme.textMuted.withValues(alpha: 0.95)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            name,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: AppTheme.textPrimary,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 15,
-                              height: 1.25,
-                            ),
-                          ),
-                          if (sizeLabel != null) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              sizeLabel,
-                              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 12.5),
-                            ),
-                          ],
-                        ],
-              ),
-            ),
-          ],
-        ),
-              ),
-            if (path != null) ...[
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton.icon(
-                      onPressed: () => _openLocalFile(path, contentUri: _rxContentUri),
-                      icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                      label: const Text('Open'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppTheme.primaryBright,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
+        children: [
+          P2pHubCard(
+            child: Column(
+              children: [
+                Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 56),
+                const SizedBox(height: 14),
+                Text(
+                  isReceived ? 'File received' : 'File sent',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 22,
+                    letterSpacing: -0.3,
                   ),
-                  Expanded(
-                    child: TextButton.icon(
-                      onPressed: () => _openLocalFolder(path, contentUri: _rxContentUri),
-                      icon: const Icon(Icons.folder_open_rounded, size: 18),
-                      label: const Text('Folder'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppTheme.textMuted,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
+                ),
+                if (isReceived) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    Platform.isAndroid ? 'Saved to Download / Aims' : (_statusText.isNotEmpty ? _statusText : 'Saved'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.85), fontSize: 13),
                   ),
                 ],
-              ),
-            ],
-          ] else ...[
-            const SizedBox(height: 8),
-            Text(
-              name,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.95), fontSize: 14),
+                const SizedBox(height: 18),
+                P2pFilePreview(
+                  fileName: name,
+                  fileSize: sizeLabel.isNotEmpty ? sizeLabel : _statusText,
+                  icon: isReceived ? LucideIcons.fileDown : LucideIcons.fileUp,
+                  gradient: isReceived
+                      ? const [Color(0xFF10B981), Color(0xFF059669)]
+                      : const [Color(0xFF3B82F6), Color(0xFF60A5FA)],
+                ),
+                if (isReceived && path != null) ...[
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _openLocalFile(path, contentUri: _rxContentUri),
+                          icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                          label: const Text('Open'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.primaryBright,
+                            side: BorderSide(color: AppTheme.primaryBright.withValues(alpha: 0.4)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _openLocalFolder(path, contentUri: _rxContentUri),
+                          icon: const Icon(Icons.folder_open_rounded, size: 18),
+                          label: const Text('Folder'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppTheme.textMuted,
+                            side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
             ),
-          ],
-          const SizedBox(height: 28),
-          P2pGhostButton(label: 'Done', icon: LucideIcons.home, onTap: _cancel),
+          ),
+          const SizedBox(height: 16),
+          P2pPrimaryButton(
+            label: 'Done',
+            icon: LucideIcons.home,
+            onTap: _cancel,
+            gradient: const [AppTheme.primary, AppTheme.primaryBright],
+          ),
         ],
       ),
     );

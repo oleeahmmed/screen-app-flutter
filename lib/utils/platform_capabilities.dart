@@ -21,10 +21,17 @@ abstract final class PlatformCapabilities {
   /// Drag-and-drop file targets — skip on Linux (GTK drag + desktop_drop edge cases).
   static bool get fileDragDrop => Platform.isMacOS || Platform.isWindows;
 
-  /// Kanban task drag between stages — desktop only.
-  /// On Android/iOS, long-press drag fights scrolling and causes misfires.
+  /// Kanban task drag between stages — all platforms.
+  /// Mobile uses long-press drag so horizontal board scroll still works.
   static bool get kanbanTaskDragDrop =>
-      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+      Platform.isAndroid ||
+      Platform.isIOS ||
+      Platform.isWindows ||
+      Platform.isLinux ||
+      Platform.isMacOS;
+
+  /// Long-press before drag on touch devices (avoids accidental drags while scrolling).
+  static bool get kanbanLongPressDrag => Platform.isAndroid || Platform.isIOS;
 
   /// Desktop-only screen monitoring.
   ///

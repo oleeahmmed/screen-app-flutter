@@ -1,12 +1,14 @@
-// tasks_page.dart — My Tasks (WhatsApp-style premium list, chat theme)
+// tasks_page.dart — My Tasks (dashboard glass theme, vault-style hub)
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
 import '../services/api_service.dart';
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
+import '../theme/vault_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/platform_capabilities.dart';
 import '../utils/responsive.dart';
@@ -75,34 +77,42 @@ class _TasksPageState extends State<TasksPage> {
 
   Future<void> _load({bool silent = false}) async {
     if (!silent && mounted) setState(() => _loading = true);
-    final result = await widget.apiService.getMyTasks();
-    if (!mounted) return;
+    try {
+      final result = await widget.apiService.getMyTasks();
+      if (!mounted) return;
 
-    if (result['success'] == true) {
-      final data = result['data'] as Map<String, dynamic>? ?? {};
-      final projects = (data['projects'] as List? ?? [])
-          .whereType<Map>()
-          .map((p) => Map<String, dynamic>.from(p))
-          .toList();
-      final tasks = data['tasks'] as List? ?? [];
+      if (result['success'] == true) {
+        final data = result['data'] as Map<String, dynamic>? ?? {};
+        final projects = (data['projects'] as List? ?? [])
+            .whereType<Map>()
+            .map((p) => Map<String, dynamic>.from(p))
+            .toList();
+        final tasks = data['tasks'] as List? ?? [];
 
-      setState(() {
-        _projects = projects;
-        _tasks = tasks;
-        _loading = false;
-        if (_selectedProjectId != null &&
-            !projects.any((p) => _projectId(p) == _selectedProjectId)) {
-          _selectedProjectId = null;
-          _clearStageFilter();
-        } else if (_selectedProjectId != null) {
-          _pruneStageSelection();
+        setState(() {
+          _projects = projects;
+          _tasks = tasks;
+          _loading = false;
+          if (_selectedProjectId != null &&
+              !projects.any((p) => _projectId(p) == _selectedProjectId)) {
+            _selectedProjectId = null;
+            _clearStageFilter();
+          } else if (_selectedProjectId != null) {
+            _pruneStageSelection();
+          }
+        });
+        unawaited(_loadProjectMetaForTasks(tasks));
+      } else {
+        setState(() => _loading = false);
+        if (!silent) {
+          AppToast.error(context, result['error']?.toString() ?? 'Could not load tasks');
         }
-      });
-      await _loadProjectMetaForTasks(tasks);
-    } else {
+      }
+    } catch (e) {
+      if (!mounted) return;
       setState(() => _loading = false);
       if (!silent) {
-        AppToast.error(context, result['error']?.toString() ?? 'Could not load tasks');
+        AppToast.error(context, 'Could not load tasks');
       }
     }
   }
@@ -164,39 +174,38 @@ class _TasksPageState extends State<TasksPage> {
     final ids = tasks.map(taskProjectIdFrom).whereType<int>().where((id) => id > 0).toSet();
     final missing = ids.where((id) {
       final cached = _projectMeta[id];
-      return cached == null || cached.employees.isEmpty || cached.stages.isEmpty;
-    }).toList();
+      return cached == null || cached.employees.isEmpty;
+    }).take(4).toList();
     if (missing.isEmpty) return;
 
-    final results = await Future.wait(
-      missing.map((pid) async {
-        final detail = await widget.apiService.getProjectDetail(pid);
-        final employees = await _loadEmployeesForProject(pid);
-        return {'pid': pid, 'detail': detail, 'employees': employees};
-      }),
-    );
+    for (final pid in missing) {
+      if (!mounted) return;
+      final employees = await _loadEmployeesForProject(pid);
+      if (!mounted) return;
+      final stages = _stagesFromProjectList(pid);
+      _projectMeta[pid] = _ProjectMeta(stages: stages, employees: employees);
+      if (mounted) setState(() {});
+    }
+  }
 
-    if (!mounted) return;
-    var changed = false;
-    for (final bundle in results) {
-      final pid = bundle['pid'] as int;
-      final detail = bundle['detail'] as Map<String, dynamic>;
-      if (detail['success'] == true) {
-        final data = detail['data'] as Map<String, dynamic>? ?? {};
-        _projectMeta[pid] = _ProjectMeta(
-          stages: data['stages'] as List? ?? [],
-          employees: bundle['employees'] as List<dynamic>,
-        );
-        changed = true;
+  List<dynamic> _stagesFromProjectList(int projectId) {
+    for (final p in _projects) {
+      if (_projectId(p) == projectId) {
+        return p['stages'] as List? ?? [];
       }
     }
-    if (changed && mounted) setState(() {});
+    return const [];
   }
 
   _ProjectMeta _metaForTask(dynamic task) {
     final pid = taskProjectIdFrom(task);
     if (pid == null) return const _ProjectMeta(stages: [], employees: []);
-    return _projectMeta[pid] ?? const _ProjectMeta(stages: [], employees: []);
+    final cached = _projectMeta[pid];
+    final stages = cached?.stages.isNotEmpty == true
+        ? cached!.stages
+        : _stagesFromProjectList(pid);
+    final employees = cached?.employees ?? const <dynamic>[];
+    return _ProjectMeta(stages: stages, employees: employees);
   }
 
   List<dynamic> get _scopedTasks {
@@ -463,7 +472,6 @@ class _TasksPageState extends State<TasksPage> {
 
   @override
   Widget build(BuildContext context) {
-    const pageBg = Color(0xFF0B141A);
     final immersive = PlatformCapabilities.immersiveChatChrome;
     const sidePad = 12.0;
     final displayTasks = _filteredTasks;
@@ -484,26 +492,31 @@ class _TasksPageState extends State<TasksPage> {
         : Responsive.bottomNavInset(context);
     final fabBottom = bottomInset + 12;
 
-    return ColoredBox(
-      color: pageBg,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: bottomInset),
-        child: SafeArea(
-          top: immersive,
-          bottom: false,
-          child: Stack(
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: SafeArea(
+        top: immersive,
+        bottom: false,
+        child: Stack(
             children: [
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _buildHeader(immersive, sidePad),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(sidePad, 4, sidePad, 8),
-                    child: _buildSearchBox(),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: sidePad),
-                    child: _statusChips(),
+                    padding: const EdgeInsets.fromLTRB(sidePad, 0, sidePad, 8),
+                    child: AppTheme.glassCard(
+                      borderRadius: 16,
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _buildSearchBox(),
+                          const SizedBox(height: 10),
+                          _statusChips(),
+                        ],
+                      ),
+                    ),
                   ),
                   if (selectedProjectName != null) ...[
                     const SizedBox(height: 8),
@@ -547,7 +560,7 @@ class _TasksPageState extends State<TasksPage> {
                           )
                         : RefreshIndicator(
                             color: AppTheme.primaryBright,
-                            backgroundColor: const Color(0xFF1F2C34),
+                            backgroundColor: const Color(0xFF152238),
                             onRefresh: () => _load(),
                             child: displayTasks.isEmpty
                                 ? ListView(
@@ -561,20 +574,15 @@ class _TasksPageState extends State<TasksPage> {
                                 : LayoutBuilder(
                                     builder: (context, constraints) {
                                       if (useInboxList) {
-                                        return ListView.separated(
+                                        return ListView.builder(
                                           physics: const AlwaysScrollableScrollPhysics(),
                                           padding: EdgeInsets.fromLTRB(
-                                            immersive ? 4 : sidePad,
-                                            0,
-                                            immersive ? 4 : sidePad,
+                                            sidePad,
+                                            4,
+                                            sidePad,
                                             fabBottom + 56,
                                           ),
                                           itemCount: displayTasks.length,
-                                          separatorBuilder: (_, __) => Divider(
-                                            height: 1,
-                                            indent: 52,
-                                            color: Colors.white.withValues(alpha: 0.06),
-                                          ),
                                           itemBuilder: (_, i) => _buildTaskCard(
                                             displayTasks[i],
                                             width: constraints.maxWidth,
@@ -630,59 +638,98 @@ class _TasksPageState extends State<TasksPage> {
             ],
           ),
         ),
-      ),
     );
   }
 
   Widget _buildHeader(bool immersive, double sidePad) {
     final projectActive = _selectedProjectId != null;
+    final subtitle = _loading
+        ? 'Loading your assignments…'
+        : '${_pendingCount} to do · ${_completedCount} done';
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        immersive ? 4 : sidePad,
+        immersive ? sidePad : sidePad,
         immersive ? 4 : 8,
-        immersive ? 4 : 8,
+        immersive ? sidePad : 8,
         4,
       ),
-      child: Row(
-        children: [
-          if (immersive)
-            IconButton(
-              tooltip: 'Home',
-              onPressed: () => AppNavigation.instance.goHome(),
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20, color: AppTheme.textPrimary),
+      child: AppTheme.glassCard(
+        borderRadius: 18,
+        padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (immersive)
+              IconButton(
+                tooltip: 'Home',
+                onPressed: () => AppNavigation.instance.goHome(),
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: AppTheme.textPrimary),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              ),
+            VaultTheme.iconBox(
+              icon: LucideIcons.listChecks,
+              color: AppTheme.accent,
+              size: 42,
+              iconSize: 20,
             ),
-          const Expanded(
-            child: Text(
-              'Tasks',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.3,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'My Tasks',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppTheme.textMuted.withValues(alpha: 0.92),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-          IconButton(
-            tooltip: 'Filter by project',
-            onPressed: _openFiltersSheet,
-            visualDensity: VisualDensity.compact,
-            icon: Icon(
-              Icons.folder_outlined,
-              size: 22,
-              color: projectActive ? AppTheme.primaryBright : AppTheme.textMuted,
-            ),
-          ),
-          if (immersive)
             IconButton(
-              tooltip: 'New task',
-              onPressed: _openCreateTask,
+              tooltip: 'Filter by project',
+              onPressed: _openFiltersSheet,
               visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.add_rounded, color: AppTheme.primaryBright, size: 26),
+              icon: Icon(
+                Icons.folder_outlined,
+                size: 22,
+                color: projectActive ? AppTheme.primaryBright : AppTheme.textMuted,
+              ),
             ),
-          if (immersive) _logoButton(),
-        ],
+            IconButton(
+              tooltip: 'Refresh',
+              onPressed: () => _load(),
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.refresh_rounded, size: 22, color: AppTheme.textMuted),
+            ),
+            if (immersive)
+              IconButton(
+                tooltip: 'New task',
+                onPressed: _openCreateTask,
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.add_rounded, color: AppTheme.primaryBright, size: 26),
+              ),
+            if (immersive) _logoButton(),
+          ],
+        ),
       ),
     );
   }
@@ -831,43 +878,10 @@ class _TasksPageState extends State<TasksPage> {
   }
 
   Widget _buildSearchBox() {
-    return TextField(
+    return VaultTheme.searchField(
       controller: _searchCtrl,
       onChanged: (v) => setState(() => _searchQuery = v),
-      style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-      decoration: InputDecoration(
-        hintText: 'Search\u2026',
-        hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 14),
-        prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9), size: 20),
-        prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-        isDense: true,
-        filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.07),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(22),
-          borderSide: BorderSide.none,
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(22),
-          borderSide: BorderSide.none,
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(22),
-          borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.45)),
-        ),
-        suffixIcon: _searchQuery.trim().isNotEmpty
-            ? IconButton(
-                tooltip: 'Clear',
-                onPressed: () {
-                  _searchCtrl.clear();
-                  setState(() => _searchQuery = '');
-                },
-                icon: Icon(Icons.close_rounded, size: 18, color: AppTheme.textMuted.withValues(alpha: 0.9)),
-              )
-            : null,
-      ),
-      textInputAction: TextInputAction.search,
+      hint: 'Search tasks…',
     );
   }
 
@@ -924,7 +938,7 @@ class _TasksPageState extends State<TasksPage> {
   Future<void> _openFiltersSheet() async {
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF1F2C34),
+      backgroundColor: const Color(0xFF152238),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),

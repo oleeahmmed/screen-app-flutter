@@ -61,7 +61,7 @@ class P2pPageFrame extends StatelessWidget {
     }
 
     return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(pad, 4, pad, 24),
+      padding: EdgeInsets.fromLTRB(pad, 8, pad, 24),
       child: card,
     );
   }
@@ -696,30 +696,231 @@ class P2pJoinField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: AppTheme.loginInsetDecoration(borderRadius: 12, emphasized: true),
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: TextField(
-        controller: controller,
-        style: const TextStyle(
-          color: AppTheme.textPrimary,
-          fontSize: 17,
-          letterSpacing: 2,
-          fontWeight: FontWeight.w700,
-        ),
-        textAlign: TextAlign.center,
-        decoration: InputDecoration(
-          hintText: 'Paste transfer code',
-          hintStyle: TextStyle(
-            color: AppTheme.textMuted.withValues(alpha: 0.55),
-            letterSpacing: 0.5,
-            fontWeight: FontWeight.w500,
-            fontSize: 14,
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        decoration: AppTheme.loginInsetDecoration(borderRadius: 14, emphasized: true),
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: TextField(
+          controller: controller,
+          style: const TextStyle(
+            color: AppTheme.textPrimary,
+            fontSize: 17,
+            letterSpacing: 2,
+            fontWeight: FontWeight.w700,
           ),
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+          textAlign: TextAlign.center,
+          decoration: InputDecoration(
+            hintText: 'Paste transfer code',
+            hintStyle: TextStyle(
+              color: AppTheme.textMuted.withValues(alpha: 0.55),
+              letterSpacing: 0.5,
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+            ),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+          ),
+          onSubmitted: onSubmitted,
         ),
-        onSubmitted: onSubmitted,
+      ),
+    );
+  }
+}
+
+class P2pHeroButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String hint;
+  final List<Color> gradient;
+  final VoidCallback onTap;
+
+  const P2pHeroButton({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.hint,
+    required this.gradient,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Ink(
+          height: 132,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: gradient,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: gradient.first.withValues(alpha: 0.28),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(icon, color: Colors.white, size: 24),
+                ),
+                const Spacer(),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  hint,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.88),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class P2pSendReceiveHero extends StatelessWidget {
+  final VoidCallback onSend;
+  final VoidCallback onReceive;
+
+  const P2pSendReceiveHero({
+    super.key,
+    required this.onSend,
+    required this.onReceive,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: P2pHeroButton(
+            icon: Icons.upload_rounded,
+            label: 'Send',
+            hint: 'Pick a file',
+            gradient: const [Color(0xFF3B82F6), Color(0xFF60A5FA)],
+            onTap: onSend,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: P2pHeroButton(
+            icon: Icons.download_rounded,
+            label: 'Receive',
+            hint: 'Scan QR code',
+            gradient: const [Color(0xFF10B981), Color(0xFF059669)],
+            onTap: onReceive,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class P2pReceivedFileTile extends StatelessWidget {
+  final String name;
+  final String sizeLabel;
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+
+  const P2pReceivedFileTile({
+    super.key,
+    required this.name,
+    required this.sizeLabel,
+    this.onTap,
+    this.onLongPress,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          borderRadius: BorderRadius.circular(14),
+          child: Ink(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+            decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    gradient: LinearGradient(
+                      colors: [
+                        AppTheme.primary.withValues(alpha: 0.85),
+                        AppTheme.accent.withValues(alpha: 0.75),
+                      ],
+                    ),
+                  ),
+                  child: const Icon(Icons.insert_drive_file_rounded, color: Colors.white, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14.5,
+                        ),
+                      ),
+                      if (sizeLabel.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          sizeLabel,
+                          style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.8), fontSize: 12),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded, size: 20, color: AppTheme.textMuted.withValues(alpha: 0.55)),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

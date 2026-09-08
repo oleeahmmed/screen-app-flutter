@@ -10,7 +10,7 @@ class ChatWallpaperBackground extends StatelessWidget {
   const ChatWallpaperBackground({
     super.key,
     required this.kind,
-    this.solidColor = 0xFF0B141A,
+    this.solidColor = 0xFF0C1929,
     this.imagePath,
   });
 
@@ -62,12 +62,11 @@ BorderRadius chatBubbleRadius({required bool isOwn}) {
 class WhatsAppDoodleWallpaperPainter extends CustomPainter {
   const WhatsAppDoodleWallpaperPainter();
 
-  static const _bg = Color(0xFF0B141A);
-  static const _ink = Color(0x14FFFFFF);
+  static const _ink = Color(0x3393C5FD);
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.drawRect(Offset.zero & size, Paint()..color = _bg);
+    // Transparent — parent shell shows dashboard gradient.
 
     const stepX = 96.0;
     const stepY = 96.0;
@@ -96,10 +95,10 @@ class WhatsAppDoodleWallpaperPainter extends CustomPainter {
       }
     }
 
-    // Subtle vignette so bubbles stay readable.
+    // Soft vignette so bubbles stay readable on the dashboard gradient.
     final vignette = Paint()
       ..shader = RadialGradient(
-        colors: [Colors.transparent, Colors.black.withValues(alpha: 0.12)],
+        colors: [Colors.transparent, const Color(0xFF0A1628).withValues(alpha: 0.18)],
         stops: const [0.72, 1.0],
       ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
     canvas.drawRect(Offset.zero & size, vignette);
