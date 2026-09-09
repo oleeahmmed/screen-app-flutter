@@ -76,8 +76,8 @@ class Responsive {
     );
   }
 
-  /// Minimum card width so 2-column My Tasks fits typical desktop windows.
-  static const double taskCardMinWidth = 248;
+  /// Minimum card width so 2-column My Tasks fits typical tablet windows.
+  static const double taskCardMinWidth = 260;
 
   /// Chat list | thread split — lower so typical desktop windows keep both panes.
   static const double chatSplitMinWidth = 640;
@@ -118,10 +118,11 @@ class Responsive {
   }
 
   /// My Task grid columns from available content width (resize-safe).
-  /// Default desktop widths → 2 cols; narrow phone → 1; very wide → 3.
+  /// Narrow phone / thin window → 1 (list); mid → 2; wide → 3.
   static int taskGridColumnsForWidth(double availableWidth) {
     const gap = 10.0;
     if (availableWidth < taskCardMinWidth * 2 + gap) return 1;
+    if (availableWidth < taskCardMinWidth * 3 + gap * 2) return 2;
     final cols = ((availableWidth + gap) / (taskCardMinWidth + gap)).floor();
     return cols.clamp(1, 3);
   }
