@@ -7,26 +7,19 @@ import '../pages/task_detail_page.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
-import '../utils/platform_capabilities.dart';
-import '../utils/responsive.dart';
 import '../utils/task_helpers.dart';
 import 'premium_task_pickers.dart';
-import 'task_action_buttons.dart';
-import 'task_assignee_button.dart';
-import 'task_stage_dropdown.dart' hide taskStageIdFrom;
-import 'task_status_dropdown.dart';
 
-/// My Task card — premium mobile row matching Submit Report language.
+/// My Task card — list (phone) or grid (tablet+) layouts.
 class MyTaskCard extends StatefulWidget {
   final Map<String, dynamic> task;
   final ApiService apiService;
   final VoidCallback onToggleComplete;
   final VoidCallback onUpdated;
-  final bool compactGrid;
   final List<dynamic> stages;
   final List<dynamic> employees;
-  /// WhatsApp-style inbox row (matches chat list); task detail page unchanged.
-  final bool inboxStyle;
+  /// `list` = full-width timeline row; `grid` = compact multi-column card.
+  final MyTaskCardLayout layout;
 
   const MyTaskCard({
     super.key,
@@ -34,15 +27,16 @@ class MyTaskCard extends StatefulWidget {
     required this.apiService,
     required this.onToggleComplete,
     required this.onUpdated,
-    this.compactGrid = false,
     this.stages = const [],
     this.employees = const [],
-    this.inboxStyle = false,
+    this.layout = MyTaskCardLayout.list,
   });
 
   @override
   State<MyTaskCard> createState() => _MyTaskCardState();
 }
+
+enum MyTaskCardLayout { list, grid }
 
 class _MyTaskCardState extends State<MyTaskCard> {
   bool _assignBusy = false;
@@ -183,13 +177,12 @@ class _MyTaskCardState extends State<MyTaskCard> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.inboxStyle) return _buildInboxRow(context);
-    final simple = PlatformCapabilities.immersiveChatChrome || Responsive.isMobile(context);
-    if (simple) return _buildPremiumMobile(context);
-    return _buildDesktop(context);
+    return widget.layout == MyTaskCardLayout.grid
+        ? _buildGrid(context)
+        : _buildList(context);
   }
 
-  Widget _buildInboxRow(BuildContext context) {
+  Widget _buildList(BuildContext context) {
     final isCompleted = taskIsCompleted(task);
     final title = taskDisplayTitle(task);
     final projectName = taskProjectNameFrom(task);
@@ -198,251 +191,129 @@ class _MyTaskCardState extends State<MyTaskCard> {
     final priority = (task['priority'] ?? 'medium').toString();
     final priorityColor = AppTheme.taskPriorityColor(priority);
     final people = taskAssigneeListFrom(task);
-    final firstName = people.isNotEmpty ? (people.first['name']?.toString() ?? '') : '';
-    final hasStages = widget.stages.isNotEmpty;
+    final accent = isCompleted ? AppTheme.success : priorityColor;
+
+    final metaParts = <String>[
+      if (projectName.isNotEmpty) projectName,
+      if (stageName.isNotEmpty) stageName,
+      if (dueLabel.isNotEmpty) dueLabel,
+    ];
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           onTap: () => _openDetail(context),
-          borderRadius: BorderRadius.circular(16),
+          onLongPress: () => _showQuickActions(context),
+          borderRadius: BorderRadius.circular(14),
           child: Ink(
-            decoration: AppTheme.loginInsetDecoration(borderRadius: 16).copyWith(
-              border: Border.all(
-                color: isCompleted
-                    ? AppTheme.success.withValues(alpha: 0.28)
-                    : priorityColor.withValues(alpha: 0.22),
-              ),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              color: Colors.white.withValues(alpha: 0.045),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
             ),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(14),
               child: IntrinsicHeight(
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Container(
-                      width: 4,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: isCompleted
-                              ? [
-                                  AppTheme.success.withValues(alpha: 0.9),
-                                  AppTheme.success.withValues(alpha: 0.35),
-                                ]
-                              : [
-                                  priorityColor,
-                                  priorityColor.withValues(alpha: 0.35),
+                    Container(width: 3.5, color: accent),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(10, 11, 8, 11),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _CompleteCheck(
+                              completed: isCompleted,
+                              onTap: widget.onToggleComplete,
+                              size: 24,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 14.5,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.28,
+                                      letterSpacing: -0.2,
+                                      color: isCompleted
+                                          ? AppTheme.textMuted
+                                          : AppTheme.textPrimary,
+                                      decoration: isCompleted
+                                          ? TextDecoration.lineThrough
+                                          : null,
+                                      decorationColor: AppTheme.textMuted,
+                                    ),
+                                  ),
+                                  if (metaParts.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      metaParts.join(' · '),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w500,
+                                        color: dueLabel.isNotEmpty && !isCompleted
+                                            ? AppTheme.accent.withValues(alpha: 0.95)
+                                            : AppTheme.textMuted.withValues(alpha: 0.9),
+                                      ),
+                                    ),
+                                  ],
+                                  if (people.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    _AssigneeAvatars(people: people),
+                                  ],
                                 ],
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                if (!isCompleted)
+                                  _PriorityDot(priority: priority),
+                                PopupMenuButton<String>(
+                                  tooltip: 'Actions',
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                  icon: Icon(
+                                    Icons.more_vert_rounded,
+                                    size: 18,
+                                    color: AppTheme.textMuted.withValues(alpha: 0.75),
+                                  ),
+                                  color: const Color(0xFF152238),
+                                  onSelected: (v) {
+                                    if (v == 'assign') unawaited(_openAssignee());
+                                    if (v == 'stage') unawaited(_openStage());
+                                    if (v == 'detail') _openDetail(context);
+                                  },
+                                  itemBuilder: (_) => [
+                                    const PopupMenuItem(value: 'detail', child: Text('Open')),
+                                    const PopupMenuItem(value: 'assign', child: Text('Assign')),
+                                    if (widget.stages.isNotEmpty)
+                                      const PopupMenuItem(
+                                        value: 'stage',
+                                        child: Text('Change stage'),
+                                      ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 12, 10, 12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _CompleteCheck(
-                                completed: isCompleted,
-                                onTap: widget.onToggleComplete,
-                                size: 26,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      title,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w700,
-                                        height: 1.3,
-                                        letterSpacing: -0.15,
-                                        color: isCompleted ? AppTheme.textMuted : AppTheme.textPrimary,
-                                        decoration: isCompleted ? TextDecoration.lineThrough : null,
-                                        decorationColor: AppTheme.textMuted,
-                                      ),
-                                    ),
-                                    if (projectName.isNotEmpty) ...[
-                                      const SizedBox(height: 5),
-                                      Row(
-                                        children: [
-                                          Icon(
-                                            Icons.folder_open_rounded,
-                                            size: 13,
-                                            color: AppTheme.primaryBright.withValues(alpha: 0.85),
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Expanded(
-                                            child: Text(
-                                              projectName,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w500,
-                                                color: AppTheme.textMuted.withValues(alpha: 0.92),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  if (dueLabel.isNotEmpty)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: AppTheme.accent.withValues(alpha: 0.12),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(
-                                          color: AppTheme.accent.withValues(alpha: 0.28),
-                                        ),
-                                      ),
-                                      child: Text(
-                                        dueLabel,
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w700,
-                                          color: isCompleted
-                                              ? AppTheme.textMuted
-                                              : AppTheme.accent,
-                                        ),
-                                      ),
-                                    ),
-                                  if (!isCompleted) ...[
-                                    const SizedBox(height: 6),
-                                    _PriorityPill(priority: priority),
-                                  ],
-                                ],
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              _ActionChip(
-                                onTap: _assignBusy ? null : _openAssignee,
-                                busy: _assignBusy,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (people.isEmpty)
-                                      Icon(
-                                        Icons.person_add_alt_1_rounded,
-                                        size: 15,
-                                        color: AppTheme.primaryBright.withValues(alpha: 0.95),
-                                      )
-                                    else
-                                      CircleAvatar(
-                                        radius: 8,
-                                        backgroundColor: avatarColorForName(firstName),
-                                        child: Text(
-                                          firstName.isNotEmpty ? firstName[0].toUpperCase() : '?',
-                                          style: const TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 9,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                      ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      people.isEmpty
-                                          ? 'Assign'
-                                          : (people.length == 1
-                                              ? (firstName.isNotEmpty
-                                                  ? firstName.split(' ').first
-                                                  : 'Assigned')
-                                              : '${people.length} people'),
-                                      style: TextStyle(
-                                        color: AppTheme.textPrimary.withValues(alpha: 0.95),
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (hasStages) ...[
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: _ActionChip(
-                                    onTap: _stageBusy ? null : _openStage,
-                                    busy: _stageBusy,
-                                    accent: true,
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          Icons.layers_rounded,
-                                          size: 14,
-                                          color: AppTheme.accent.withValues(alpha: 0.95),
-                                        ),
-                                        const SizedBox(width: 5),
-                                        Flexible(
-                                          child: Text(
-                                            stageName.isNotEmpty ? stageName : 'Stage',
-                                            style: TextStyle(
-                                              color: AppTheme.textPrimary.withValues(alpha: 0.95),
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                              const Spacer(),
-                              PopupMenuButton<String>(
-                                tooltip: 'Quick actions',
-                                padding: EdgeInsets.zero,
-                                icon: Icon(
-                                  Icons.more_horiz_rounded,
-                                  size: 20,
-                                  color: AppTheme.textMuted.withValues(alpha: 0.85),
-                                ),
-                                color: const Color(0xFF1F2C34),
-                                onSelected: (v) {
-                                  if (v == 'assign') unawaited(_openAssignee());
-                                  if (v == 'stage') unawaited(_openStage());
-                                  if (v == 'detail') _openDetail(context);
-                                },
-                                itemBuilder: (_) => [
-                                  const PopupMenuItem(value: 'detail', child: Text('Open task')),
-                                  const PopupMenuItem(value: 'assign', child: Text('Assign')),
-                                  if (widget.stages.isNotEmpty)
-                                    const PopupMenuItem(value: 'stage', child: Text('Change stage')),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                  ],
                 ),
               ),
             ),
@@ -452,177 +323,138 @@ class _MyTaskCardState extends State<MyTaskCard> {
     );
   }
 
-  Widget _buildPremiumMobile(BuildContext context) {
+  Widget _buildGrid(BuildContext context) {
     final isCompleted = taskIsCompleted(task);
     final title = taskDisplayTitle(task);
     final projectName = taskProjectNameFrom(task);
     final dueLabel = _formatDueDate(task['due_date']);
     final stageName = (task['stage_name']?.toString() ?? '').trim();
+    final priority = (task['priority'] ?? 'medium').toString();
+    final priorityColor = AppTheme.taskPriorityColor(priority);
     final people = taskAssigneeListFrom(task);
-    final hasStages = widget.stages.isNotEmpty;
-    final firstName = people.isNotEmpty ? (people.first['name']?.toString() ?? '') : '';
+    final accent = isCompleted ? AppTheme.success : priorityColor;
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: () => _openDetail(context),
+        onLongPress: () => _showQuickActions(context),
         borderRadius: BorderRadius.circular(16),
         child: Ink(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-          decoration: AppTheme.taskCardDecoration(borderRadius: 16).copyWith(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            color: Colors.white.withValues(alpha: 0.05),
             border: Border.all(
-              color: isCompleted
-                  ? AppTheme.success.withValues(alpha: 0.28)
-                  : Colors.white.withValues(alpha: 0.1),
+              color: accent.withValues(alpha: 0.22),
             ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _CompleteCheck(
-                    completed: isCompleted,
-                    onTap: widget.onToggleComplete,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
+              Container(
+                height: 3,
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                  color: accent,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 10, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          title,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            height: 1.3,
-                            letterSpacing: -0.15,
-                            color: isCompleted ? AppTheme.textMuted : AppTheme.textPrimary,
-                            decoration: isCompleted ? TextDecoration.lineThrough : null,
-                            decorationColor: AppTheme.textMuted,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                        _CompleteCheck(
+                          completed: isCompleted,
+                          onTap: widget.onToggleComplete,
+                          size: 22,
                         ),
-                        if (projectName.isNotEmpty || dueLabel.isNotEmpty) ...[
-                          const SizedBox(height: 5),
-                          Text(
-                            [
-                              if (projectName.isNotEmpty) projectName,
-                              if (dueLabel.isNotEmpty) dueLabel,
-                            ].join(' · '),
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              color: dueLabel.isNotEmpty
-                                  ? AppTheme.accent.withValues(alpha: 0.9)
-                                  : AppTheme.textMuted.withValues(alpha: 0.9),
-                            ),
-                            maxLines: 1,
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            title,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                              height: 1.25,
+                              color: isCompleted
+                                  ? AppTheme.textMuted
+                                  : AppTheme.textPrimary,
+                              decoration: isCompleted
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                              decorationColor: AppTheme.textMuted,
+                            ),
+                          ),
+                        ),
+                        if (!isCompleted) ...[
+                          const SizedBox(width: 4),
+                          _PriorityDot(priority: priority),
+                        ],
+                      ],
+                    ),
+                    if (projectName.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        projectName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                          color: AppTheme.textMuted.withValues(alpha: 0.92),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        if (dueLabel.isNotEmpty)
+                          _MetaBadge(
+                            icon: Icons.event_rounded,
+                            label: dueLabel,
+                            color: AppTheme.accent,
+                          ),
+                        if (stageName.isNotEmpty) ...[
+                          if (dueLabel.isNotEmpty) const SizedBox(width: 6),
+                          Flexible(
+                            child: _MetaBadge(
+                              icon: Icons.layers_rounded,
+                              label: stageName,
+                              color: AppTheme.primaryBright,
+                            ),
+                          ),
+                        ],
+                        const Spacer(),
+                        if (people.isNotEmpty) _AssigneeAvatars(people: people, max: 3),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        _MiniAction(
+                          icon: Icons.person_add_alt_1_rounded,
+                          label: people.isEmpty ? 'Assign' : '${people.length}',
+                          busy: _assignBusy,
+                          onTap: _assignBusy ? null : _openAssignee,
+                        ),
+                        if (widget.stages.isNotEmpty) ...[
+                          const SizedBox(width: 6),
+                          _MiniAction(
+                            icon: Icons.swap_horiz_rounded,
+                            label: 'Stage',
+                            busy: _stageBusy,
+                            onTap: _stageBusy ? null : _openStage,
                           ),
                         ],
                       ],
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  _ActionChip(
-                    onTap: _assignBusy ? null : _openAssignee,
-                    busy: _assignBusy,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (people.isEmpty)
-                          Icon(
-                            Icons.person_add_alt_1_rounded,
-                            size: 16,
-                            color: AppTheme.primaryBright.withValues(alpha: 0.95),
-                          )
-                        else
-                          CircleAvatar(
-                            radius: 9,
-                            backgroundColor: avatarColorForName(firstName),
-                            child: Text(
-                              firstName.isNotEmpty ? firstName[0].toUpperCase() : '?',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                        const SizedBox(width: 6),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 88),
-                          child: Text(
-                            people.isEmpty
-                                ? 'Assign'
-                                : (people.length == 1
-                                    ? (firstName.isNotEmpty ? firstName.split(' ').first : 'Assigned')
-                                    : '${people.length} people'),
-                            style: TextStyle(
-                              color: AppTheme.textPrimary.withValues(alpha: 0.95),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (hasStages) ...[
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: _ActionChip(
-                        onTap: _stageBusy ? null : _openStage,
-                        busy: _stageBusy,
-                        accent: true,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.layers_rounded,
-                              size: 15,
-                              color: AppTheme.accent.withValues(alpha: 0.95),
-                            ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(
-                                stageName.isNotEmpty ? stageName : 'Stage',
-                                style: TextStyle(
-                                  color: AppTheme.textPrimary.withValues(alpha: 0.95),
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const SizedBox(width: 2),
-                            Icon(
-                              Icons.expand_more_rounded,
-                              size: 16,
-                              color: AppTheme.textMuted.withValues(alpha: 0.8),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
                   ],
-                  const Spacer(),
-                  Icon(
-                    Icons.chevron_right_rounded,
-                    size: 20,
-                    color: AppTheme.textMuted.withValues(alpha: 0.45),
-                  ),
-                ],
+                ),
               ),
             ],
           ),
@@ -631,164 +463,77 @@ class _MyTaskCardState extends State<MyTaskCard> {
     );
   }
 
-  Widget _buildDesktop(BuildContext context) {
-    final isCompleted = taskIsCompleted(task);
-    final title = taskDisplayTitle(task);
-    final taskId = taskIdFrom(task);
-    final projectId = taskProjectIdFrom(task) ?? 0;
-    final projectName = taskProjectNameFrom(task);
-    final dueLabel = _formatDueDate(task['due_date']);
-    final hasStages = widget.stages.isNotEmpty;
-    final pad = widget.compactGrid ? 8.0 : 14.0;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(widget.compactGrid ? 12 : 14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+  void _showQuickActions(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF152238),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () => _openDetail(context),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(widget.compactGrid ? 11 : 13)),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(pad, pad, pad, widget.compactGrid ? 4 : 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: widget.compactGrid ? 12.5 : 15,
-                        fontWeight: FontWeight.w600,
-                        height: 1.25,
-                        color: isCompleted ? AppTheme.textMuted : AppTheme.textPrimary,
-                        decoration: isCompleted ? TextDecoration.lineThrough : null,
-                        decorationColor: AppTheme.textMuted,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (projectName.isNotEmpty || dueLabel.isNotEmpty) ...[
-                      SizedBox(height: widget.compactGrid ? 6 : 8),
-                      Wrap(
-                        spacing: widget.compactGrid ? 8 : 10,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          if (projectName.isNotEmpty)
-                            _MetaLine(icon: Icons.folder_open_rounded, label: projectName),
-                          if (dueLabel.isNotEmpty)
-                            _MetaLine(icon: Icons.event_rounded, label: dueLabel, accent: true),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.open_in_new_rounded, color: AppTheme.primaryBright),
+                title: const Text('Open task', style: TextStyle(color: AppTheme.textPrimary)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openDetail(context);
+                },
               ),
-            ),
-          ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-              widget.compactGrid ? 6 : 12,
-              0,
-              widget.compactGrid ? 6 : 12,
-              widget.compactGrid ? 6 : 12,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (taskId != null)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TaskStatusDropdown(
-                          key: ValueKey<String>('ts_${task['id']}_${task['status']}_${task['completed']}'),
-                          taskId: taskId,
-                          task: task,
-                          projectId: projectId,
-                          apiService: widget.apiService,
-                          onUpdated: widget.onUpdated,
-                          compact: true,
-                        ),
-                      ),
-                      if (hasStages) ...[
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TaskStageDropdown(
-                            key: ValueKey<String>('stg_${task['id']}_${task['stage_id']}'),
-                            taskId: taskId,
-                            task: task,
-                            stages: widget.stages,
-                            projectId: projectId,
-                            apiService: widget.apiService,
-                            onUpdated: widget.onUpdated,
-                            compact: true,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TaskAssigneeButton(
-                        task: task,
-                        employees: widget.employees,
-                        apiService: widget.apiService,
-                        onUpdated: widget.onUpdated,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 118,
-                      child: TaskCompleteButton(
-                        isCompleted: isCompleted,
-                        onPressed: widget.onToggleComplete,
-                        compact: true,
-                      ),
-                    ),
-                  ],
+              ListTile(
+                leading: const Icon(Icons.person_outline_rounded, color: AppTheme.primaryBright),
+                title: const Text('Assign', style: TextStyle(color: AppTheme.textPrimary)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  unawaited(_openAssignee());
+                },
+              ),
+              if (widget.stages.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.layers_rounded, color: AppTheme.accent),
+                  title: const Text('Change stage', style: TextStyle(color: AppTheme.textPrimary)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    unawaited(_openStage());
+                  },
                 ),
-              ],
-            ),
+              const SizedBox(height: 8),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
 
-class _PriorityPill extends StatelessWidget {
+class _PriorityDot extends StatelessWidget {
   final String priority;
 
-  const _PriorityPill({required this.priority});
+  const _PriorityDot({required this.priority});
 
   @override
   Widget build(BuildContext context) {
     final color = AppTheme.taskPriorityColor(priority);
-    final label = priority.isEmpty ? 'medium' : priority;
+    final label = priority.isEmpty ? 'M' : priority[0].toUpperCase();
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      width: 22,
+      height: 22,
+      alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
+        color: color.withValues(alpha: 0.16),
         borderRadius: BorderRadius.circular(7),
-        border: Border.all(color: color.withValues(alpha: 0.32)),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
       ),
       child: Text(
-        label.toUpperCase(),
+        label,
         style: TextStyle(
           color: color,
-          fontSize: 9,
+          fontSize: 10,
           fontWeight: FontWeight.w800,
-          letterSpacing: 0.4,
         ),
       ),
     );
@@ -803,7 +548,7 @@ class _CompleteCheck extends StatelessWidget {
   const _CompleteCheck({
     required this.completed,
     required this.onTap,
-    this.size = 30,
+    this.size = 24,
   });
 
   @override
@@ -814,34 +559,22 @@ class _CompleteCheck extends StatelessWidget {
         onTap: onTap,
         customBorder: const CircleBorder(),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
+          duration: const Duration(milliseconds: 200),
           curve: Curves.easeOutCubic,
           width: size,
           height: size,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: completed
-                ? const LinearGradient(colors: [Color(0xFF34D399), Color(0xFF059669)])
-                : null,
-            color: completed ? null : Colors.transparent,
+            color: completed ? AppTheme.success : Colors.transparent,
             border: Border.all(
               color: completed
                   ? Colors.transparent
-                  : Colors.white.withValues(alpha: 0.55),
-              width: 2,
+                  : Colors.white.withValues(alpha: 0.45),
+              width: 1.8,
             ),
-            boxShadow: completed
-                ? [
-                    BoxShadow(
-                      color: const Color(0xFF10B981).withValues(alpha: 0.4),
-                      blurRadius: 10,
-                      offset: const Offset(0, 3),
-                    ),
-                  ]
-                : null,
           ),
           child: completed
-              ? const Icon(Icons.check_rounded, size: 18, color: Colors.white)
+              ? Icon(Icons.check_rounded, size: size * 0.62, color: Colors.white)
               : null,
         ),
       ),
@@ -849,76 +582,165 @@ class _CompleteCheck extends StatelessWidget {
   }
 }
 
-class _ActionChip extends StatelessWidget {
-  final Widget child;
-  final VoidCallback? onTap;
-  final bool busy;
-  final bool accent;
+class _AssigneeAvatars extends StatelessWidget {
+  final List<Map<String, dynamic>> people;
+  final int max;
 
-  const _ActionChip({
-    required this.child,
-    this.onTap,
-    this.busy = false,
-    this.accent = false,
-  });
+  const _AssigneeAvatars({required this.people, this.max = 4});
 
   @override
   Widget build(BuildContext context) {
-    return Opacity(
-      opacity: busy ? 0.55 : 1,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(999),
-          child: Ink(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(999),
-              color: (accent ? AppTheme.accent : AppTheme.primary).withValues(alpha: 0.12),
-              border: Border.all(
-                color: (accent ? AppTheme.accent : AppTheme.primaryBright).withValues(alpha: 0.28),
+    final shown = people.take(max).toList();
+    final extra = people.length - shown.length;
+    return SizedBox(
+      height: 22,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < shown.length; i++)
+            Padding(
+              padding: EdgeInsets.only(left: i == 0 ? 0 : 0, right: i < shown.length - 1 ? 0 : 0),
+              child: Transform.translate(
+                offset: Offset(i * -5.0, 0),
+                child: _avatar(shown[i]['name']?.toString() ?? ''),
               ),
             ),
-            child: child,
-          ),
+          if (extra > 0)
+            Padding(
+              padding: const EdgeInsets.only(left: 2),
+              child: Text(
+                '+$extra',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textMuted.withValues(alpha: 0.9),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _avatar(String name) {
+    return Container(
+      width: 22,
+      height: 22,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: avatarColorForName(name),
+        border: Border.all(color: const Color(0xFF0B141A), width: 1.5),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        name.isNotEmpty ? name[0].toUpperCase() : '?',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 9,
+          fontWeight: FontWeight.w800,
         ),
       ),
     );
   }
 }
 
-class _MetaLine extends StatelessWidget {
+class _MetaBadge extends StatelessWidget {
   final IconData icon;
   final String label;
-  final bool accent;
+  final Color color;
 
-  const _MetaLine({
+  const _MetaBadge({
     required this.icon,
     required this.label,
-    this.accent = false,
+    required this.color,
   });
 
   @override
   Widget build(BuildContext context) {
-    final color = accent
-        ? AppTheme.accent.withValues(alpha: 0.9)
-        : AppTheme.textMuted.withValues(alpha: 0.88);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 4),
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 180),
-          child: Text(
-            label,
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: color),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: color),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MiniAction extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool busy;
+  final VoidCallback? onTap;
+
+  const _MiniAction({
+    required this.icon,
+    required this.label,
+    this.busy = false,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: busy ? 0.5 : 1,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: Ink(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              color: Colors.white.withValues(alpha: 0.05),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (busy)
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 1.5, color: AppTheme.primaryBright),
+                  )
+                else
+                  Icon(icon, size: 13, color: AppTheme.primaryBright),
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-      ],
+      ),
     );
   }
 }
