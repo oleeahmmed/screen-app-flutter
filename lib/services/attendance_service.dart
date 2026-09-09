@@ -100,8 +100,29 @@ class AttendanceService {
     return parsed;
   }
 
+  /// Normalize clock/break payloads from different API shapes.
+  Map<String, dynamic> _normalizeAttendanceData(Map<String, dynamic> raw) {
+    final data = Map<String, dynamic>.from(raw);
+    final brk = data['active_break'] ?? data['break'];
+    if (brk is Map) {
+      data['active_break'] = Map<String, dynamic>.from(brk);
+      data.putIfAbsent('break', () => data['active_break']);
+    }
+
+    final hasActiveBreak = data['active_break'] is Map;
+    if (data['on_break'] == null && hasActiveBreak) {
+      data['on_break'] = true;
+    }
+    // Break responses sometimes omit clocked-in; keep the session alive.
+    if (data['on_break'] == true && data['is_clocked_in'] == null) {
+      data['is_clocked_in'] = true;
+    }
+    return data;
+  }
+
   /// Apply server payload from check-in, check-out, break, or status.
-  void apply(Map<String, dynamic> data) {
+  void apply(Map<String, dynamic> raw) {
+    final data = _normalizeAttendanceData(raw);
     final prevLive = liveWorkSeconds;
     final wasWorking = isClockedIn && !isOnBreak;
     final wasOnBreak = isOnBreak;
@@ -148,6 +169,7 @@ class AttendanceService {
     }
 
     if (isOnBreak) {
+      // Freeze work clock immediately; tick only break time.
       workSeconds = serverNet > 0 ? serverNet : (prevLive > 0 ? prevLive : 0);
       workTickAt = null;
       final brk = data['active_break'] ?? data['break'];
@@ -161,6 +183,30 @@ class AttendanceService {
     workTickAt = null;
     breakTickAt = null;
     breakExpectedBackAt = null;
+  }
+
+  /// Local fallback when break API succeeds but returns a thin payload.
+  void applyLocalBreakStart({DateTime? expectedBack, DateTime? breakStart}) {
+    final frozenWork = liveWorkSeconds;
+    isClockedIn = true;
+    isOnBreak = true;
+    AppSession.setOnBreak(true);
+    workSeconds = frozenWork;
+    workTickAt = null;
+    breakTickAt = breakStart ?? DateTime.now();
+    breakExpectedBackAt = expectedBack;
+  }
+
+  void applyLocalBreakEnd() {
+    final frozenBreak = liveBreakSeconds;
+    isOnBreak = false;
+    AppSession.setOnBreak(false);
+    breakSeconds = frozenBreak;
+    breakTickAt = null;
+    breakExpectedBackAt = null;
+    if (isClockedIn) {
+      workTickAt = DateTime.now();
+    }
   }
 
   Future<void> _closeStaleServerSession(ApiService api) async {
@@ -181,14 +227,15 @@ class AttendanceService {
     await AttendanceSessionGuard.clearWarm();
   }
 
-  Future<bool> loadStatus(ApiService api) async {
+  Future<bool> loadStatus(ApiService api, {bool force = false}) async {
     final warm = await AttendanceSessionGuard.isWarmContinuation();
-    if (warm && isClockedIn) return true;
+    // Warm short-circuit skips server sync — never use after break/clock changes.
+    if (!force && warm && isClockedIn) return true;
 
     final r = await api.getClockStatus();
     if (r['success'] == true && r['data'] is Map) {
       final data = Map<String, dynamic>.from(r['data'] as Map);
-      if (data['is_clocked_in'] == true && !warm) {
+      if (!force && data['is_clocked_in'] == true && !warm) {
         await _closeStaleServerSession(api);
         return true;
       }
@@ -225,16 +272,38 @@ class AttendanceService {
     DateTime? expectedBack,
   }) async {
     final r = await api.startBreak(expectedBack: expectedBack);
-    if (r['success'] == true && r['data'] is Map) {
-      apply(Map<String, dynamic>.from(r['data'] as Map));
+    if (r['success'] == true) {
+      if (r['data'] is Map) {
+        final data = Map<String, dynamic>.from(r['data'] as Map);
+        data['on_break'] = true;
+        data['is_clocked_in'] = data['is_clocked_in'] ?? true;
+        apply(data);
+      } else {
+        applyLocalBreakStart(expectedBack: expectedBack);
+      }
+      // Confirm from attendance status so Home clocks stay aligned.
+      await loadStatus(api, force: true);
+      if (!isOnBreak) {
+        applyLocalBreakStart(expectedBack: expectedBack);
+      }
     }
     return r;
   }
 
   Future<Map<String, dynamic>> endBreak(ApiService api) async {
     final r = await api.endBreak();
-    if (r['success'] == true && r['data'] is Map) {
-      apply(Map<String, dynamic>.from(r['data'] as Map));
+    if (r['success'] == true) {
+      if (r['data'] is Map) {
+        final data = Map<String, dynamic>.from(r['data'] as Map);
+        data['on_break'] = false;
+        apply(data);
+      } else {
+        applyLocalBreakEnd();
+      }
+      await loadStatus(api, force: true);
+      if (isOnBreak) {
+        applyLocalBreakEnd();
+      }
     }
     return r;
   }

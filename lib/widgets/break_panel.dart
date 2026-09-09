@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../app_session.dart';
 import '../services/api_service.dart';
+import '../services/attendance_service.dart';
 import '../services/screenshot_service.dart';
 import '../services/app_filter_prefs.dart';
 import '../theme/app_theme.dart';
@@ -163,7 +164,7 @@ class _BreakPanelState extends State<BreakPanel> {
   Future<void> _startBreakNow() async {
     if (_busy || !widget.isClockedIn) return;
     setState(() => _busy = true);
-    final r = await widget.apiService.startBreak();
+    final r = await AttendanceService.instance.startBreak(widget.apiService);
     if (!mounted) return;
     if (r['success'] == true) {
       final data = r['data'] as Map<String, dynamic>? ?? {};
@@ -173,14 +174,18 @@ class _BreakPanelState extends State<BreakPanel> {
       }
       setState(() {
         _onBreak = true;
-        _activeBreak = data['break'] as Map<String, dynamic>?;
+        _activeBreak =
+            (data['break'] ?? data['active_break']) as Map<String, dynamic>?;
         _busy = false;
       });
-      _notifyBreakChanged(true, breakData: data['break'] as Map<String, dynamic>?);
+      _notifyBreakChanged(
+        true,
+        breakData: (data['break'] ?? data['active_break']) as Map<String, dynamic>?,
+      );
       await _fetchStatus();
       _showBreakToast(
         title: 'Break Started',
-        message: 'Break started',
+        message: 'Break started · work timer paused',
         type: AppToastType.warning,
         icon: Icons.local_cafe_rounded,
       );
@@ -211,7 +216,10 @@ class _BreakPanelState extends State<BreakPanel> {
       return;
     }
     setState(() => _busy = true);
-    final r = await widget.apiService.startBreak(expectedBack: expectedBack);
+    final r = await AttendanceService.instance.startBreak(
+      widget.apiService,
+      expectedBack: expectedBack,
+    );
     if (!mounted) return;
     if (r['success'] == true) {
       final data = r['data'] as Map<String, dynamic>? ?? {};
@@ -221,14 +229,18 @@ class _BreakPanelState extends State<BreakPanel> {
       }
       setState(() {
         _onBreak = true;
-        _activeBreak = data['break'] as Map<String, dynamic>?;
+        _activeBreak =
+            (data['break'] ?? data['active_break']) as Map<String, dynamic>?;
         _busy = false;
       });
-      _notifyBreakChanged(true, breakData: data['break'] as Map<String, dynamic>?);
+      _notifyBreakChanged(
+        true,
+        breakData: (data['break'] ?? data['active_break']) as Map<String, dynamic>?,
+      );
       await _fetchStatus();
       _showBreakToast(
         title: 'Break Started',
-        message: 'Back by ${DateFormat('HH:mm').format(expectedBack)}',
+        message: 'Back by ${DateFormat('HH:mm').format(expectedBack)} · work paused',
         type: AppToastType.warning,
         icon: Icons.local_cafe_rounded,
       );
@@ -302,7 +314,7 @@ class _BreakPanelState extends State<BreakPanel> {
   Future<void> _endBreak() async {
     if (_busy) return;
     setState(() => _busy = true);
-    final r = await widget.apiService.endBreak();
+    final r = await AttendanceService.instance.endBreak(widget.apiService);
     if (!mounted) return;
     if (r['success'] == true) {
       if (_screenshotsPausedForBreak && widget.isClockedIn) {
@@ -318,7 +330,7 @@ class _BreakPanelState extends State<BreakPanel> {
       await _fetchStatus();
       _showBreakToast(
         title: 'Back to Work',
-        message: 'Welcome back!',
+        message: 'Welcome back · work timer resumed',
         type: AppToastType.success,
         icon: Icons.work_rounded,
       );
@@ -712,7 +724,10 @@ Future<void> showBreakStartSheet({
                         onPressed: () async {
                           Navigator.pop(ctx);
                           final expected = DateTime.now().add(Duration(minutes: m));
-                          final r = await apiService.startBreak(expectedBack: expected);
+                          final r = await AttendanceService.instance.startBreak(
+                            apiService,
+                            expectedBack: expected,
+                          );
                           if (!context.mounted) return;
                           if (r['success'] == true) {
                             if (screenshotService?.isRunning == true) {
@@ -723,7 +738,7 @@ Future<void> showBreakStartSheet({
                               context,
                               title: 'Break Started',
                               message:
-                                  'Back by ${DateFormat('HH:mm').format(expected)}',
+                                  'Back by ${DateFormat('HH:mm').format(expected)} · work paused',
                               type: AppToastType.warning,
                               icon: Icons.local_cafe_rounded,
                               placement: AppToastPlacement.top,
@@ -776,7 +791,10 @@ Future<void> showBreakStartSheet({
                         );
                         minutesCtrl.dispose();
                         if (picked == null || !context.mounted) return;
-                        final r = await apiService.startBreak(expectedBack: picked);
+                        final r = await AttendanceService.instance.startBreak(
+                          apiService,
+                          expectedBack: picked,
+                        );
                         if (!context.mounted) return;
                         if (r['success'] == true) {
                           if (screenshotService?.isRunning == true) {
@@ -786,8 +804,18 @@ Future<void> showBreakStartSheet({
                           AppToast.show(
                             context,
                             title: 'Break Started',
-                            message: 'Back by ${DateFormat('HH:mm').format(picked)}',
+                            message:
+                                'Back by ${DateFormat('HH:mm').format(picked)} · work paused',
                             type: AppToastType.warning,
+                            icon: Icons.local_cafe_rounded,
+                            placement: AppToastPlacement.top,
+                          );
+                        } else {
+                          AppToast.show(
+                            context,
+                            title: 'Break failed',
+                            message: r['error']?.toString() ?? 'Could not start break',
+                            type: AppToastType.error,
                             icon: Icons.local_cafe_rounded,
                             placement: AppToastPlacement.top,
                           );

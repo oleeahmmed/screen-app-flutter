@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
 import '../services/app_navigation.dart';
+import '../services/attendance_service.dart';
 import '../services/screenshot_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/break_panel.dart';
@@ -44,11 +45,10 @@ class _BreakToolPageState extends State<BreakToolPage> {
   }
 
   Future<void> _loadClockState({bool silent = false}) async {
-    final r = await widget.apiService.getCurrentAttendance();
+    await AttendanceService.instance.loadStatus(widget.apiService, force: true);
     if (!mounted) return;
-    final data = r['data'] as Map<String, dynamic>? ?? {};
     setState(() {
-      _isClockedIn = r['success'] == true && data['is_clocked_in'] == true;
+      _isClockedIn = AttendanceService.instance.isClockedIn;
       _refresh++;
     });
   }
@@ -73,7 +73,9 @@ class _BreakToolPageState extends State<BreakToolPage> {
               screenshotService: widget.screenshotService,
               isClockedIn: true,
               refreshToken: _refresh,
-              onBreakChanged: (_, {breakStart}) => setState(() => _refresh++),
+              onBreakChanged: (_, {breakStart}) {
+                setState(() => _refresh++);
+              },
             )
           else
             _clockInPrompt(),

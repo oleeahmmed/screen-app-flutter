@@ -80,6 +80,9 @@ function Copy-MediaFoundationDlls {
 
 Write-Host "==> AIMS Windows build (v$Version+$($ver.Build))"
 
+# Flutter's Windows INSTALL step requires this path even when there are no native assets.
+New-Item -ItemType Directory -Force -Path (Join-Path $Root 'build\native_assets\windows') | Out-Null
+
 Write-Host '==> flutter build windows --release'
 flutter build windows --release
 if ($LASTEXITCODE -ne 0) {
