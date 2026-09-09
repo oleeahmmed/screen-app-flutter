@@ -986,8 +986,7 @@ class _DashboardPageState extends State<DashboardPage> {
       screenshotService: widget.screenshotService,
       onStarted: () async {
         if (!mounted) return;
-        await _attendance.loadStatus(widget.apiService);
-        if (!mounted) return;
+        // AttendanceService.startBreak already applied + force-synced status.
         setState(() {});
         await _loadBreakInfo();
         if (AppSession.mayCaptureScreenshots) {
