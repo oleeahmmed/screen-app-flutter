@@ -122,13 +122,46 @@ Project folder-এ:
 ```powershell
 cd "c:\Users\Admin\Desktop\ibit\screenbundle\flutter and django\screen-app-flutter"
 flutter pub get
+```
+
+### Recommended (এই PC-তে — কম RAM, OOM এড়াতে)
+
+```powershell
+flutter build apk --release --target-platform android-arm64
+```
+
+Output: `build\app\outputs\flutter-apk\app-release.apk` (~50–80 MB) — **Pixel 7 / বেশিরভাগ নতুন phone**
+
+পুরনো 32-bit phone-এর জন্য আলাদা:
+
+```powershell
+flutter build apk --release --target-platform android-arm
+```
+
+### Universal APK (সব ABI একসাথে — বেশি RAM লাগে)
+
+```powershell
 flutter build apk --release
 ```
+
+**`Out of memory` / `Dart snapshot generator failed` হলে:**
+
+1. `flutter clean` চালাবেন **না** (আরও RAM খায়)
+2. Gradle daemon বন্ধ করুন: `cd android; .\gradlew --stop; cd ..`
+3. Chrome/Cursor অন্য heavy app বন্ধ করুন
+4. উপরের **`--target-platform android-arm64`** command ব্যবহার করুন
+5. অথবা: `flutter build apk --release --split-per-abi` (৩টো ছোট APK)
 
 Build শেষে APK পাওয়া যাবে:
 
 ```
 build\app\outputs\flutter-apk\app-release.apk
+```
+
+অথবা split build-এ:
+
+```
+build\app\outputs\flutter-apk\app-arm64-v8a-release.apk
 ```
 
 Phone-এ install:
@@ -155,9 +188,21 @@ flutter build apk --release --split-per-abi
 
 Output:
 
-- `build\app\outputs\flutter-apk\app-arm64-v8a-release.apk` ← **Pixel 7 / অধিকাংশ নতুন phone**
-- `app-armeabi-v7a-release.apk` ← পুরনো 32-bit phone
+- `build\app\outputs\flutter-apk\app-arm64-v8a-release.apk` ← **Pixel 7 / অধিকাংশ নতুন phone (2017+)**
+- `app-armeabi-v7a-release.apk` ← পুরনো 32-bit-only phone
 - `app-x86_64-release.apk` ← emulator
+
+**অন্য device-এ “App not installed” হলে:**
+
+1. **সঠিক APK দিন** — নতুন phone-এ `arm64-v8a`, পুরনো budget phone-এ `armeabi-v7a` চেষ্টা করুন।
+2. **আগের AIMS uninstall** করুন — অন্য source (debug / পুরনো APK) থেকে install থাকলে signature মিলবে না।
+3. **WhatsApp দিয়ে পাঠাবেন না** — বড় APK corrupt হয়; USB, Google Drive, বা email ব্যবহার করুন।
+4. Settings → **Install unknown apps** — file manager / Drive-এ allow করুন।
+
+`releases/` folder-এ friendly নামে copy করা APK:
+
+- `aims-v1.0.6-build42-arm64.apk` — বেশিরভাগ officer phone
+- `aims-v1.0.6-build42-armv7.apk` — পুরনো 32-bit phone
 
 ### Production API URL (optional)
 

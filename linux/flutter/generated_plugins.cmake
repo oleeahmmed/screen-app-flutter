@@ -4,11 +4,8 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_linux
-  desktop_drop
   file_selector_linux
   flutter_webrtc
-  local_notifier
-  pasteboard
   record_linux
   url_launcher_linux
 )

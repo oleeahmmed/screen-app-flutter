@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
 import '../services/api_service.dart';
 import '../services/user_data_service.dart';
@@ -167,7 +168,9 @@ class _MonthlyAttendanceReportPageState extends State<MonthlyAttendanceReportPag
     setState(() => _exporting = true);
     try {
       await AttendanceReportExport.exportMonthlyReport(_report!);
-      if (mounted) AppToast.show(context, message: 'Report exported', type: AppToastType.success);
+      if (mounted) {
+        AppToast.show(context, message: 'Report ready — save or share from the menu', type: AppToastType.success);
+      }
     } catch (e) {
       if (mounted) AppToast.show(context, message: 'Export failed: $e', type: AppToastType.error);
     } finally {
@@ -296,10 +299,16 @@ class _MonthlyAttendanceReportPageState extends State<MonthlyAttendanceReportPag
         : _selectedEmployeeName;
 
     return ToolPageScaffold(
-      title: 'Monthly Attendance',
-      subtitle: _isAdmin ? 'Admin — staff summary & export' : 'Shift, timezone & holidays',
+      showHeader: true,
+      header: ReportUi.pageHeader(
+        icon: LucideIcons.calendarRange,
+        title: 'Monthly Attendance',
+        subtitle: _isAdmin ? 'Generate staff summary or export CSV' : 'Pick dates, weekly off & generate',
+        accent: AppTheme.primaryBright,
+      ),
       onLogout: widget.onLogout,
       useBackground: true,
+      showBack: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -351,13 +360,17 @@ class _MonthlyAttendanceReportPageState extends State<MonthlyAttendanceReportPag
       children: [
         Expanded(child: ReportUi.sectionLabel(title, count: count)),
         Material(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          color: Colors.transparent,
           child: InkWell(
             onTap: exporting ? null : onExport,
             borderRadius: BorderRadius.circular(20),
-            child: Padding(
+            child: Ink(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.primary.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppTheme.primaryBright.withValues(alpha: 0.35)),
+              ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -365,15 +378,15 @@ class _MonthlyAttendanceReportPageState extends State<MonthlyAttendanceReportPag
                     const SizedBox(
                       width: 14,
                       height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.bgDeep),
+                      child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primaryBright),
                     )
                   else
-                    const Icon(Icons.download_rounded, size: 14, color: AppTheme.bgDeep),
+                    const Icon(Icons.ios_share_rounded, size: 14, color: AppTheme.primaryBright),
                   const SizedBox(width: 4),
                   const Text(
-                    'Export',
+                    'Export CSV',
                     style: TextStyle(
-                      color: AppTheme.bgDeep,
+                      color: AppTheme.primaryBright,
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
                       decoration: TextDecoration.none,
@@ -401,7 +414,26 @@ class _MonthlyAttendanceReportPageState extends State<MonthlyAttendanceReportPag
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Date range', style: ReportUi.titleStyle),
+          Row(
+            children: [
+              ReportUi.iconBox(icon: LucideIcons.slidersHorizontal, color: AppTheme.primaryBright, size: 36),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Generate report', style: ReportUi.titleStyle),
+                    Text(
+                      '${DateFormat('d MMM').format(_dateFrom)} – ${DateFormat('d MMM yyyy').format(_dateTo)}',
+                      style: ReportUi.mutedStyle.copyWith(fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          const Text('Date range', style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w600, decoration: TextDecoration.none)),
           const SizedBox(height: 10),
           Row(
             children: [

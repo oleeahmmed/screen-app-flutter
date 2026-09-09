@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:desktop_drop/desktop_drop.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
@@ -2021,44 +2020,7 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Widget _wrapChatFileDropTarget(Widget child) {
-    if (!PlatformCapabilities.fileDragDrop) return child;
-    return DropTarget(
-      onDragEntered: (_) => setState(() => _chatDragOver = true),
-      onDragExited: (_) => setState(() => _chatDragOver = false),
-      onDragDone: (details) async {
-        setState(() => _chatDragOver = false);
-        await _handleDroppedFiles(details.files);
-      },
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          child,
-          if (_chatDragOver)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: AppTheme.primary.withValues(alpha: 0.14),
-                    border: Border.all(color: AppTheme.primaryBright.withValues(alpha: 0.55), width: 2),
-                  ),
-                  child: const Center(
-                    child: Text(
-                      'Drop file to send',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+  Widget _wrapChatFileDropTarget(Widget child) => child;
 
   Map<String, dynamic> _quoteFromParent(Map<String, dynamic> parent) {
     return {

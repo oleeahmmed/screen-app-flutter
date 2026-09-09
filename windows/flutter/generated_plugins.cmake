@@ -4,14 +4,12 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   audioplayers_windows
-  desktop_drop
   file_selector_windows
   firebase_core
   flutter_webrtc
-  local_notifier
-  pasteboard
   permission_handler_windows
   record_windows
+  share_plus
   url_launcher_windows
 )
 

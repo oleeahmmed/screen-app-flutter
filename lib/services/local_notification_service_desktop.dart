@@ -1,13 +1,8 @@
-import 'dart:io';
+// Android branch — desktop notifications are not compiled in.
 
-import 'package:flutter/foundation.dart';
-import 'package:local_notifier/local_notifier.dart';
-
-/// Windows / macOS / Linux toast notifications (Action Center / Notification Center).
 class LocalNotificationService {
   LocalNotificationService._();
 
-  static bool _initialized = false;
   static void Function(String? payload)? onTap;
   static void Function(String? actionId, String? payload, String? input)? onAction;
 
@@ -18,35 +13,13 @@ class LocalNotificationService {
   static const messageChannelId = 'aims_messages_v4';
   static const callChannelId = 'aims_calls_v4';
 
-  static bool get supported =>
-      !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+  static bool get supported => false;
 
-  static Future<void> initialize() async {
-    if (_initialized || !supported) return;
-    await localNotifier.setup(
-      appName: 'Aims',
-      shortcutPolicy: ShortcutPolicy.requireCreate,
-    );
-    _initialized = true;
-  }
+  static Future<void> initialize() async {}
 
-  static ({String? actionId, String? payload, String? input})? takePending() {
-    if (pendingPayload == null) return null;
-    final out = (
-      actionId: pendingActionId,
-      payload: pendingPayload,
-      input: pendingInput,
-    );
-    pendingActionId = null;
-    pendingPayload = null;
-    pendingInput = null;
-    return out;
-  }
+  static ({String? actionId, String? payload, String? input})? takePending() => null;
 
-  static Future<bool> requestPermissions() async {
-    await initialize();
-    return true;
-  }
+  static Future<bool> requestPermissions() async => false;
 
   static Future<void> show({
     required int id,
@@ -58,20 +31,7 @@ class LocalNotificationService {
     int? personKey,
     bool groupConversation = false,
     String? conversationTitle,
-  }) async {
-    if (!supported) return;
-    await initialize();
-    final n = LocalNotification(
-      title: title,
-      body: body.isNotEmpty ? body : 'Tap to open Aims',
-    );
-    final p = payload;
-    n.onClick = () {
-      onTap?.call(p);
-      pendingPayload = p;
-    };
-    await n.show();
-  }
+  }) async {}
 
   static Future<void> showChat({
     required String conversationKey,
@@ -81,21 +41,7 @@ class LocalNotificationService {
     bool isGroup = false,
     String? groupTitle,
     int? personKey,
-  }) async {
-    if (!supported) return;
-    await initialize();
-    final title = isGroup ? (groupTitle ?? personName) : personName;
-    final n = LocalNotification(
-      title: title,
-      body: body.isNotEmpty ? body : 'New message',
-    );
-    final p = payload;
-    n.onClick = () {
-      onTap?.call(p);
-      pendingPayload = p;
-    };
-    await n.show();
-  }
+  }) async {}
 
   static Future<void> showIncomingCall({
     required String title,
@@ -103,18 +49,14 @@ class LocalNotificationService {
     String? payload,
     bool playSound = true,
     bool video = false,
-  }) async {
-    await show(id: 8802, title: title, body: body, payload: payload, channelId: callChannelId);
-  }
+  }) async {}
 
   static Future<void> showCall({
     required int id,
     required String title,
     required String body,
     String? payload,
-  }) async {
-    await show(id: id, title: title, body: body, payload: payload, channelId: callChannelId);
-  }
+  }) async {}
 
   static Future<void> cancelIncomingCall() async {}
 

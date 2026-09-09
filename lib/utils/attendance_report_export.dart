@@ -1,8 +1,12 @@
+import 'dart:convert' show utf8;
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 /// CSV export for monthly attendance (single employee or company summary).
 class AttendanceReportExport {
@@ -131,7 +135,13 @@ class AttendanceReportExport {
     return lines;
   }
 
-  static Future<String?> exportMonthlyReport(Map<String, dynamic> report) async {
+  static bool get _isMobile =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  static bool get _isDesktop =>
+      !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+
+  static Future<String> exportMonthlyReport(Map<String, dynamic> report) async {
     final scope = report['scope']?.toString() ?? 'employee';
     final lines = scope == 'company' ? _companyCsv(report) : _employeeCsv(report);
     final period = report['period'] is Map ? Map<String, dynamic>.from(report['period'] as Map) : <String, dynamic>{};
@@ -139,11 +149,47 @@ class AttendanceReportExport {
     final to = period['date_to']?.toString() ?? 'to';
     final suffix = scope == 'company' ? 'company_summary' : 'employee';
     final fileName = 'attendance_${suffix}_${from}_$to.csv'.replaceAll(':', '-');
+    final csv = '${lines.join('\n')}\n';
+    final bytes = utf8.encode(csv);
+
+    if (_isMobile) {
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(bytes);
+      final xFile = XFile(file.path, mimeType: 'text/csv', name: fileName);
+      await Share.shareXFiles(
+        [xFile],
+        subject: 'Monthly attendance report',
+        text: 'Attendance report ($from to $to)',
+      );
+      return file.path;
+    }
+
+    if (_isDesktop) {
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save attendance report',
+        fileName: fileName,
+        type: FileType.custom,
+        allowedExtensions: const ['csv'],
+        bytes: bytes,
+      );
+      if (savedPath == null || savedPath.isEmpty) {
+        throw Exception('Save cancelled');
+      }
+      final openResult = await OpenFilex.open(savedPath);
+      if (openResult.type != ResultType.done) {
+        return savedPath;
+      }
+      return savedPath;
+    }
 
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/$fileName');
-    await file.writeAsString('${lines.join('\n')}\n');
-    await OpenFilex.open(file.path);
+    await file.writeAsBytes(bytes);
+    final openResult = await OpenFilex.open(file.path);
+    if (openResult.type != ResultType.done) {
+      throw Exception(openResult.message.isNotEmpty ? openResult.message : 'Could not open exported file');
+    }
     return file.path;
   }
 }

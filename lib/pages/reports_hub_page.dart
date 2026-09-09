@@ -46,9 +46,15 @@ class ReportsHubPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ToolPageScaffold(
-      title: 'Reports',
-      subtitle: 'Attendance & daily updates',
+      showHeader: true,
+      header: ReportUi.pageHeader(
+        icon: LucideIcons.fileBarChart2,
+        title: 'Reports',
+        subtitle: 'Attendance & daily updates',
+        accent: AppTheme.featureReport,
+      ),
       onLogout: onLogout,
+      showBack: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

@@ -4,7 +4,6 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:pasteboard/pasteboard.dart';
 
 import '../widgets/chat_image_send_preview.dart';
 
@@ -24,11 +23,6 @@ abstract final class ChatClipboard {
         if (bytes != null && bytes.isNotEmpty) return bytes;
       } catch (_) {}
     }
-
-    try {
-      final bytes = await Pasteboard.image;
-      if (bytes != null && bytes.isNotEmpty) return bytes;
-    } catch (_) {}
 
     if (fallback != null && fallback.isNotEmpty) return fallback;
     return null;
@@ -53,12 +47,7 @@ abstract final class ChatClipboard {
       } catch (_) {}
     }
 
-    try {
-      await Pasteboard.writeImage(data);
-      return true;
-    } catch (_) {
-      return false;
-    }
+    return false;
   }
 
   static Future<bool> writeText(String text) async {

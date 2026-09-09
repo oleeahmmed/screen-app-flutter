@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
@@ -116,10 +117,16 @@ class _AttendanceReportPageState extends State<AttendanceReportPage> {
     final breaks = _report?['breaks'] is List ? _report!['breaks'] as List : [];
 
     return ToolPageScaffold(
-      title: 'Work Report',
-      subtitle: 'Daily clock in, break & net work',
+      showHeader: true,
+      header: ReportUi.pageHeader(
+        icon: LucideIcons.clock,
+        title: 'Work Report',
+        subtitle: 'Daily clock in, break & net work',
+        accent: AppTheme.success,
+      ),
       onLogout: widget.onLogout,
       useBackground: true,
+      showBack: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
