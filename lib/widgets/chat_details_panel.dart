@@ -20,6 +20,7 @@ class ChatDetailsPanel extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback? onVideoCall;
   final VoidCallback? onVoiceCall;
+  final VoidCallback? onDirectSend;
   final VoidCallback? onAddMembers;
   final VoidCallback? onOpenMembers;
   final VoidCallback? onSearchInChat;
@@ -53,6 +54,7 @@ class ChatDetailsPanel extends StatelessWidget {
     required this.onClose,
     this.onVideoCall,
     this.onVoiceCall,
+    this.onDirectSend,
     this.onAddMembers,
     this.onOpenMembers,
     this.onSearchInChat,
@@ -422,6 +424,9 @@ class ChatDetailsPanel extends StatelessWidget {
       if (PlatformCapabilities.voiceVideoCall) {
         add(Icons.videocam_rounded, 'Video', onVideoCall);
         add(Icons.call_rounded, 'Audio', onVoiceCall);
+      }
+      if (PlatformCapabilities.peerToPeerFileTransfer) {
+        add(Icons.bolt_rounded, 'File', onDirectSend);
       }
       add(Icons.search_rounded, 'Search', onSearchInChat);
       add(

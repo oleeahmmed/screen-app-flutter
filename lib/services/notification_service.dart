@@ -11,6 +11,7 @@ import 'api_service.dart';
 import 'call_service.dart';
 import 'call_tokens.dart';
 import 'chat_notification_router.dart';
+import 'chat_p2p_tokens.dart';
 import 'notification_sound.dart';
 import 'push_alert_service.dart';
 import 'user_data_service.dart';
@@ -424,6 +425,7 @@ class NotificationService {
 
     final text = (data['message'] ?? '').toString();
     if (CallService.isHiddenCallChatMessage(text)) return;
+    if (ChatP2pTokens.isHiddenMessage(text)) return;
 
     final senderName = (data['sender_full_name'] ??
             data['sender_name'] ??

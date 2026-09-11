@@ -296,9 +296,12 @@ class _ChatPageState extends State<ChatPage> {
     required bool isGroup,
     required int id,
     required String name,
+    Map? user,
   }) async {
     final pinKey = ChatPinPrefs.chatKey(isGroup: isGroup, id: id);
     final pinned = _isChatPinned(pinKey);
+    final canDirectSend =
+        !isGroup && user != null && PlatformCapabilities.peerToPeerFileTransfer;
     final action = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: AppTheme.dialogBg,
@@ -323,6 +326,13 @@ class _ChatPageState extends State<ChatPage> {
                 ),
               ),
             ),
+            if (canDirectSend)
+              ListTile(
+                leading: const Icon(Icons.bolt_rounded, color: Color(0xFF818CF8)),
+                title: const Text('Send file (P2P)'),
+                subtitle: const Text('Direct transfer — stays off the server'),
+                onTap: () => Navigator.pop(ctx, 'p2p'),
+              ),
             ListTile(
               leading: Icon(
                 pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
@@ -342,6 +352,10 @@ class _ChatPageState extends State<ChatPage> {
       ),
     );
     if (!mounted || action == null) return;
+    if (action == 'p2p' && user != null) {
+      unawaited(_startDirectSendWithPeer(user));
+      return;
+    }
     if (action == 'pin') {
       await _toggleChatPin(isGroup: isGroup, id: id, name: name);
     } else if (action == 'info') {
@@ -1479,6 +1493,13 @@ class _ChatPageState extends State<ChatPage> {
         maybePopSheet();
         unawaited(_startCall(CallKind.audio));
       },
+      onDirectSend: group != null ||
+              !PlatformCapabilities.peerToPeerFileTransfer
+          ? null
+          : () {
+              maybePopSheet();
+              unawaited(_pickDirectFile());
+            },
       onAddMembers: group == null
           ? null
           : () {
@@ -2762,8 +2783,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
-  Future<void> _pickDirectFile() async {
-    if (_selectedUser == null) {
+  Future<void> _pickDirectFile({dynamic peer}) async {
+    final user = peer ?? _selectedUser;
+    if (user == null) {
       _showError('Direct send works in 1:1 chat only');
       return;
     }
@@ -2782,9 +2804,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     var size = pf.size;
     if (size <= 0) size = await File(path).length();
 
-    final peerId = _asInt(_selectedUser['id']);
+    final peerId = _asInt(user['id']);
     if (peerId == null) return;
-    final peerName = (_selectedUser['full_name'] ?? _selectedUser['username'] ?? 'Contact').toString();
+    final peerName = (user['full_name'] ?? user['username'] ?? 'Contact').toString();
 
     final err = await ChatP2pFileService.instance.sendFile(
       peerId: peerId,
@@ -2795,6 +2817,18 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
     if (!mounted) return;
     if (err != null) _showError(err);
+  }
+
+  /// Select a 1:1 chat peer, then open the system file picker for P2P send.
+  Future<void> _startDirectSendWithPeer(dynamic user) async {
+    if (user == null) return;
+    if (!PlatformCapabilities.peerToPeerFileTransfer) {
+      _showError('Direct send is not available on this device');
+      return;
+    }
+    await _selectUser(user);
+    if (!mounted) return;
+    await _pickDirectFile(peer: user);
   }
 
   Widget _attachTile({
@@ -3781,6 +3815,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       onPressed: () => unawaited(_startCallWithPeer(user, CallKind.video)),
                       icon: Icon(Icons.videocam_rounded, color: AppTheme.primaryBright, size: 20),
                     ),
+                    if (PlatformCapabilities.peerToPeerFileTransfer)
+                      IconButton(
+                        tooltip: 'Send file (P2P)',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => unawaited(_startDirectSendWithPeer(user)),
+                        icon: const Icon(Icons.bolt_rounded, color: Color(0xFF818CF8), size: 20),
+                      ),
                   ],
                 ),
               ),
@@ -3868,6 +3909,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       onPressed: () => unawaited(_startCallWithPeer(user, CallKind.video)),
                       icon: Icon(Icons.videocam_rounded, color: AppTheme.primaryBright, size: 20),
                     ),
+                    if (PlatformCapabilities.peerToPeerFileTransfer)
+                      IconButton(
+                        tooltip: 'Send file (P2P)',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => unawaited(_startDirectSendWithPeer(user)),
+                        icon: const Icon(Icons.bolt_rounded, color: Color(0xFF818CF8), size: 20),
+                      ),
                   ],
                 ),
               ),
@@ -3951,11 +3999,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
               isGroup: isGroup,
               id: id,
               name: name,
+              user: isGroup ? null : data,
             )),
             onSecondaryTap: () => unawaited(_showInboxChatOptions(
               isGroup: isGroup,
               id: id,
               name: name,
+              user: isGroup ? null : data,
             )),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
@@ -4059,6 +4109,19 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       ],
                     ),
                   ),
+                  if (!isGroup && PlatformCapabilities.peerToPeerFileTransfer)
+                    IconButton(
+                      tooltip: 'Send file (P2P)',
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                      onPressed: () => unawaited(_startDirectSendWithPeer(data)),
+                      icon: Icon(
+                        Icons.bolt_rounded,
+                        size: 18,
+                        color: isSelected ? const Color(0xFF818CF8) : AppTheme.textMuted,
+                      ),
+                    ),
                   IconButton(
                     tooltip: 'Details',
                     visualDensity: VisualDensity.compact,
@@ -4434,6 +4497,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             final showCalls = !isGroup &&
                 PlatformCapabilities.voiceVideoCall &&
                 !veryCompact;
+            final showP2p = !isGroup &&
+                PlatformCapabilities.peerToPeerFileTransfer &&
+                !veryCompact;
             final showLogo = PlatformCapabilities.immersiveChatChrome && !compact;
             final showSettings = isGroup && !veryCompact;
 
@@ -4543,6 +4609,15 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       visualDensity: VisualDensity.compact,
                     ),
                   ],
+                  if (showP2p)
+                    IconButton(
+                      tooltip: 'Send file (P2P)',
+                      onPressed: _selectedUser == null
+                          ? null
+                          : () => unawaited(_pickDirectFile()),
+                      icon: const Icon(Icons.bolt_rounded, color: Color(0xFF818CF8), size: 22),
+                      visualDensity: VisualDensity.compact,
+                    ),
                   if (!veryCompact && chatPinId != null)
                     IconButton(
                       tooltip: chatPinned ? 'Unpin chat' : 'Pin chat',
@@ -4588,7 +4663,11 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       visualDensity: VisualDensity.compact,
                     ),
                   if (showLogo) _dashboardLogoButton(),
-                  if (veryCompact && (isGroup || (!isGroup && PlatformCapabilities.voiceVideoCall)))
+                  if (veryCompact &&
+                      (isGroup ||
+                          (!isGroup &&
+                              (PlatformCapabilities.voiceVideoCall ||
+                                  PlatformCapabilities.peerToPeerFileTransfer))))
                     PopupMenuButton<String>(
                       tooltip: 'More',
                       icon: const Icon(Icons.more_vert_rounded, color: Color(0xFFE9EDEF), size: 22),
@@ -4597,6 +4676,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                         if (v == 'settings') _showGroupSettings(_selectedGroup);
                         if (v == 'video') _startCall(CallKind.video);
                         if (v == 'audio') _startCall(CallKind.audio);
+                        if (v == 'p2p') unawaited(_pickDirectFile());
                         if (v == 'wallpaper') unawaited(_showWallpaperPicker());
                         if (v == 'pin' && chatPinId != null) {
                           unawaited(_toggleChatPin(
@@ -4617,6 +4697,11 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                           const PopupMenuItem(value: 'video', child: Text('Video call')),
                           const PopupMenuItem(value: 'audio', child: Text('Voice call')),
                         ],
+                        if (!isGroup && PlatformCapabilities.peerToPeerFileTransfer)
+                          const PopupMenuItem(
+                            value: 'p2p',
+                            child: Text('Send file (P2P)'),
+                          ),
                         if (isGroup)
                           const PopupMenuItem(value: 'settings', child: Text('Group settings')),
                       ],

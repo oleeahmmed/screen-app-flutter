@@ -13,6 +13,7 @@ import '../utils/local_file_actions.dart';
 import '../utils/ws_connect.dart';
 import 'api_service.dart';
 import 'chat_p2p_tokens.dart';
+import 'local_notification_service.dart';
 import 'notification_service.dart';
 import 'p2p_received_store.dart';
 
@@ -276,6 +277,7 @@ class ChatP2pFileService {
         isSender: false,
         statusText: 'Tap Receive to download directly',
       ));
+      _notifyIncomingFile();
       return;
     }
 
@@ -305,6 +307,19 @@ class ChatP2pFileService {
           : int.tryParse('${invite['file_size']}') ?? 0,
       isSender: false,
       statusText: 'Tap Receive to download directly',
+    ));
+    _notifyIncomingFile();
+  }
+
+  void _notifyIncomingFile() {
+    if (kIsWeb) return;
+    final s = _state;
+    if (s.phase != ChatP2pPhase.incoming) return;
+    unawaited(LocalNotificationService.show(
+      id: 92000 + (s.peerId % 1000),
+      title: 'File from ${s.peerName}',
+      body: 'Accept “${s.fileName}” to receive via P2P',
+      payload: 'p2p_file:${s.sessionId}:${s.peerId}',
     ));
   }
 
