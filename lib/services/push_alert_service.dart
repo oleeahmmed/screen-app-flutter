@@ -7,6 +7,7 @@ import 'call_notification.dart';
 import 'call_service.dart';
 import 'chat_notification.dart';
 import 'chat_notification_router.dart';
+import 'chat_p2p_tokens.dart';
 import 'local_notification_service.dart';
 import 'notification_launch_router.dart';
 import 'notification_sound.dart';
@@ -121,6 +122,7 @@ abstract final class PushAlertService {
 
     final text = (data['message'] ?? '').toString();
     if (CallService.isHiddenCallChatMessage(text)) return;
+    if (ChatP2pTokens.isHiddenMessage(text)) return;
 
     if (ChatNotificationRouter.shouldSuppress(
       senderId: senderId,
