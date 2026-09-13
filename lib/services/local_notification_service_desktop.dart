@@ -23,10 +23,20 @@ class LocalNotificationService {
 
   static Future<void> initialize() async {
     if (_initialized || !supported) return;
-    await localNotifier.setup(
-      appName: 'Aims',
-      shortcutPolicy: ShortcutPolicy.requireCreate,
-    );
+    try {
+      // Inno Setup already creates the Start Menu shortcut; requireCreate can hang
+      // on Windows installer builds when COM/shortcut creation stalls.
+      await localNotifier
+          .setup(
+            appName: 'Aims',
+            shortcutPolicy: Platform.isWindows
+                ? ShortcutPolicy.ignore
+                : ShortcutPolicy.requireCreate,
+          )
+          .timeout(const Duration(seconds: 3));
+    } catch (e) {
+      debugPrint('localNotifier.setup skipped: $e');
+    }
     _initialized = true;
   }
 

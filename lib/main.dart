@@ -68,9 +68,10 @@ void main() async {
     HttpOverrides.global = _AimsHttpOverrides();
   }
   AppSession.screenshotIntervalSeconds = AppConfig.screenshotInterval;
-  await LocalNotificationService.initialize();
-  await PushService.instance.initialize();
-  await PushKeepAlive.configure();
+  // Never block first frame on toast COM / FCM — Windows installer hung here before.
+  unawaited(LocalNotificationService.initialize());
+  unawaited(PushService.instance.initialize());
+  unawaited(PushKeepAlive.configure());
   runApp(const MyApp());
 }
 
@@ -233,10 +234,45 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _initializeApp() async {
-    await _apiService.initToken();
+    try {
+      await _apiService.initToken();
+      final prefs = await SharedPreferences.getInstance();
+      AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
+      await _checkLoginStatus().timeout(const Duration(seconds: 12));
+    } catch (e, st) {
+      debugPrint('Session restore failed/timed out: $e\n$st');
+      await _openFromCachedSessionOrLogin();
+    } finally {
+      // Guarantees the splash spinner can never stick forever.
+      if (mounted && _isLoading) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  /// Offline / timeout fallback — Home if we already had access, else Login.
+  Future<void> _openFromCachedSessionOrLogin() async {
+    if (!mounted || !_isLoading) return;
     final prefs = await SharedPreferences.getInstance();
-    AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
-    await _checkLoginStatus();
+    final username = prefs.getString('username');
+    final accessGranted = prefs.getBool('access_granted') ?? false;
+    final hasSession = ((prefs.getString('auth_token') ?? '').isNotEmpty) ||
+        ((prefs.getString('refresh_token') ?? '').isNotEmpty);
+    if (hasSession &&
+        accessGranted &&
+        username != null &&
+        username.isNotEmpty) {
+      AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
+      setState(() {
+        _isLoggedIn = true;
+        _username = username;
+        _isLoading = false;
+      });
+      _ensurePageBuilt(0);
+      _startNotifications();
+      return;
+    }
+    setState(() => _isLoading = false);
   }
 
   Future<void> _checkLoginStatus() async {
@@ -261,11 +297,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     // WhatsApp-style: refresh token proactively so session stays alive for months.
     if (refresh != null && refresh.isNotEmpty) {
-      await _apiService.refreshAccessToken();
+      await _apiService.refreshAccessToken().timeout(
+        const Duration(seconds: 8),
+        onTimeout: () => false,
+      );
     }
 
     try {
-      final result = await _apiService.accessCheck();
+      final result = await _apiService.accessCheck().timeout(
+        const Duration(seconds: 10),
+      );
       if (result['success'] == true) {
         final data = result['data'];
         if (data['access_granted'] == true) {
