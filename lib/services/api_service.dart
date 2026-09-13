@@ -2,7 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show gzip;
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
@@ -57,8 +57,7 @@ class ApiService {
     final t = body.trimLeft().toLowerCase();
     return t.startsWith('<!doctype') ||
         t.startsWith('<html') ||
-        t.startsWith('<head') ||
-        (t.startsWith('<') && t.contains('<html'));
+        t.startsWith('<head');
   }
 
   /// Prefer UTF-8 bodyBytes over [Response.body] (latin1 default breaks JSON).
@@ -80,19 +79,91 @@ class ApiService {
     }
   }
 
+  String _bytesToText(List<int> raw) {
+    var bytes = Uint8List.fromList(raw);
+    if (!kIsWeb &&
+        bytes.length >= 2 &&
+        bytes[0] == 0x1f &&
+        bytes[1] == 0x8b) {
+      try {
+        bytes = Uint8List.fromList(gzip.decode(bytes));
+      } catch (_) {}
+    }
+    try {
+      return utf8.decode(bytes);
+    } catch (_) {
+      return latin1.decode(bytes, allowInvalid: true);
+    }
+  }
+
   dynamic _safeJsonDecode(String body) {
     var s = body;
     if (s.startsWith('\uFEFF')) s = s.substring(1);
     s = s.trim();
     if (s.isEmpty) return <String, dynamic>{};
-    if (_looksLikeHtml(s)) {
-      throw const FormatException('Server returned HTML instead of JSON');
-    }
     return jsonDecode(s);
   }
 
   dynamic _decodeResponseJson(http.Response response) {
     return _safeJsonDecode(_responseText(response));
+  }
+
+  Future<void> _writeLoginDebug(String line) async {
+    if (kIsWeb) return;
+    try {
+      final dir = Directory(
+        '${Platform.environment['APPDATA'] ?? '.'}${Platform.pathSeparator}igenhr${Platform.pathSeparator}Aims',
+      );
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final f = File('${dir.path}${Platform.pathSeparator}login_debug.log');
+      await f.writeAsString(
+        '${DateTime.now().toIso8601String()} $line\n',
+        mode: FileMode.append,
+        flush: true,
+      );
+    } catch (_) {}
+  }
+
+  /// Low-level login POST that avoids package:http body decoding quirks on Windows.
+  Future<({int status, String text, String contentType})> _loginPostRaw(
+    String url,
+    String body,
+  ) async {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 20);
+    client.idleTimeout = const Duration(seconds: 45);
+    client.userAgent = 'Aims/1.0.6 (Windows)';
+    client.autoUncompress = true;
+    try {
+      final req = await client.postUrl(Uri.parse(url));
+      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+      req.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      req.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
+      req.headers.set('Origin', AppConfig.apiOrigin);
+      req.headers.set('Referer', '${AppConfig.apiOrigin}/');
+      req.add(utf8.encode(body));
+      final res = await req.close().timeout(const Duration(seconds: 30));
+      final raw = await res.fold<List<int>>(<int>[], (a, b) => a..addAll(b));
+      final text = _bytesToText(raw);
+      final ct = res.headers.contentType?.toString() ??
+          res.headers.value('content-type') ??
+          '';
+      return (status: res.statusCode, text: text, contentType: ct);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Map<String, dynamic>? _loginMapFromText(String text) {
+    final trimmed = text.trimLeft();
+    if (trimmed.isEmpty) return null;
+    if (_looksLikeHtml(trimmed)) return null;
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+    try {
+      final decoded = _safeJsonDecode(trimmed);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    return null;
   }
 
   String _responsePreview(String body, {int max = 160}) {
@@ -504,101 +575,77 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> login(String email, String password) async {
-    const timeout = Duration(seconds: 30);
     final body = jsonEncode({'username': email, 'password': password});
-    final headers = {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Accept': 'application/json',
-      // Avoid Windows/http cases where gzip bytes are left undecompressed.
-      'Accept-Encoding': 'identity',
-    };
+    final urls = <String>[AppConfig.authLoginUrl, AppConfig.authTokenUrl];
     Object? lastError;
+    String? lastDetail;
 
     for (var attempt = 1; attempt <= 2; attempt++) {
-      try {
-        print('🔐 Logging in with: $email (attempt $attempt)');
-        var response = await http
-            .post(Uri.parse(AppConfig.authLoginUrl), headers: headers, body: body)
-            .timeout(timeout);
-        if (response.statusCode == 404) {
-          response = await http
-              .post(Uri.parse(AppConfig.authTokenUrl), headers: headers, body: body)
-              .timeout(timeout);
-        }
-
-        print('📊 Login response: ${response.statusCode}');
-
-        if (response.statusCode == 200) {
-          final decoded = _decodeResponseJson(response);
-          if (decoded is! Map) {
-            return {
-              'success': false,
-              'error': 'Invalid login response from server.',
-            };
-          }
-          final data = Map<String, dynamic>.from(decoded);
-          _token = data['access']?.toString();
-
-          if (data['access_granted'] == false) {
-            return {
-              'success': false,
-              'error': data['message_en'] ?? data['message'] ?? 'Access denied',
-            };
-          }
-          if (_token == null || _token!.isEmpty) {
-            return {
-              'success': false,
-              'error': 'Login succeeded but no access token was returned.',
-            };
-          }
-
-          return {'success': true, 'data': data};
-        }
-        if (response.statusCode == 401) {
-          return {'success': false, 'error': 'Invalid username or password'};
-        }
-        String detail = 'Login failed (${response.statusCode}). Please try again.';
+      for (final url in urls) {
         try {
-          final errBody = _decodeResponseJson(response);
-          if (errBody is Map) {
-            final msg = errBody['message_en'] ??
-                errBody['message'] ??
-                errBody['detail'] ??
-                errBody['error'];
-            if (msg != null && '$msg'.trim().isNotEmpty) {
-              detail = '$msg';
+          await _writeLoginDebug('POST $url attempt=$attempt user=$email');
+          final res = await _loginPostRaw(url, body);
+          await _writeLoginDebug(
+            'status=${res.status} ct=${res.contentType} len=${res.text.length} start=${_responsePreview(res.text, max: 80)}',
+          );
+
+          if (res.status == 401) {
+            return {'success': false, 'error': 'Invalid username or password'};
+          }
+
+          final data = _loginMapFromText(res.text);
+          if (res.status == 200 && data != null) {
+            _token = data['access']?.toString();
+            if (data['access_granted'] == false) {
+              return {
+                'success': false,
+                'error': data['message_en'] ?? data['message'] ?? 'Access denied',
+              };
+            }
+            if (_token == null || _token!.isEmpty) {
+              return {
+                'success': false,
+                'error': 'Login succeeded but no access token was returned.',
+              };
+            }
+            await _writeLoginDebug('login OK');
+            return {'success': true, 'data': data};
+          }
+
+          if (_looksLikeHtml(res.text)) {
+            lastDetail =
+                'Network/proxy returned a web page instead of API JSON (${res.status}).';
+          } else if (res.status == 200) {
+            lastDetail = 'Invalid login response from server.';
+          } else {
+            lastDetail = 'Login failed (${res.status}). Please try again.';
+            final errMap = _loginMapFromText(res.text);
+            if (errMap != null) {
+              final msg = errMap['message_en'] ??
+                  errMap['message'] ??
+                  errMap['detail'] ??
+                  errMap['error'];
+              if (msg != null && '$msg'.trim().isNotEmpty) {
+                lastDetail = '$msg';
+              }
             }
           }
-        } catch (_) {}
-        return {'success': false, 'error': detail};
-      } on TimeoutException catch (e) {
-        lastError = e;
-        print('❌ Login timeout (attempt $attempt): $e');
-        if (attempt < 2) {
-          await Future<void>.delayed(const Duration(milliseconds: 600));
-          continue;
+        } on TimeoutException catch (e) {
+          lastError = e;
+          await _writeLoginDebug('timeout $url: $e');
+        } catch (e) {
+          lastError = e;
+          await _writeLoginDebug('error $url: $e');
         }
-      } catch (e) {
-        lastError = e;
-        print('❌ Login error (attempt $attempt): $e');
-        final msg = _networkErrorMessage(e);
-        // Retry once only for transient network failures.
-        if (attempt < 2 &&
-            (e is TimeoutException ||
-                e.toString().contains('TimeoutException') ||
-                e.toString().contains('SocketException') ||
-                e.toString().contains('ClientException') ||
-                e.toString().contains('FormatException'))) {
-          await Future<void>.delayed(const Duration(milliseconds: 600));
-          continue;
-        }
-        return {'success': false, 'error': msg};
+      }
+      if (attempt < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 600));
       }
     }
 
     return {
       'success': false,
-      'error': _networkErrorMessage(lastError ?? 'timeout'),
+      'error': lastDetail ?? _networkErrorMessage(lastError ?? 'timeout'),
     };
   }
 

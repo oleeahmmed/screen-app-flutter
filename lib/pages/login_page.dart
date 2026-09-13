@@ -2,6 +2,7 @@
 
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -127,86 +128,91 @@ class _LoginPageState extends State<LoginPage> {
 
       widget.apiService.setToken(token);
 
-      final prefs = await SharedPreferences.getInstance();
-      if (_rememberMe) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (_rememberMe) {
+          await prefs.setString(
+            'remembered_username',
+            _usernameController.text.trim(),
+          );
+        } else {
+          await prefs.remove('remembered_username');
+        }
+        await prefs.setString('auth_token', token);
+        await prefs.setString('refresh_token', data['refresh']?.toString() ?? '');
+        await prefs.setString('username', username);
+        await prefs.setString('user_id', data['user']?['id']?.toString() ?? '');
+        await UserDataService.saveEmployeeId(data['employee']);
+        await prefs.setString('email', data['user']?['email']?.toString() ?? '');
         await prefs.setString(
-          'remembered_username',
-          _usernameController.text.trim(),
+          'full_name',
+          data['user']?['full_name']?.toString() ?? username,
         );
-      } else {
-        await prefs.remove('remembered_username');
-      }
-      await prefs.setString('auth_token', token);
-      await prefs.setString('refresh_token', data['refresh']?.toString() ?? '');
-      await prefs.setString('username', username);
-      await prefs.setString('user_id', data['user']?['id']?.toString() ?? '');
-      await UserDataService.saveEmployeeId(data['employee']);
-      await prefs.setString('email', data['user']?['email']?.toString() ?? '');
-      await prefs.setString(
-        'full_name',
-        data['user']?['full_name']?.toString() ?? username,
-      );
-      await prefs.setString(
-        'designation',
-        data['employee']?['designation']?.toString() ?? '',
-      );
-      await UserDataService.saveSuperuserFlag(data['user']?['is_superuser'] == true);
-      await UserDataService.saveEmployeeRoleFlags(
-        data['employee'] is Map
-            ? Map<String, dynamic>.from(data['employee'] as Map)
-            : null,
-      );
-      await prefs.setString(
-        'company_id',
-        data['company']?['id']?.toString() ?? '',
-      );
-      await prefs.setString(
-        'company_name',
-        data['company']?['name']?.toString() ?? '',
-      );
-      await prefs.setString(
-        'subscription_plan',
-        data['subscription']?['plan']?.toString() ?? '',
-      );
-      await prefs.setString(
-        'subscription_status',
-        data['subscription']?['status']?.toString() ?? '',
-      );
-      await prefs.setBool('access_granted', data['access_granted'] == true);
-
-      final emp = data['employee'];
-      final consent = emp is Map && emp['screenshot_monitoring_consent'] == true;
-      await prefs.setBool('screenshot_monitoring_consent', consent);
-      AppSession.setConsent(consent);
-      if (emp is Map) {
-        await AppFilterPrefs.applyServerCaptureMode(emp['screenshot_capture_mode']);
-      } else {
-        await AppFilterPrefs.applyServerCaptureMode(null);
-      }
-
-      int intVal(dynamic v, int d) {
-        if (v is int) return v;
-        if (v is String) return int.tryParse(v) ?? d;
-        return d;
-      }
-
-      final sv = intVal(
-        data['data_privacy_notice_version'],
-        AppConfig.dataPrivacyNoticeVersion,
-      );
-      await prefs.setInt('data_privacy_notice_server_version', sv);
-      if (emp is Map) {
-        await prefs.setInt(
-          'data_privacy_notice_accepted_version',
-          intVal(emp['data_privacy_notice_accepted_version'], 0),
+        await prefs.setString(
+          'designation',
+          data['employee']?['designation']?.toString() ?? '',
         );
-      } else {
-        await prefs.setInt('data_privacy_notice_accepted_version', 0);
-      }
+        await UserDataService.saveSuperuserFlag(data['user']?['is_superuser'] == true);
+        await UserDataService.saveEmployeeRoleFlags(
+          data['employee'] is Map
+              ? Map<String, dynamic>.from(data['employee'] as Map)
+              : null,
+        );
+        await prefs.setString(
+          'company_id',
+          data['company']?['id']?.toString() ?? '',
+        );
+        await prefs.setString(
+          'company_name',
+          data['company']?['name']?.toString() ?? '',
+        );
+        await prefs.setString(
+          'subscription_plan',
+          data['subscription']?['plan']?.toString() ?? '',
+        );
+        await prefs.setString(
+          'subscription_status',
+          data['subscription']?['status']?.toString() ?? '',
+        );
+        await prefs.setBool('access_granted', data['access_granted'] == true);
 
-      final p = data['profile_photo']?.toString();
-      if (p != null && p.isNotEmpty) {
-        await prefs.setString('profile_photo_url', p);
+        final emp = data['employee'];
+        final consent = emp is Map && emp['screenshot_monitoring_consent'] == true;
+        await prefs.setBool('screenshot_monitoring_consent', consent);
+        AppSession.setConsent(consent);
+        if (emp is Map) {
+          await AppFilterPrefs.applyServerCaptureMode(emp['screenshot_capture_mode']);
+        } else {
+          await AppFilterPrefs.applyServerCaptureMode(null);
+        }
+
+        int intVal(dynamic v, int d) {
+          if (v is int) return v;
+          if (v is String) return int.tryParse(v) ?? d;
+          return d;
+        }
+
+        final sv = intVal(
+          data['data_privacy_notice_version'],
+          AppConfig.dataPrivacyNoticeVersion,
+        );
+        await prefs.setInt('data_privacy_notice_server_version', sv);
+        if (emp is Map) {
+          await prefs.setInt(
+            'data_privacy_notice_accepted_version',
+            intVal(emp['data_privacy_notice_accepted_version'], 0),
+          );
+        } else {
+          await prefs.setInt('data_privacy_notice_accepted_version', 0);
+        }
+
+        final p = data['profile_photo']?.toString();
+        if (p != null && p.isNotEmpty) {
+          await prefs.setString('profile_photo_url', p);
+        }
+      } catch (e) {
+        // Token is already valid — still enter Home even if prefs sync fails.
+        debugPrint('Login prefs save warning: $e');
       }
 
       // Wait until Home is shown — previously this was fire-and-forget and
