@@ -408,28 +408,39 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Future<void> _handleLoginSuccess(String username, String token) async {
     _apiService.setToken(token);
-    await SharedPreferences.getInstance().then((p) async {
-      await p.setString('auth_token', token);
-      await p.setString('username', username);
-    });
-    final access = await _apiService.accessCheck();
-    if (access['success'] == true && access['data'] is Map) {
-      final prefs = await SharedPreferences.getInstance();
-      await _applyAccessCheckPayload(
-        Map<String, dynamic>.from(access['data'] as Map),
-        prefs,
-        username,
-      );
-    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('auth_token', token);
+    await prefs.setString('username', username);
+    await prefs.setBool('access_granted', true);
+
+    // Enter Home immediately after JWT login — do not block on accessCheck.
     if (!mounted) return;
     setState(() {
       _isLoggedIn = true;
       _username = username;
       _currentIndex = 0;
+      _isLoading = false;
     });
     _clearPageCache();
     _ensurePageBuilt(0);
     _startNotifications();
+
+    try {
+      final access = await _apiService.accessCheck().timeout(
+        const Duration(seconds: 8),
+      );
+      if (access['success'] == true && access['data'] is Map && mounted) {
+        await _applyAccessCheckPayload(
+          Map<String, dynamic>.from(access['data'] as Map),
+          prefs,
+          username,
+        );
+      }
+    } catch (e) {
+      debugPrint('Post-login accessCheck skipped: $e');
+    }
+
+    if (!mounted) return;
     _schedulePrivacyNoticeDialog();
     _scheduleClosingReportDialog();
   }

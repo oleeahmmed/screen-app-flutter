@@ -18,7 +18,7 @@ enum _LoginView { login, forgot }
 
 class LoginPage extends StatefulWidget {
   final ApiService apiService;
-  final Function(String, String) onLoginSuccess;
+  final Future<void> Function(String username, String token) onLoginSuccess;
 
   const LoginPage({
     super.key,
@@ -78,53 +78,104 @@ class _LoginPageState extends State<LoginPage> {
       _errorMessage = null;
     });
 
-    final result = await widget.apiService.login(
-      _usernameController.text.trim(),
-      _passwordController.text,
-    );
+    try {
+      final result = await widget.apiService.login(
+        _usernameController.text.trim(),
+        _passwordController.text,
+      );
 
-    if (!mounted) return;
-    setState(() => _isLoading = false);
+      if (!mounted) return;
 
-    if (result['success']) {
-      final data = result['data'];
-
-      if (data['access_granted'] == false) {
-        setState(() => _errorMessage = data['message'] ?? 'Access denied');
+      if (result['success'] != true) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = result['error']?.toString() ??
+              'Invalid username or password, or account is inactive.';
+        });
         return;
       }
 
-      final username = data['user']?['username'] ?? 'User';
-      final token = data['access'] ?? '';
+      final data = result['data'];
+      if (data is! Map) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Login response was incomplete. Please try again.';
+        });
+        return;
+      }
+
+      if (data['access_granted'] == false) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage =
+              data['message_en']?.toString() ??
+              data['message']?.toString() ??
+              'Access denied';
+        });
+        return;
+      }
+
+      final username = data['user']?['username']?.toString() ?? 'User';
+      final token = data['access']?.toString() ?? '';
+      if (token.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Login succeeded but no access token was returned.';
+        });
+        return;
+      }
 
       widget.apiService.setToken(token);
 
       final prefs = await SharedPreferences.getInstance();
       if (_rememberMe) {
-        await prefs.setString('remembered_username', _usernameController.text.trim());
+        await prefs.setString(
+          'remembered_username',
+          _usernameController.text.trim(),
+        );
       } else {
         await prefs.remove('remembered_username');
       }
       await prefs.setString('auth_token', token);
-      await prefs.setString('refresh_token', data['refresh'] ?? '');
+      await prefs.setString('refresh_token', data['refresh']?.toString() ?? '');
       await prefs.setString('username', username);
       await prefs.setString('user_id', data['user']?['id']?.toString() ?? '');
       await UserDataService.saveEmployeeId(data['employee']);
-      await prefs.setString('email', data['user']?['email'] ?? '');
-      await prefs.setString('full_name', data['user']?['full_name'] ?? username);
-      await prefs.setString('designation', data['employee']?['designation'] ?? '');
+      await prefs.setString('email', data['user']?['email']?.toString() ?? '');
+      await prefs.setString(
+        'full_name',
+        data['user']?['full_name']?.toString() ?? username,
+      );
+      await prefs.setString(
+        'designation',
+        data['employee']?['designation']?.toString() ?? '',
+      );
       await UserDataService.saveSuperuserFlag(data['user']?['is_superuser'] == true);
       await UserDataService.saveEmployeeRoleFlags(
-        data['employee'] is Map ? Map<String, dynamic>.from(data['employee'] as Map) : null,
+        data['employee'] is Map
+            ? Map<String, dynamic>.from(data['employee'] as Map)
+            : null,
       );
-      await prefs.setString('company_id', data['company']?['id']?.toString() ?? '');
-      await prefs.setString('company_name', data['company']?['name'] ?? '');
-      await prefs.setString('subscription_plan', data['subscription']?['plan'] ?? '');
-      await prefs.setString('subscription_status', data['subscription']?['status'] ?? '');
-      await prefs.setBool('access_granted', data['access_granted'] ?? false);
+      await prefs.setString(
+        'company_id',
+        data['company']?['id']?.toString() ?? '',
+      );
+      await prefs.setString(
+        'company_name',
+        data['company']?['name']?.toString() ?? '',
+      );
+      await prefs.setString(
+        'subscription_plan',
+        data['subscription']?['plan']?.toString() ?? '',
+      );
+      await prefs.setString(
+        'subscription_status',
+        data['subscription']?['status']?.toString() ?? '',
+      );
+      await prefs.setBool('access_granted', data['access_granted'] == true);
 
       final emp = data['employee'];
-      final consent = emp?['screenshot_monitoring_consent'] == true;
+      final consent = emp is Map && emp['screenshot_monitoring_consent'] == true;
       await prefs.setBool('screenshot_monitoring_consent', consent);
       AppSession.setConsent(consent);
       if (emp is Map) {
@@ -139,7 +190,10 @@ class _LoginPageState extends State<LoginPage> {
         return d;
       }
 
-      final sv = intVal(data['data_privacy_notice_version'], AppConfig.dataPrivacyNoticeVersion);
+      final sv = intVal(
+        data['data_privacy_notice_version'],
+        AppConfig.dataPrivacyNoticeVersion,
+      );
       await prefs.setInt('data_privacy_notice_server_version', sv);
       if (emp is Map) {
         await prefs.setInt(
@@ -155,9 +209,16 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.setString('profile_photo_url', p);
       }
 
-      widget.onLoginSuccess(username, token);
-    } else {
-      setState(() => _errorMessage = result['error'] ?? 'Invalid username or password, or account is inactive.');
+      // Wait until Home is shown — previously this was fire-and-forget and
+      // accessCheck hangs left the login screen with no error.
+      await widget.onLoginSuccess(username, token);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Could not finish login: $e';
+      });
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 

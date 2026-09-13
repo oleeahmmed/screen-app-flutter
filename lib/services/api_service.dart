@@ -495,19 +495,29 @@ class ApiService {
           if (data['access_granted'] == false) {
             return {
               'success': false,
-              'error': data['message'] ?? 'Access denied',
+              'error': data['message_en'] ?? data['message'] ?? 'Access denied',
             };
           }
 
           return {'success': true, 'data': data};
         }
         if (response.statusCode == 401) {
-          return {'success': false, 'error': 'Invalid email or password'};
+          return {'success': false, 'error': 'Invalid username or password'};
         }
-        return {
-          'success': false,
-          'error': 'Login failed (${response.statusCode}). Please try again.',
-        };
+        String detail = 'Login failed (${response.statusCode}). Please try again.';
+        try {
+          final errBody = jsonDecode(response.body);
+          if (errBody is Map) {
+            final msg = errBody['message_en'] ??
+                errBody['message'] ??
+                errBody['detail'] ??
+                errBody['error'];
+            if (msg != null && '$msg'.trim().isNotEmpty) {
+              detail = '$msg';
+            }
+          }
+        } catch (_) {}
+        return {'success': false, 'error': detail};
       } on TimeoutException catch (e) {
         lastError = e;
         print('❌ Login timeout (attempt $attempt): $e');
