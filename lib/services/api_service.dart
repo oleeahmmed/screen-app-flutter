@@ -2,7 +2,9 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show gzip;
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -59,18 +61,49 @@ class ApiService {
         (t.startsWith('<') && t.contains('<html'));
   }
 
+  /// Prefer UTF-8 bodyBytes over [Response.body] (latin1 default breaks JSON).
+  /// Also gunzip when the server/proxy leaves compressed bytes in the body.
+  String _responseText(http.Response response) {
+    var bytes = response.bodyBytes;
+    if (!kIsWeb &&
+        bytes.length >= 2 &&
+        bytes[0] == 0x1f &&
+        bytes[1] == 0x8b) {
+      try {
+        bytes = Uint8List.fromList(gzip.decode(bytes));
+      } catch (_) {}
+    }
+    try {
+      return utf8.decode(bytes);
+    } catch (_) {
+      return latin1.decode(bytes, allowInvalid: true);
+    }
+  }
+
   dynamic _safeJsonDecode(String body) {
     var s = body;
     if (s.startsWith('\uFEFF')) s = s.substring(1);
     s = s.trim();
     if (s.isEmpty) return <String, dynamic>{};
+    if (_looksLikeHtml(s)) {
+      throw const FormatException('Server returned HTML instead of JSON');
+    }
     return jsonDecode(s);
+  }
+
+  dynamic _decodeResponseJson(http.Response response) {
+    return _safeJsonDecode(_responseText(response));
   }
 
   String _responsePreview(String body, {int max = 160}) {
     final t = body.trim();
     if (t.isEmpty) return '(empty body)';
-    return t.length <= max ? t : '${t.substring(0, max)}…';
+    // Never surface binary / control-heavy payloads in the UI.
+    final cleaned = t.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'), '');
+    if (cleaned.isEmpty || cleaned.length < 8 && t.length > 8) {
+      return '(binary or invalid response)';
+    }
+    return cleaned.length <= max ? cleaned : '${cleaned.substring(0, max)}…';
   }
 
   /// POST check-in / check-out — response body is applied directly in Flutter.
@@ -254,11 +287,16 @@ class ApiService {
     return response;
   }
 
-  /// User-facing network errors (avoid raw TimeoutException text).
+  /// User-facing network errors (avoid raw TimeoutException / binary dumps).
   String _networkErrorMessage(Object e) {
     final s = e.toString();
     if (e is TimeoutException || s.contains('TimeoutException')) {
       return 'Server took too long to respond. Check your internet and try again.';
+    }
+    if (s.contains('FormatException') ||
+        s.contains('Unexpected character') ||
+        s.contains('HTML instead of JSON')) {
+      return 'Server returned an invalid response. Please try again.';
     }
     if (s.contains('SocketException') ||
         s.contains('Failed host lookup') ||
@@ -469,8 +507,10 @@ class ApiService {
     const timeout = Duration(seconds: 30);
     final body = jsonEncode({'username': email, 'password': password});
     final headers = {
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/json; charset=utf-8',
       'Accept': 'application/json',
+      // Avoid Windows/http cases where gzip bytes are left undecompressed.
+      'Accept-Encoding': 'identity',
     };
     Object? lastError;
 
@@ -489,13 +529,26 @@ class ApiService {
         print('📊 Login response: ${response.statusCode}');
 
         if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          _token = data['access'];
+          final decoded = _decodeResponseJson(response);
+          if (decoded is! Map) {
+            return {
+              'success': false,
+              'error': 'Invalid login response from server.',
+            };
+          }
+          final data = Map<String, dynamic>.from(decoded);
+          _token = data['access']?.toString();
 
           if (data['access_granted'] == false) {
             return {
               'success': false,
               'error': data['message_en'] ?? data['message'] ?? 'Access denied',
+            };
+          }
+          if (_token == null || _token!.isEmpty) {
+            return {
+              'success': false,
+              'error': 'Login succeeded but no access token was returned.',
             };
           }
 
@@ -506,7 +559,7 @@ class ApiService {
         }
         String detail = 'Login failed (${response.statusCode}). Please try again.';
         try {
-          final errBody = jsonDecode(response.body);
+          final errBody = _decodeResponseJson(response);
           if (errBody is Map) {
             final msg = errBody['message_en'] ??
                 errBody['message'] ??
@@ -534,7 +587,8 @@ class ApiService {
             (e is TimeoutException ||
                 e.toString().contains('TimeoutException') ||
                 e.toString().contains('SocketException') ||
-                e.toString().contains('ClientException'))) {
+                e.toString().contains('ClientException') ||
+                e.toString().contains('FormatException'))) {
           await Future<void>.delayed(const Duration(milliseconds: 600));
           continue;
         }
@@ -2244,7 +2298,9 @@ class ApiService {
             .timeout(const Duration(seconds: 15));
       }
       if (response.statusCode != 200) return false;
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final decoded = _decodeResponseJson(response);
+      if (decoded is! Map) return false;
+      final data = Map<String, dynamic>.from(decoded);
       final access = data['access']?.toString();
       if (access == null || access.isEmpty) return false;
       _token = access;
@@ -2631,7 +2687,7 @@ class ApiService {
           timeout: const Duration(seconds: 10),
         );
         if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
+          final data = _decodeResponseJson(response);
           if (data is Map && data['employee'] != null) {
             await UserDataService.saveEmployeeId(data['employee']);
           }
@@ -2640,13 +2696,13 @@ class ApiService {
         if (response.statusCode == 403) {
           return {
             'success': false,
-            'data': jsonDecode(response.body),
+            'data': _decodeResponseJson(response),
             'error': 'Access denied',
           };
         }
       } catch (e) {
         if (url == urls.last) {
-          return {'success': false, 'error': '$e'};
+          return {'success': false, 'error': _networkErrorMessage(e)};
         }
       }
     }

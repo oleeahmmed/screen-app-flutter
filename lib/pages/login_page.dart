@@ -214,8 +214,15 @@ class _LoginPageState extends State<LoginPage> {
       await widget.onLoginSuccess(username, token);
     } catch (e) {
       if (!mounted) return;
+      final raw = e.toString();
+      final message = raw.contains('FormatException') ||
+              raw.contains('Unexpected character')
+          ? 'Server returned an invalid response. Please try again.'
+          : (raw.length > 160
+              ? 'Could not finish login. Please try again.'
+              : 'Could not finish login: $raw');
       setState(() {
-        _errorMessage = 'Could not finish login: $e';
+        _errorMessage = message;
       });
     } finally {
       if (mounted) setState(() => _isLoading = false);
