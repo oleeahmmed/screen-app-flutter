@@ -10,6 +10,7 @@ import '../app_session.dart';
 import '../config.dart';
 import '../services/api_service.dart';
 import '../services/app_filter_prefs.dart';
+import '../services/prefs_repair.dart';
 import '../services/user_data_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/responsive.dart';
@@ -50,13 +51,18 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _loadRemembered() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString('remembered_username');
-    if (saved != null && saved.isNotEmpty && mounted) {
-      setState(() {
-        _usernameController.text = saved;
-        _rememberMe = true;
-      });
+    try {
+      await PrefsRepair.repairIfNeeded();
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('remembered_username');
+      if (saved != null && saved.isNotEmpty && mounted) {
+        setState(() {
+          _usernameController.text = saved;
+          _rememberMe = true;
+        });
+      }
+    } catch (e) {
+      debugPrint('Remembered username load skipped: $e');
     }
   }
 
@@ -129,6 +135,7 @@ class _LoginPageState extends State<LoginPage> {
       widget.apiService.setToken(token);
 
       try {
+        await PrefsRepair.repairIfNeeded();
         final prefs = await SharedPreferences.getInstance();
         if (_rememberMe) {
           await prefs.setString(
@@ -221,9 +228,11 @@ class _LoginPageState extends State<LoginPage> {
     } catch (e) {
       if (!mounted) return;
       final raw = e.toString();
+      // Corrupt local prefs often throw FormatException — not a server issue.
       final message = raw.contains('FormatException') ||
-              raw.contains('Unexpected character')
-          ? 'Server returned an invalid response. Please try again.'
+              raw.contains('Unexpected character') ||
+              raw.contains('shared_preferences')
+          ? 'Local app data was damaged and has been reset. Please try login again.'
           : (raw.length > 160
               ? 'Could not finish login. Please try again.'
               : 'Could not finish login: $raw');

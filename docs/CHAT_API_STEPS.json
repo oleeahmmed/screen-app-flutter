@@ -1,0 +1,983 @@
+{
+  "title": "AIMS Chat API — step-by-step JSON handoff",
+  "base_url": "https://aims.igenhr.com",
+  "api_prefix": "/api",
+  "auth_header": "Authorization: Bearer <access_token>",
+  "websocket_chat": "wss://aims.igenhr.com/ws/chat/?token=<access_token>",
+  "websocket_p2p": "wss://aims.igenhr.com/ws/p2p/<session_id>/?token=<access_token>",
+  "allowed_reaction_emojis": ["👍", "❤️", "😂", "😮", "😢", "🙏", "👏", "🔥"],
+  "steps": [
+    {
+      "step": 1,
+      "name": "login_get_jwt",
+      "method": "POST",
+      "path": "/api/auth/login/",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "request": {
+        "username": "oleee",
+        "password": "your_password"
+      },
+      "response_200_example": {
+        "access": "<jwt_access>",
+        "refresh": "<jwt_refresh>",
+        "access_granted": true,
+        "user": {
+          "id": 10,
+          "username": "oleee"
+        }
+      },
+      "use_next": "Put access into Authorization Bearer for all later steps"
+    },
+    {
+      "step": 2,
+      "name": "connect_chat_websocket",
+      "type": "websocket",
+      "url": "wss://aims.igenhr.com/ws/chat/?token=<access_token>",
+      "client_can_send": [
+        {
+          "type": "typing",
+          "receiver_id": 20,
+          "is_typing": true
+        },
+        {
+          "type": "group_typing",
+          "group_id": 1,
+          "is_typing": true
+        },
+        {
+          "type": "mark_read",
+          "sender_id": 20
+        },
+        {
+          "type": "group_mark_read",
+          "group_id": 1
+        },
+        {
+          "type": "call_invite",
+          "call_id": "a1b2c3d4e5f67890",
+          "callee_id": 20,
+          "call_type": "audio"
+        },
+        {
+          "type": "call_accept",
+          "call_id": "a1b2c3d4e5f67890",
+          "caller_id": 10
+        },
+        {
+          "type": "call_reject",
+          "call_id": "a1b2c3d4e5f67890"
+        },
+        {
+          "type": "call_hangup",
+          "call_id": "a1b2c3d4e5f67890"
+        },
+        {
+          "type": "call_dismiss",
+          "call_id": "a1b2c3d4e5f67890"
+        }
+      ],
+      "server_can_send_types": [
+        "chat_message",
+        "group_message",
+        "typing_indicator",
+        "group_typing",
+        "user_status",
+        "messages_read",
+        "message_reaction",
+        "call_invite",
+        "call_accept",
+        "call_reject",
+        "call_hangup",
+        "call_dismiss",
+        "call_error",
+        "notification",
+        "error"
+      ]
+    },
+    {
+      "step": 3,
+      "name": "inbox_users",
+      "method": "GET",
+      "path": "/api/chat/users/",
+      "request": null,
+      "response_200_example": [
+        {
+          "id": 20,
+          "username": "peer",
+          "email": "peer@example.com",
+          "first_name": "Peer",
+          "last_name": "User",
+          "full_name": "Peer User",
+          "designation": "Developer",
+          "employee_id": 55,
+          "is_online": true,
+          "unread_count": 3,
+          "last_message_at": "2026-04-01T12:00:00Z",
+          "last_message": "You: Photo",
+          "last_message_raw": "Photo",
+          "last_seen": "2026-04-01T11:59:00Z",
+          "profile_photo_url": "https://..."
+        }
+      ]
+    },
+    {
+      "step": 4,
+      "name": "inbox_groups",
+      "method": "GET",
+      "path": "/api/chat/groups/",
+      "request": null,
+      "response_200_example": [
+        {
+          "id": 1,
+          "name": "Dev Team",
+          "description": "Engineering",
+          "company": 1,
+          "created_by": 10,
+          "created_by_username": "oleee",
+          "project": null,
+          "project_name": null,
+          "visibility_mode": "shared",
+          "member_count": 8,
+          "unread_count": 2,
+          "last_message": "You: Hi",
+          "last_message_at": "2026-04-01T12:00:00Z",
+          "avatar_url": null,
+          "can_manage": true,
+          "is_active": true,
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-04-01T12:00:00Z"
+        }
+      ]
+    },
+    {
+      "step": 5,
+      "name": "open_dm_conversation",
+      "method": "GET",
+      "path": "/api/chat/conversation/20/",
+      "query": {
+        "limit": 40,
+        "before_id": null,
+        "after_id": null
+      },
+      "request": null,
+      "response_200_example": {
+        "results": [
+          {
+            "id": 123,
+            "sender": 10,
+            "sender_username": "oleee",
+            "sender_name": "Oleee",
+            "sender_avatar": "https://ui-avatars.com/api/?name=Oleee",
+            "receiver": 20,
+            "receiver_username": "peer",
+            "receiver_name": "Peer User",
+            "message": "Hello",
+            "message_type": "text",
+            "image_url": null,
+            "file_url": null,
+            "file_name": null,
+            "voice_url": null,
+            "is_read": true,
+            "is_deleted": false,
+            "is_edited": false,
+            "is_own": true,
+            "timestamp": "2026-04-01T12:00:00Z",
+            "reply_to": null,
+            "reply": null,
+            "reactions": []
+          }
+        ],
+        "has_more": false
+      }
+    },
+    {
+      "step": 6,
+      "name": "send_text_message",
+      "method": "POST",
+      "path": "/api/chat/send/",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer <access_token>"
+      },
+      "request": {
+        "receiver_id": 20,
+        "message": "Hello"
+      },
+      "response_201_example": {
+        "id": 124,
+        "sender": 10,
+        "receiver": 20,
+        "message": "Hello",
+        "message_type": "text",
+        "is_own": true,
+        "reply_to": null,
+        "reply": null,
+        "reactions": [],
+        "timestamp": "2026-04-01T12:01:00Z"
+      }
+    },
+    {
+      "step": 7,
+      "name": "send_reply_message",
+      "method": "POST",
+      "path": "/api/chat/send/",
+      "request": {
+        "receiver_id": 20,
+        "message": "Replying to you",
+        "reply_to_id": 123
+      },
+      "response_201_example": {
+        "id": 125,
+        "message": "Replying to you",
+        "message_type": "text",
+        "reply_to": 123,
+        "reply": {
+          "id": 123,
+          "sender_id": 10,
+          "sender_name": "Oleee",
+          "message_type": "text",
+          "preview": "Hello",
+          "is_deleted": false
+        },
+        "reactions": []
+      }
+    },
+    {
+      "step": 8,
+      "name": "send_image_message",
+      "method": "POST",
+      "path": "/api/chat/send/",
+      "content_type": "multipart/form-data",
+      "request_fields": {
+        "receiver_id": "20",
+        "message": "optional caption",
+        "reply_to_id": "123",
+        "image": "<file jpeg|png|gif|webp max 10MB>"
+      },
+      "response_201_example": {
+        "id": 126,
+        "message": "optional caption",
+        "message_type": "image",
+        "image_url": "https://aims.igenhr.com/media/..."
+      }
+    },
+    {
+      "step": 9,
+      "name": "send_file_message",
+      "method": "POST",
+      "path": "/api/chat/send/",
+      "content_type": "multipart/form-data",
+      "request_fields": {
+        "receiver_id": "20",
+        "message": "",
+        "reply_to_id": null,
+        "file": "<file max 10MB>"
+      },
+      "response_201_example": {
+        "id": 127,
+        "message_type": "file",
+        "file_url": "https://aims.igenhr.com/media/...",
+        "file_name": "report.pdf"
+      }
+    },
+    {
+      "step": 10,
+      "name": "send_voice_message",
+      "method": "POST",
+      "path": "/api/chat/send/",
+      "content_type": "multipart/form-data",
+      "request_fields": {
+        "receiver_id": "20",
+        "message": "",
+        "reply_to_id": null,
+        "voice_message": "<audio file>"
+      },
+      "response_201_example": {
+        "id": 128,
+        "message_type": "voice",
+        "voice_url": "https://aims.igenhr.com/media/..."
+      }
+    },
+    {
+      "step": 11,
+      "name": "edit_dm_message",
+      "method": "PATCH",
+      "path": "/api/chat/messages/124/",
+      "request": {
+        "message": "Updated hello"
+      },
+      "response_200_example": {
+        "id": 124,
+        "message": "Updated hello",
+        "is_edited": true,
+        "edited_at": "2026-04-01T12:05:00Z"
+      }
+    },
+    {
+      "step": 12,
+      "name": "delete_dm_message",
+      "method": "DELETE",
+      "path": "/api/chat/messages/124/",
+      "request": null,
+      "response_200_example": {
+        "message": "Message deleted"
+      }
+    },
+    {
+      "step": 13,
+      "name": "react_to_dm_message",
+      "method": "POST",
+      "path": "/api/chat/messages/123/reactions/",
+      "request": {
+        "emoji": "👍"
+      },
+      "behavior": "Same emoji again removes; different emoji replaces (1 reaction per user)",
+      "response_200_example": {
+        "message_id": 123,
+        "reactions": [
+          {
+            "emoji": "👍",
+            "count": 1,
+            "user_ids": [10],
+            "reacted_by_me": true
+          }
+        ]
+      },
+      "websocket_event_example": {
+        "type": "message_reaction",
+        "chat_type": "direct",
+        "message_id": 123,
+        "reactions": [
+          {
+            "emoji": "👍",
+            "count": 1,
+            "user_ids": [10],
+            "reacted_by_me": false
+          }
+        ]
+      }
+    },
+    {
+      "step": 14,
+      "name": "remove_dm_reaction",
+      "method": "DELETE",
+      "path": "/api/chat/messages/123/reactions/",
+      "request": null,
+      "response_200_example": {
+        "message_id": 123,
+        "reactions": []
+      }
+    },
+    {
+      "step": 15,
+      "name": "mark_peer_messages_read",
+      "method": "POST",
+      "path": "/api/chat/mark-read/",
+      "request": {
+        "sender_id": 20
+      },
+      "response_200_example": {
+        "message": "Messages marked as read"
+      },
+      "websocket_event_example": {
+        "type": "messages_read",
+        "reader_id": 10,
+        "sender_id": 20
+      }
+    },
+    {
+      "step": 16,
+      "name": "mark_all_chats_read",
+      "method": "POST",
+      "path": "/api/chat/mark-all-read/",
+      "request": {},
+      "response_200_example": {
+        "message": "All messages marked as read",
+        "direct_marked": 5,
+        "groups_updated": 2
+      }
+    },
+    {
+      "step": 17,
+      "name": "unread_count_optional",
+      "method": "GET",
+      "path": "/api/chat/unread-count/",
+      "request": null,
+      "response_200_example": {
+        "total_unread": 5,
+        "unread_by_sender": [
+          {
+            "sender": 20,
+            "count": 3
+          }
+        ]
+      }
+    },
+    {
+      "step": 18,
+      "name": "typing_indicator_dm",
+      "type": "websocket_send",
+      "url": "wss://aims.igenhr.com/ws/chat/?token=<access_token>",
+      "request": {
+        "type": "typing",
+        "receiver_id": 20,
+        "is_typing": true
+      },
+      "peer_receives": {
+        "type": "typing_indicator",
+        "sender_id": 10,
+        "receiver_id": 20,
+        "is_typing": true,
+        "sender_username": "oleee"
+      }
+    },
+    {
+      "step": 19,
+      "name": "presence_online_status",
+      "type": "websocket_receive",
+      "example": {
+        "type": "user_status",
+        "user_id": 20,
+        "username": "peer",
+        "is_online": true
+      },
+      "optional_rest": {
+        "method": "GET",
+        "path": "/api/chat/online-users/",
+        "response_200_example": [
+          {
+            "user": 20,
+            "username": "peer",
+            "full_name": "Peer User",
+            "is_online": true,
+            "last_seen": "2026-04-01T12:00:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "step": 20,
+      "name": "create_group",
+      "method": "POST",
+      "path": "/api/chat/groups/",
+      "request": {
+        "name": "Dev Team",
+        "description": "Engineering",
+        "member_ids": [20, 21, 22],
+        "visibility_mode": "shared"
+      },
+      "response_201_example": {
+        "id": 1,
+        "name": "Dev Team",
+        "visibility_mode": "shared",
+        "member_count": 4,
+        "can_manage": true
+      }
+    },
+    {
+      "step": 21,
+      "name": "group_detail",
+      "method": "GET",
+      "path": "/api/chat/groups/1/",
+      "request": null,
+      "response_200_example": {
+        "id": 1,
+        "name": "Dev Team",
+        "description": "Engineering",
+        "visibility_mode": "shared",
+        "member_count": 4,
+        "can_manage": true
+      }
+    },
+    {
+      "step": 22,
+      "name": "update_group",
+      "method": "PATCH",
+      "path": "/api/chat/groups/1/",
+      "request": {
+        "name": "Dev Team Updated",
+        "description": "New desc"
+      },
+      "multipart_avatar_alternative": {
+        "avatar": "<image file>",
+        "remove_avatar": false
+      },
+      "response_200_example": {
+        "id": 1,
+        "name": "Dev Team Updated"
+      }
+    },
+    {
+      "step": 23,
+      "name": "load_group_messages",
+      "method": "GET",
+      "path": "/api/chat/groups/1/messages/",
+      "query": {
+        "limit": 40,
+        "before_id": null,
+        "after_id": null
+      },
+      "response_200_example": {
+        "results": [
+          {
+            "id": 50,
+            "group": 1,
+            "sender": 10,
+            "sender_username": "oleee",
+            "sender_full_name": "Oleee",
+            "message": "Hello group",
+            "message_type": "text",
+            "is_own": true,
+            "reply_to": null,
+            "reply": null,
+            "recipient_ids": [],
+            "reactions": [],
+            "timestamp": "2026-04-01T12:10:00Z"
+          }
+        ],
+        "has_more": false
+      }
+    },
+    {
+      "step": 24,
+      "name": "send_group_text_or_reply",
+      "method": "POST",
+      "path": "/api/chat/groups/1/messages/",
+      "request": {
+        "message": "Hello group",
+        "reply_to_id": 50,
+        "recipient_ids": []
+      },
+      "notes": "For personal visibility groups, put target user ids in recipient_ids",
+      "response_201_example": {
+        "id": 51,
+        "group": 1,
+        "message": "Hello group",
+        "message_type": "text",
+        "reply_to": 50,
+        "reactions": []
+      },
+      "websocket_event_example": {
+        "type": "group_message",
+        "group_id": 1,
+        "id": 51,
+        "message": "Hello group"
+      }
+    },
+    {
+      "step": 25,
+      "name": "send_group_media",
+      "method": "POST",
+      "path": "/api/chat/groups/1/messages/",
+      "content_type": "multipart/form-data",
+      "request_fields": {
+        "message": "",
+        "reply_to_id": null,
+        "recipient_ids": "20,21",
+        "image_or_file_or_voice": "use one of: image | file | voice_message"
+      }
+    },
+    {
+      "step": 26,
+      "name": "react_to_group_message",
+      "method": "POST",
+      "path": "/api/chat/groups/1/messages/50/reactions/",
+      "request": {
+        "emoji": "❤️"
+      },
+      "response_200_example": {
+        "message_id": 50,
+        "group_id": 1,
+        "reactions": [
+          {
+            "emoji": "❤️",
+            "count": 1,
+            "user_ids": [10],
+            "reacted_by_me": true
+          }
+        ]
+      }
+    },
+    {
+      "step": 27,
+      "name": "list_group_members",
+      "method": "GET",
+      "path": "/api/chat/groups/1/members/",
+      "response_200_example": [
+        {
+          "id": 9,
+          "group": 1,
+          "user": 10,
+          "username": "oleee",
+          "full_name": "Oleee",
+          "role": "admin",
+          "last_read_at": "2026-04-01T12:00:00Z",
+          "joined_at": "2026-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "step": 28,
+      "name": "add_group_members",
+      "method": "POST",
+      "path": "/api/chat/groups/1/members/",
+      "request": {
+        "member_ids": [23, 24]
+      },
+      "response_200_example": {
+        "success": true,
+        "message": "Members added",
+        "added_ids": [23, 24],
+        "skipped_ids": []
+      }
+    },
+    {
+      "step": 29,
+      "name": "change_member_role",
+      "method": "PATCH",
+      "path": "/api/chat/groups/1/members/9/",
+      "request": {
+        "role": "member"
+      }
+    },
+    {
+      "step": 30,
+      "name": "remove_or_leave_member",
+      "method": "DELETE",
+      "path": "/api/chat/groups/1/members/9/",
+      "request": null
+    },
+    {
+      "step": 31,
+      "name": "delete_group",
+      "method": "DELETE",
+      "path": "/api/chat/groups/1/",
+      "response_example": {
+        "message": "Group deleted successfully"
+      }
+    },
+    {
+      "step": 32,
+      "name": "call_get_ice_servers",
+      "method": "GET",
+      "path": "/api/p2p/ice-servers/",
+      "response_200_example": {
+        "ice_servers": [
+          {
+            "urls": "stun:stun.l.google.com:19302"
+          }
+        ]
+      }
+    },
+    {
+      "step": 33,
+      "name": "call_create_p2p_session_audio",
+      "method": "POST",
+      "path": "/api/p2p/session/create/",
+      "request": {
+        "file_name": "__CALL__|audio|local-temp-id",
+        "file_size": 0,
+        "receiver_id": 20
+      },
+      "for_video_request": {
+        "file_name": "__CALL__|video|local-temp-id",
+        "file_size": 0,
+        "receiver_id": 20
+      },
+      "response_201_example": {
+        "session_id": "a1b2c3d4e5f67890",
+        "status": "waiting",
+        "file_name": "__CALL__|audio|local-temp-id",
+        "file_size": 0,
+        "sender_name": "Oleee",
+        "receiver_name": "Peer User",
+        "created_at": "2026-04-01T12:20:00Z",
+        "expires_in_seconds": 300,
+        "ws_url": "/ws/p2p/a1b2c3d4e5f67890/"
+      }
+    },
+    {
+      "step": 34,
+      "name": "call_send_invite_chat_token",
+      "method": "POST",
+      "path": "/api/chat/send/",
+      "request_audio": {
+        "receiver_id": 20,
+        "message": "__AIMS_CALL__|a1b2c3d4e5f67890|audio|10"
+      },
+      "request_video": {
+        "receiver_id": 20,
+        "message": "__AIMS_CALL__|a1b2c3d4e5f67890|video|10"
+      },
+      "also_send_on_websocket": {
+        "type": "call_invite",
+        "call_id": "a1b2c3d4e5f67890",
+        "callee_id": 20,
+        "call_type": "audio"
+      },
+      "notes": "Hide __AIMS_CALL__* messages in chat UI"
+    },
+    {
+      "step": 35,
+      "name": "call_callee_join_session",
+      "method": "POST",
+      "path": "/api/p2p/session/join/",
+      "request": {
+        "session_id": "a1b2c3d4e5f67890"
+      },
+      "response_200_example": {
+        "session_id": "a1b2c3d4e5f67890",
+        "status": "connected"
+      }
+    },
+    {
+      "step": 36,
+      "name": "call_accept_token",
+      "method": "POST",
+      "path": "/api/chat/send/",
+      "request": {
+        "receiver_id": 10,
+        "message": "__AIMS_CALL_ACCEPT__|a1b2c3d4e5f67890"
+      },
+      "also_send_on_websocket": {
+        "type": "call_accept",
+        "call_id": "a1b2c3d4e5f67890",
+        "caller_id": 10
+      }
+    },
+    {
+      "step": 37,
+      "name": "call_reject_token",
+      "method": "POST",
+      "path": "/api/chat/send/",
+      "request": {
+        "receiver_id": 10,
+        "message": "__AIMS_CALL_REJECT__|a1b2c3d4e5f67890"
+      },
+      "also_send_on_websocket": {
+        "type": "call_reject",
+        "call_id": "a1b2c3d4e5f67890"
+      }
+    },
+    {
+      "step": 38,
+      "name": "call_hangup_token",
+      "method": "POST",
+      "path": "/api/chat/send/",
+      "request": {
+        "receiver_id": 20,
+        "message": "__AIMS_CALL_END__|a1b2c3d4e5f67890"
+      },
+      "also_send_on_websocket": {
+        "type": "call_hangup",
+        "call_id": "a1b2c3d4e5f67890"
+      }
+    },
+    {
+      "step": 39,
+      "name": "call_webrtc_p2p_websocket",
+      "type": "websocket",
+      "url": "wss://aims.igenhr.com/ws/p2p/a1b2c3d4e5f67890/?token=<access_token>",
+      "client_send_examples": [
+        {
+          "type": "hello",
+          "platform": "web"
+        },
+        {
+          "type": "offer",
+          "sdp": "<sdp>"
+        },
+        {
+          "type": "answer",
+          "sdp": "<sdp>"
+        },
+        {
+          "type": "ice_candidate",
+          "candidate": {
+            "candidate": "...",
+            "sdpMid": "0",
+            "sdpMLineIndex": 0
+          }
+        }
+      ],
+      "server_event_types": [
+        "connected",
+        "peer_joined",
+        "peer_left",
+        "role",
+        "offer",
+        "answer",
+        "ice_candidate",
+        "room_full"
+      ]
+    },
+    {
+      "step": 40,
+      "name": "p2p_file_transfer_create",
+      "method": "POST",
+      "path": "/api/p2p/session/create/",
+      "request": {
+        "file_name": "report.pdf",
+        "file_size": 1234567,
+        "receiver_id": 20
+      },
+      "response_201_example": {
+        "session_id": "b2c3d4e5f6789012",
+        "ws_url": "/ws/p2p/b2c3d4e5f6789012/",
+        "file_name": "report.pdf",
+        "file_size": 1234567
+      }
+    },
+    {
+      "step": 41,
+      "name": "p2p_file_transfer_join",
+      "method": "POST",
+      "path": "/api/p2p/session/join/",
+      "request": {
+        "session_id": "b2c3d4e5f6789012"
+      }
+    },
+    {
+      "step": 42,
+      "name": "p2p_session_detail",
+      "method": "GET",
+      "path": "/api/p2p/session/b2c3d4e5f6789012/",
+      "response_200_example": {
+        "session_id": "b2c3d4e5f6789012",
+        "status": "connected",
+        "is_active": true
+      }
+    },
+    {
+      "step": 43,
+      "name": "p2p_session_cancel",
+      "method": "DELETE",
+      "path": "/api/p2p/session/b2c3d4e5f6789012/",
+      "response_200_example": {
+        "status": "cancelled"
+      }
+    },
+    {
+      "step": 44,
+      "name": "optional_http_call_signal_fallback",
+      "method": "POST",
+      "path": "/api/chat/call-signal/",
+      "alias_path": "/api/p2p/call-signal/",
+      "request_examples": [
+        {
+          "type": "call_invite",
+          "callee_id": 20,
+          "call_id": "a1b2c3d4e5f67890",
+          "call_type": "audio"
+        },
+        {
+          "type": "call_accept",
+          "caller_id": 10,
+          "call_id": "a1b2c3d4e5f67890"
+        },
+        {
+          "type": "call_offer",
+          "peer_id": 20,
+          "call_id": "a1b2c3d4e5f67890",
+          "sdp": "<sdp>"
+        }
+      ],
+      "poll_pending": {
+        "method": "GET",
+        "path": "/api/chat/call-signals/pending/",
+        "alias_path": "/api/p2p/call-signals/pending/",
+        "response_200_example": {
+          "signals": []
+        }
+      },
+      "notes": "Flutter prefers websocket + chat tokens; keep this as fallback"
+    },
+    {
+      "step": 45,
+      "name": "notifications_unread",
+      "method": "GET",
+      "path": "/api/notifications/unread-count/",
+      "response_200_example": {
+        "unread_count": 4
+      }
+    },
+    {
+      "step": 46,
+      "name": "push_register_optional",
+      "method": "POST",
+      "path": "/api/devices/push/register/",
+      "request": {
+        "token": "<fcm_token>",
+        "platform": "android"
+      },
+      "response_200_example": {
+        "status": "ok"
+      }
+    }
+  ],
+  "message_object_full_schema": {
+    "id": 123,
+    "sender": 10,
+    "sender_username": "oleee",
+    "sender_name": "Oleee",
+    "sender_avatar": "https://...",
+    "receiver": 20,
+    "receiver_username": "peer",
+    "receiver_name": "Peer",
+    "message": "Hello",
+    "message_type": "text",
+    "image": null,
+    "image_url": null,
+    "file_attachment": null,
+    "file_url": null,
+    "file_name": null,
+    "voice_message": null,
+    "voice_url": null,
+    "is_e2ee": false,
+    "ciphertext": null,
+    "nonce": null,
+    "e2ee_version": null,
+    "is_read": false,
+    "is_deleted": false,
+    "is_edited": false,
+    "edited_at": null,
+    "is_own": true,
+    "timestamp": "2026-04-01T12:00:00Z",
+    "reply_to": 100,
+    "reply": {
+      "id": 100,
+      "sender_id": 20,
+      "sender_name": "Peer",
+      "message_type": "text",
+      "preview": "Earlier",
+      "is_deleted": false
+    },
+    "reactions": [
+      {
+        "emoji": "👍",
+        "count": 2,
+        "user_ids": [10, 20],
+        "reacted_by_me": true
+      }
+    ],
+    "created_at": "...",
+    "updated_at": "..."
+  },
+  "call_control_message_formats": {
+    "invite": "__AIMS_CALL__|<session_id>|<audio|video>|<caller_user_id>",
+    "accept": "__AIMS_CALL_ACCEPT__|<session_id>",
+    "reject": "__AIMS_CALL_REJECT__|<session_id>",
+    "end": "__AIMS_CALL_END__|<session_id>"
+  },
+  "errors_common": {
+    "400": { "error": "validation or bad request" },
+    "401": { "detail": "Authentication credentials were not provided." },
+    "403": {
+      "error_code": "SUBSCRIPTION_EXPIRED",
+      "message": "..."
+    },
+    "404": { "error": "not found" }
+  }
+}

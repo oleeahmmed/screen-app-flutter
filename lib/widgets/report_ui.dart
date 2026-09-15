@@ -35,6 +35,71 @@ class ReportUi {
     );
   }
 
+  /// Header row for report / tool pages (back button + icon + title).
+  static Widget pageHeader({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    Color accent = AppTheme.primaryBright,
+    bool showBack = true,
+    VoidCallback? onBack,
+  }) {
+    return Builder(
+      builder: (context) {
+        final canPop = showBack && Navigator.canPop(context);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (canPop)
+              IconButton(
+                onPressed: onBack ?? () => Navigator.maybePop(context),
+                tooltip: 'Back',
+                icon: const Icon(Icons.arrow_back_rounded, color: AppTheme.textMuted, size: 22),
+                visualDensity: VisualDensity.compact,
+              ),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: card(radius: 14).copyWith(
+                  border: Border.all(color: accent.withValues(alpha: 0.16)),
+                ),
+                child: Row(
+                  children: [
+                    iconBox(icon: icon, color: accent, size: 42),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle,
+                            style: mutedStyle.copyWith(fontSize: 11.5),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   static Widget iconBox({
     required IconData icon,
     Color color = AppTheme.primaryBright,

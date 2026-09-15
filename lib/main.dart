@@ -27,6 +27,7 @@ import 'services/push_service.dart';
 import 'pages/projects_page.dart';
 import 'pages/task_detail_page.dart';
 import 'services/local_notification_service.dart';
+import 'services/prefs_repair.dart';
 import 'services/push_keepalive_service.dart';
 import 'services/notification_launch_router.dart';
 import 'pages/login_page.dart';
@@ -68,6 +69,8 @@ void main() async {
     HttpOverrides.global = _AimsHttpOverrides();
   }
   AppSession.screenshotIntervalSeconds = AppConfig.screenshotInterval;
+  // Corrupt Windows prefs (zeroed JSON) break login after API success — repair first.
+  await PrefsRepair.repairIfNeeded();
   // Never block first frame on toast COM / FCM — Windows installer hung here before.
   unawaited(LocalNotificationService.initialize());
   unawaited(PushService.instance.initialize());
@@ -235,6 +238,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Future<void> _initializeApp() async {
     try {
+      await PrefsRepair.repairIfNeeded();
       await _apiService.initToken();
       final prefs = await SharedPreferences.getInstance();
       AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
@@ -253,6 +257,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   /// Offline / timeout fallback — Home if we already had access, else Login.
   Future<void> _openFromCachedSessionOrLogin() async {
     if (!mounted || !_isLoading) return;
+    await PrefsRepair.repairIfNeeded();
     final prefs = await SharedPreferences.getInstance();
     final username = prefs.getString('username');
     final accessGranted = prefs.getBool('access_granted') ?? false;
@@ -408,12 +413,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Future<void> _handleLoginSuccess(String username, String token) async {
     _apiService.setToken(token);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_token', token);
-    await prefs.setString('username', username);
-    await prefs.setBool('access_granted', true);
 
-    // Enter Home immediately after JWT login — do not block on accessCheck.
+    // Enter Home immediately — prefs/accessCheck must not block or undo login.
     if (!mounted) return;
     setState(() {
       _isLoggedIn = true;
@@ -426,10 +427,21 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _startNotifications();
 
     try {
+      await PrefsRepair.repairIfNeeded();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('auth_token', token);
+      await prefs.setString('username', username);
+      await prefs.setBool('access_granted', true);
+    } catch (e) {
+      debugPrint('Post-login prefs write skipped: $e');
+    }
+
+    try {
       final access = await _apiService.accessCheck().timeout(
         const Duration(seconds: 8),
       );
       if (access['success'] == true && access['data'] is Map && mounted) {
+        final prefs = await SharedPreferences.getInstance();
         await _applyAccessCheckPayload(
           Map<String, dynamic>.from(access['data'] as Map),
           prefs,

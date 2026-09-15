@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1650,19 +1649,7 @@ class _TaskDetailPageState extends State<TaskDetailPage> with SingleTickerProvid
     );
 
     if (!PlatformCapabilities.fileDragDrop) return panel;
-
-    return DropTarget(
-      onDragEntered: (_) => setState(() => _attachmentsDragOver = true),
-      onDragExited: (_) => setState(() => _attachmentsDragOver = false),
-      onDragDone: (details) async {
-        setState(() => _attachmentsDragOver = false);
-        for (final f in details.files) {
-          final bytes = await f.readAsBytes();
-          await _uploadBytes(bytes, f.name);
-        }
-      },
-      child: panel,
-    );
+    return panel;
   }
 
   Widget _subtaskAddButton() {

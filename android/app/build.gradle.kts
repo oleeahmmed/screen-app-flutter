@@ -51,12 +51,6 @@ android {
         }
     }
 
-    packaging {
-        jniLibs {
-            keepDebugSymbols += "**/*.so"
-        }
-    }
-
     lint {
         checkReleaseBuilds = false
         abortOnError = false
