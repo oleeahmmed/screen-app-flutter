@@ -64,11 +64,21 @@ abstract final class PushAlertService {
     if (isChat) {
       final senderId = int.tryParse('${data['sender_id'] ?? ''}');
       final myId = int.tryParse(await UserDataService.getUserId());
+      final isGroup = notifType == 'new_group_message' ||
+          int.tryParse('${data['group_id'] ?? ''}') != null;
+      if (!ChatNotificationRouter.isIntendedForMe(
+        myUserId: myId,
+        isGroup: isGroup,
+        receiverId: int.tryParse('${data['receiver_id'] ?? ''}'),
+        recipientId: int.tryParse('${data['recipient_id'] ?? ''}'),
+      )) {
+        return;
+      }
       if (senderId != null &&
           ChatNotificationRouter.shouldSuppress(
             senderId: senderId,
             myUserId: myId,
-            peerId: senderId,
+            peerId: isGroup ? null : senderId,
             groupId: int.tryParse('${data['group_id'] ?? ''}'),
           )) {
         return;
@@ -119,6 +129,14 @@ abstract final class PushAlertService {
 
     final myId = int.tryParse(await UserDataService.getUserId());
     if (myId != null && senderId == myId) return;
+    if (!ChatNotificationRouter.isIntendedForMe(
+      myUserId: myId,
+      isGroup: isGroup,
+      receiverId: int.tryParse('${data['receiver_id'] ?? ''}'),
+      recipientId: int.tryParse('${data['recipient_id'] ?? ''}'),
+    )) {
+      return;
+    }
 
     final text = (data['message'] ?? '').toString();
     if (CallService.isHiddenCallChatMessage(text)) return;

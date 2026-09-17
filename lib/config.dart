@@ -28,6 +28,7 @@ class AppConfig {
   static String get authTokenUrl => '$apiBaseUrl/token/';
   static String get authRefreshUrl => '$apiBaseUrl/auth/refresh/';
   static String get authTokenRefreshUrl => '$apiBaseUrl/token/refresh/';
+  static String get authLogoutUrl => '$apiBaseUrl/auth/logout/';
   static String get authAccessCheckUrl => '$apiBaseUrl/auth/access-check/';
 
   /// Build ws/wss [Uri] without implicit `:0` port (fixes Windows WebSocket).

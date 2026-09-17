@@ -41,4 +41,22 @@ abstract final class ChatNotificationRouter {
     if (peerId != null) return activePeerId == peerId;
     return false;
   }
+
+  /// Drop tray alerts that are not for the logged-in user (stale FCM / company WS leak).
+  /// When receiver/recipient ids are absent (legacy FCM), allow — backend send is already scoped.
+  static bool isIntendedForMe({
+    required int? myUserId,
+    required bool isGroup,
+    int? receiverId,
+    int? recipientId,
+  }) {
+    if (myUserId == null) return false;
+    if (isGroup) {
+      if (recipientId != null) return recipientId == myUserId;
+      return true;
+    }
+    final target = receiverId ?? recipientId;
+    if (target == null) return true;
+    return target == myUserId;
+  }
 }

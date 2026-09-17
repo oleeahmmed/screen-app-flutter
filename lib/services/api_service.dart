@@ -3406,6 +3406,25 @@ class ApiService {
     }
   }
 
+  /// Blacklist refresh + deactivate all push devices for this user on the server.
+  Future<Map<String, dynamic>> logoutRemote() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final refresh = prefs.getString('refresh_token') ?? '';
+      final response = await http
+          .post(
+            Uri.parse(AppConfig.authLogoutUrl),
+            headers: _getHeaders(),
+            body: jsonEncode({'refresh': refresh}),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) return {'success': true};
+      return {'success': false, 'error': 'Logout failed'};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
   Future<Map<String, dynamic>> p2pCreateSession({String fileName = '', int fileSize = 0, int? receiverId}) async {
     try {
       final body = <String, dynamic>{

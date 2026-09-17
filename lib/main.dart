@@ -785,7 +785,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     unawaited(CallNavigation.openCallPageIfNeeded());
   }
 
-  void _stopNotifications() {
+  void _stopNotifications({bool unregisterPush = true}) {
     unawaited(PushKeepAlive.stop());
     _notifPushSub?.cancel();
     _notifPushSub = null;
@@ -793,9 +793,46 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     _nativeCallSub = null;
     if (CallService.instance.isInCall) CallService.instance.hangUp();
     CallService.instance.unbind();
-    unawaited(PushService.instance.unregister());
+    if (unregisterPush) {
+      unawaited(PushService.instance.unregister());
+    }
     _notificationService.stop();
     NotificationBanner.hide();
+  }
+
+  Future<void> _handleLogout() async {
+    // Unregister + server logout WHILE auth token is still valid.
+    try {
+      await PushService.instance.unregister().timeout(const Duration(seconds: 5));
+    } catch (_) {}
+    try {
+      await _apiService.logoutRemote().timeout(const Duration(seconds: 8));
+    } catch (_) {}
+
+    _stopNotifications(unregisterPush: false);
+    _screenshotService.stopCapture();
+    AttendanceService.instance.reset();
+    await AttendanceSessionGuard.clearWarm();
+
+    // Close tool/detail routes and dialogs so LoginPage is visible.
+    appNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+
+    _apiService.setToken('');
+    AppSession.setConsent(false);
+    await UserDataService.clearAllData();
+    _clearPageCache();
+
+    AppNavigation.instance.selectedTabIndex = 0;
+    AppNavigation.instance.unreadNotifs = 0;
+
+    if (!mounted) return;
+    setState(() {
+      _isLoggedIn = false;
+      _username = '';
+      _currentIndex = 0;
+      _unreadNotifs = 0;
+      _isLoading = false;
+    });
   }
 
   Future<void> _onPushNotification(Map<String, dynamic> data) async {
@@ -904,33 +941,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   /// Legacy alias — keeps badge in sync when opening Alerts tab.
   Future<void> _refreshNotificationBadge() async {
     await _notificationService.refreshUnreadCount();
-  }
-
-  Future<void> _handleLogout() async {
-    _stopNotifications();
-    _screenshotService.stopCapture();
-    AttendanceService.instance.reset();
-    await AttendanceSessionGuard.clearWarm();
-
-    // Close tool/detail routes and dialogs so LoginPage is visible.
-    appNavigatorKey.currentState?.popUntil((route) => route.isFirst);
-
-    _apiService.setToken('');
-    AppSession.setConsent(false);
-    await UserDataService.clearAllData();
-    _clearPageCache();
-
-    AppNavigation.instance.selectedTabIndex = 0;
-    AppNavigation.instance.unreadNotifs = 0;
-
-    if (!mounted) return;
-    setState(() {
-      _isLoggedIn = false;
-      _username = '';
-      _currentIndex = 0;
-      _unreadNotifs = 0;
-      _isLoading = false;
-    });
   }
 
   Future<void> _openReportsHub() async {

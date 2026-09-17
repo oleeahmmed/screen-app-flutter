@@ -414,6 +414,14 @@ class NotificationService {
     final senderId = _notifInt(data['sender_id']);
     if (senderId == null) return;
     final myId = int.tryParse(await UserDataService.getUserId());
+    if (!ChatNotificationRouter.isIntendedForMe(
+      myUserId: myId,
+      isGroup: isGroup,
+      receiverId: _notifInt(data['receiver_id']),
+      recipientId: _notifInt(data['recipient_id']),
+    )) {
+      return;
+    }
     if (ChatNotificationRouter.shouldSuppress(
       senderId: senderId,
       myUserId: myId,

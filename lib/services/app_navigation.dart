@@ -59,8 +59,15 @@ class AppNavigation {
   void goChat() => navigateToTab(tabChat);
 
   void goChatWithPeer({int? userId, int? groupId}) {
-    pendingChatUserId = userId;
-    pendingChatGroupId = groupId;
+    // Group push payloads also include sender_id as peer_id. Prefer the group
+    // thread so tap-open matches reply-from-notification (which posts to group).
+    if (groupId != null) {
+      pendingChatUserId = null;
+      pendingChatGroupId = groupId;
+    } else {
+      pendingChatUserId = userId;
+      pendingChatGroupId = null;
+    }
     goChat();
     SchedulerBinding.instance.addPostFrameCallback((_) {
       onPendingChatOpen?.call();

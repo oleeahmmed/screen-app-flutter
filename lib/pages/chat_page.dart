@@ -882,28 +882,16 @@ class _ChatPageState extends State<ChatPage> {
       });
     }
 
-    if (userId != null) {
-      for (final u in _users) {
-        if (u is Map && _asInt(u['id']) == userId) {
-          AppNavigation.instance.pendingChatUserId = null;
-          unawaited(_selectUser(u));
-          return;
-        }
-      }
-      if (_isLoadingUsers) return;
+    void clearPending() {
       AppNavigation.instance.pendingChatUserId = null;
-      unawaited(_selectUser(<String, dynamic>{
-        'id': userId,
-        'username': 'user_$userId',
-        'full_name': 'Chat',
-      }));
-      return;
+      AppNavigation.instance.pendingChatGroupId = null;
     }
 
+    // Prefer group when both are set — group toasts encode sender as peer_id.
     if (groupId != null) {
       for (final g in _groups) {
         if (g is Map && _asInt(g['id']) == groupId) {
-          AppNavigation.instance.pendingChatGroupId = null;
+          clearPending();
           setState(() => _currentTab = 'group');
           unawaited(_selectGroup(g));
           return;
@@ -913,11 +901,29 @@ class _ChatPageState extends State<ChatPage> {
         if (_groups.isEmpty) unawaited(_loadGroups(silent: true));
         return;
       }
-      AppNavigation.instance.pendingChatGroupId = null;
+      clearPending();
       setState(() => _currentTab = 'group');
       unawaited(_selectGroup(<String, dynamic>{
         'id': groupId,
         'name': 'Group',
+      }));
+      return;
+    }
+
+    if (userId != null) {
+      for (final u in _users) {
+        if (u is Map && _asInt(u['id']) == userId) {
+          clearPending();
+          unawaited(_selectUser(u));
+          return;
+        }
+      }
+      if (_isLoadingUsers) return;
+      clearPending();
+      unawaited(_selectUser(<String, dynamic>{
+        'id': userId,
+        'username': 'user_$userId',
+        'full_name': 'Chat',
       }));
     }
   }
