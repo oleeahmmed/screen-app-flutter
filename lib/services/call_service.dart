@@ -70,10 +70,12 @@ class CallService {
   final List<Map<String, dynamic>> _pendingIce = [];
   bool _remoteReady = false;
   bool _negotiating = false;
+  bool _offerSent = false;
   Timer? _ringTimer;
   Timer? _invitePollTimer;
   Timer? _negotiationTimer;
   Timer? _connectTimeoutTimer;
+  Timer? _iceDisconnectTimer;
   final Set<String> _seenInviteIds = {};
   final Set<String> _outgoingSessionIds = {};
 
@@ -316,7 +318,13 @@ class CallService {
       'call_type': kind == CallKind.video ? 'video' : 'audio',
     });
 
-    await _connectP2p(sessionId);
+    await _loadIceServers();
+    final connected = await _connectP2p(sessionId);
+    if (!connected) {
+      await api.p2pCancelSession(sessionId);
+      _endCall('Signaling connection failed');
+      return 'Could not connect to call server';
+    }
 
     _ringTimer?.cancel();
     _ringTimer = Timer(const Duration(seconds: 45), () {
@@ -371,7 +379,12 @@ class CallService {
     });
 
     _p2pSessionId = s.callId;
-    await _connectP2p(s.callId);
+    await _loadIceServers();
+    final connected = await _connectP2p(s.callId);
+    if (!connected) {
+      _endCall('Signaling connection failed');
+      return false;
+    }
     _startConnectTimeout();
     return true;
   }
@@ -565,10 +578,10 @@ class CallService {
     _connectTimeoutTimer = null;
   }
 
-  Future<void> _connectP2p(String sessionId) async {
+  Future<bool> _connectP2p(String sessionId) async {
     await _disconnectP2p();
     final token = _api?.token;
-    if (token == null || token.isEmpty) return;
+    if (token == null || token.isEmpty) return false;
 
     final url = AppConfig.p2pWsUrl(sessionId, token);
     try {
@@ -593,8 +606,11 @@ class CallService {
       );
       await _p2pWs!.ready.timeout(const Duration(seconds: 12));
       _p2pSessionId = sessionId;
+      return true;
     } catch (e) {
       if (kDebugMode) debugPrint('[CallService] P2P connect failed: $e');
+      await _disconnectP2p();
+      return false;
     }
   }
 
@@ -670,14 +686,17 @@ class CallService {
   }
 
   void _scheduleNegotiationFallback() {
+    if (_offerSent || _remoteReady || _negotiating) return;
     _negotiationTimer?.cancel();
-    _negotiationTimer = Timer(const Duration(milliseconds: 1500), () {
+    _negotiationTimer = Timer(const Duration(milliseconds: 2500), () {
+      if (_offerSent || _remoteReady || _negotiating) return;
       unawaited(_maybeStartNegotiation(force: true));
     });
   }
 
   Future<void> _maybeStartNegotiation({bool force = false}) async {
     if (_p2pRole == 'initiator') {
+      if (_offerSent || _remoteReady) return;
       if (force || _p2pPeerJoined) {
         await _startCallerNegotiation();
       }
@@ -685,7 +704,7 @@ class CallService {
   }
 
   Future<void> _startCallerNegotiation() async {
-    if (_negotiating || _p2pRole != 'initiator') return;
+    if (_negotiating || _offerSent || _remoteReady || _p2pRole != 'initiator') return;
     if (_session == null) return;
     _negotiating = true;
     try {
@@ -698,6 +717,7 @@ class CallService {
       });
       await _pc!.setLocalDescription(offer);
       _p2pSend({'type': 'offer', 'sdp': {'type': offer.type, 'sdp': offer.sdp}});
+      _offerSent = true;
     } catch (e) {
       if (kDebugMode) debugPrint('[CallService] caller negotiation: $e');
       hangUp(reason: 'Connection failed');
@@ -707,7 +727,7 @@ class CallService {
   }
 
   Future<void> _resetPcIfNeeded() async {
-    if (_pc == null || _remoteReady) return;
+    if (_pc == null || _remoteReady || _negotiating || _offerSent) return;
     try {
       await _pc!.close();
     } catch (_) {}
@@ -816,27 +836,43 @@ class CallService {
       });
     };
 
+    void markActive() {
+      _iceDisconnectTimer?.cancel();
+      _iceDisconnectTimer = null;
+      _clearConnectTimeout();
+      if (_phase == CallPhase.connecting || _phase == CallPhase.outgoing) {
+        _setPhase(CallPhase.active);
+      }
+    }
+
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
         _remoteStream = event.streams.first;
         _remoteStreamController.add(_remoteStream);
+        // Some Windows/NAT paths report media before ICE reaches "connected".
+        markActive();
       }
     };
-
-    void markActive() {
-      _clearConnectTimeout();
-      _setPhase(CallPhase.active);
-    }
 
     _pc!.onIceConnectionState = (state) {
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         markActive();
-      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
-          state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateChecking) {
+        _iceDisconnectTimer?.cancel();
+        _iceDisconnectTimer = null;
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
         if (_phase == CallPhase.active || _phase == CallPhase.connecting) {
           hangUp(reason: 'Connection lost');
         }
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        // Transient during ICE restart — wait before tearing down.
+        _iceDisconnectTimer?.cancel();
+        _iceDisconnectTimer = Timer(const Duration(seconds: 8), () {
+          if (_phase == CallPhase.active || _phase == CallPhase.connecting) {
+            hangUp(reason: 'Connection lost');
+          }
+        });
       }
     };
 
@@ -872,10 +908,13 @@ class CallService {
   void _endCall(String reason) {
     _ringTimer?.cancel();
     _negotiationTimer?.cancel();
+    _iceDisconnectTimer?.cancel();
+    _iceDisconnectTimer = null;
     _clearConnectTimeout();
     unawaited(LocalNotificationService.cancelIncomingCall());
     unawaited(NotificationSound.stopCallSounds());
     _negotiating = false;
+    _offerSent = false;
     _remoteReady = false;
     _pendingIce.clear();
     if (_p2pSessionId != null) {
@@ -918,6 +957,7 @@ class CallService {
     _ringTimer?.cancel();
     _invitePollTimer?.cancel();
     _negotiationTimer?.cancel();
+    _iceDisconnectTimer?.cancel();
     _clearConnectTimeout();
     _signalSub?.cancel();
     _endCall('Closed');

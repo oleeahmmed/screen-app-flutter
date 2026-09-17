@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../services/api_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/app_toast.dart';
+import '../premium_glass.dart';
 
 /// Share a vault entry with company employees.
 Future<void> showVaultShareSheet({
@@ -14,14 +15,8 @@ Future<void> showVaultShareSheet({
   required String entryName,
   VoidCallback? onChanged,
 }) {
-  return showModalBottomSheet<void>(
+  return PremiumGlass.showSheet<void>(
     context: context,
-    isScrollControlled: true,
-    backgroundColor: AppTheme.surface2,
-    barrierColor: AppTheme.modalBarrierColor,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
     builder: (ctx) => _VaultShareSheet(
       apiService: apiService,
       projectId: projectId,
@@ -148,27 +143,19 @@ class _VaultShareSheetState extends State<_VaultShareSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final bottom = MediaQuery.of(context).viewInsets.bottom;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + bottom),
+    return PremiumGlass.sheetBody(
+      context: context,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Center(
-            child: Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Share "${widget.entryName}"',
-            style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 16),
+          PremiumGlass.handle(),
+          PremiumGlass.header(
+            icon: Icons.ios_share_rounded,
+            title: 'Share entry',
+            subtitle: widget.entryName,
+            accentColor: AppTheme.primaryBright,
+            onClose: () => Navigator.pop(context),
           ),
           const SizedBox(height: 12),
           if (_loading)
@@ -272,14 +259,8 @@ Future<void> showVaultActivitySheet({
   int? entryId,
   String? entryName,
 }) {
-  return showModalBottomSheet<void>(
+  return PremiumGlass.showSheet<void>(
     context: context,
-    isScrollControlled: true,
-    backgroundColor: AppTheme.surface2,
-    barrierColor: AppTheme.modalBarrierColor,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
     builder: (ctx) => _VaultActivitySheet(
       apiService: apiService,
       projectId: projectId,
@@ -372,25 +353,20 @@ class _VaultActivitySheetState extends State<_VaultActivitySheet> {
         ? 'Activity — ${widget.entryName ?? 'Entry'}'
         : 'Vault activity';
 
-    return SizedBox(
-      height: maxH,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+    return PremiumGlass.sheetBody(
+      context: context,
+      child: SizedBox(
+        height: maxH,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
+            PremiumGlass.handle(),
+            PremiumGlass.header(
+              icon: Icons.history_rounded,
+              title: title,
+              accentColor: AppTheme.primaryBright,
+              onClose: () => Navigator.pop(context),
             ),
-            const SizedBox(height: 12),
-            Text(title, style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
             const SizedBox(height: 12),
             Expanded(
               child: _loading

@@ -100,6 +100,8 @@ class AppConfig {
   static String get chatMessageDetailUrl => '$apiBaseUrl/chat/messages/';
   static String chatMessageReactionsUrl(int messageId) =>
       '$apiBaseUrl/chat/messages/$messageId/reactions/';
+  static String groupMessageDetailUrl(int groupId, int messageId) =>
+      '$apiBaseUrl/chat/groups/$groupId/messages/$messageId/';
   static String groupMessageReactionsUrl(int groupId, int messageId) =>
       '$apiBaseUrl/chat/groups/$groupId/messages/$messageId/reactions/';
   static String get chatGroupsUrl => '$apiBaseUrl/chat/groups/';

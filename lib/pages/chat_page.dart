@@ -27,10 +27,10 @@ import '../services/voice_recorder_service.dart';
 import '../services/app_navigation.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
-import '../widgets/app_logo.dart';
 import '../services/chat_clipboard.dart';
 import '../services/chat_wallpaper_prefs.dart';
 import '../services/chat_pin_prefs.dart';
+import '../services/chat_inbox_prefs.dart';
 import '../widgets/chat_wallpaper_background.dart';
 import '../widgets/swipe_to_reply.dart';
 import '../widgets/chat_avatar.dart';
@@ -44,6 +44,10 @@ import '../utils/platform_capabilities.dart';
 import '../utils/local_file_actions.dart';
 import '../pages/chat_profile_settings_page.dart';
 import '../widgets/chat_p2p_transfer_sheet.dart';
+import '../widgets/chat_p2p_send_sheet.dart';
+import '../services/p2p_received_store.dart';
+import '../widgets/p2p_ui.dart';
+import '../widgets/premium_glass.dart';
 
 int? _chatInt(dynamic v) {
   if (v == null) return null;
@@ -99,6 +103,9 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription<CallPhase>? _callPhaseSub;
   StreamSubscription<ChatP2pTransferState>? _p2pSub;
   ChatP2pTransferState _p2pState = const ChatP2pTransferState();
+  final List<ChatP2pPendingFile> _p2pSendQueue = [];
+  List<Map<String, dynamic>> _p2pReceivedFiles = [];
+  bool _p2pQueueDraining = false;
   bool _isRecording = false;
   int _recordSeconds = 0;
   Timer? _recordTimer;
@@ -131,6 +138,8 @@ class _ChatPageState extends State<ChatPage> {
   final Set<int> _selectedMessageIds = {};
   final Set<int> _starredMessageIds = {};
   List<String> _pinnedChatKeys = [];
+  Set<String> _markedUnreadKeys = {};
+  Set<String> _archivedChatKeys = {};
   final GlobalKey _selectionHeaderKey = GlobalKey();
   final GlobalKey _chatMessageStackKey = GlobalKey();
   dynamic _reactionPickerMsg;
@@ -208,6 +217,7 @@ class _ChatPageState extends State<ChatPage> {
     _loadMyUserId();
     unawaited(_loadWallpaper());
     unawaited(_loadPinnedChats());
+    unawaited(_loadInboxPrefs());
     _usersPollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       _loadUsers(silent: true);
       _loadGroups(silent: true);
@@ -228,8 +238,26 @@ class _ChatPageState extends State<ChatPage> {
       }
     });
     _p2pSub = ChatP2pFileService.instance.stateStream.listen((s) {
-      if (mounted) setState(() => _p2pState = s);
+      if (!mounted) return;
+      setState(() => _p2pState = s);
+      if (s.phase == ChatP2pPhase.incoming) {
+        setState(() {
+          _chatHubTab = 'received';
+          _selectedUser = null;
+          _selectedGroup = null;
+        });
+        unawaited(_loadP2pReceivedFiles());
+      }
+      if (s.phase == ChatP2pPhase.complete ||
+          s.phase == ChatP2pPhase.failed ||
+          s.phase == ChatP2pPhase.idle) {
+        if (s.phase == ChatP2pPhase.complete) {
+          unawaited(_loadP2pReceivedFiles());
+        }
+        unawaited(_drainP2pSendQueue());
+      }
     });
+    unawaited(_loadP2pReceivedFiles());
     _scrollController.addListener(_onChatScroll);
   }
 
@@ -259,6 +287,192 @@ class _ChatPageState extends State<ChatPage> {
     final keys = await ChatPinPrefs.loadOrderedKeys();
     if (!mounted) return;
     setState(() => _pinnedChatKeys = keys);
+  }
+
+  Future<void> _loadInboxPrefs() async {
+    await ChatInboxPrefs.load();
+    if (!mounted) return;
+    setState(() {
+      _markedUnreadKeys = Set<String>.from(ChatInboxPrefs.markedUnreadKeys);
+      _archivedChatKeys = Set<String>.from(ChatInboxPrefs.archivedKeys);
+    });
+  }
+
+  bool _isChatMuted(String pinKey) => ChatInboxPrefs.isMuted(pinKey);
+
+  bool _isChatArchived(String pinKey) => _archivedChatKeys.contains(pinKey);
+
+  int _effectiveUnread(int serverUnread, String pinKey) {
+    if (serverUnread > 0) return serverUnread;
+    return _markedUnreadKeys.contains(pinKey) ? 1 : 0;
+  }
+
+  Future<void> _unmuteChat({
+    required bool isGroup,
+    required int id,
+    String? name,
+  }) async {
+    final key = ChatInboxPrefs.chatKey(isGroup: isGroup, id: id);
+    await ChatInboxPrefs.setMute(key, duration: Duration.zero);
+    if (!mounted) return;
+    setState(() {});
+    final label = name?.trim();
+    final who = (label != null && label.isNotEmpty) ? label : 'Chat';
+    AppToast.success(context, '$who unmuted');
+  }
+
+  Future<void> _pickMuteDuration({
+    required bool isGroup,
+    required int id,
+    String? name,
+  }) async {
+    final key = ChatInboxPrefs.chatKey(isGroup: isGroup, id: id);
+    if (_isChatMuted(key)) {
+      await _unmuteChat(isGroup: isGroup, id: id, name: name);
+      return;
+    }
+
+    final choice = await PremiumGlass.showSheet<String>(
+      context: context,
+      builder: (ctx) => PremiumGlass.sheetBody(
+        context: ctx,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PremiumGlass.handle(),
+            PremiumGlass.header(
+              icon: Icons.notifications_off_outlined,
+              title: 'Mute notifications',
+              subtitle: name,
+              accentColor: AppTheme.accent,
+              onClose: () => Navigator.pop(ctx),
+            ),
+            const SizedBox(height: 8),
+            PremiumGlass.insetRow(
+              child: Column(
+                children: [
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('8 hours', style: TextStyle(color: AppTheme.textPrimary)),
+                    onTap: () => Navigator.pop(ctx, '8h'),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('1 week', style: TextStyle(color: AppTheme.textPrimary)),
+                    onTap: () => Navigator.pop(ctx, '1w'),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Always', style: TextStyle(color: AppTheme.textPrimary)),
+                    onTap: () => Navigator.pop(ctx, 'always'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+
+    Duration? duration;
+    String labelDur = 'always';
+    switch (choice) {
+      case '8h':
+        duration = const Duration(hours: 8);
+        labelDur = '8 hours';
+        break;
+      case '1w':
+        duration = const Duration(days: 7);
+        labelDur = '1 week';
+        break;
+      default:
+        duration = null;
+        labelDur = 'always';
+    }
+    await ChatInboxPrefs.setMute(key, duration: duration);
+    if (!mounted) return;
+    setState(() {});
+    final label = name?.trim();
+    final who = (label != null && label.isNotEmpty) ? label : 'Chat';
+    AppToast.success(context, '$who muted ($labelDur)');
+  }
+
+  Future<void> _toggleChatArchive({
+    required bool isGroup,
+    required int id,
+    String? name,
+  }) async {
+    final key = ChatInboxPrefs.chatKey(isGroup: isGroup, id: id);
+    final nowArchived = await ChatInboxPrefs.toggleArchive(key);
+
+    final leavingSelected = isGroup
+        ? (_selectedGroup != null && _asInt(_selectedGroup['id']) == id)
+        : (_selectedUser != null && _asInt(_selectedUser['id']) == id);
+
+    if (!mounted) return;
+    setState(() {
+      _archivedChatKeys = Set<String>.from(ChatInboxPrefs.archivedKeys);
+      if (nowArchived && leavingSelected) {
+        _selectedUser = null;
+        _selectedGroup = null;
+        _messages = [];
+        ChatNotificationRouter.clearActiveThread();
+      }
+      if (nowArchived && _inboxFilter != 'archived') {
+        _inboxFilter = 'all';
+      }
+    });
+    final label = name?.trim();
+    final who = (label != null && label.isNotEmpty) ? label : 'Chat';
+    AppToast.success(context, nowArchived ? '$who archived' : '$who unarchived');
+  }
+
+  Future<void> _markChatUnread({
+    required bool isGroup,
+    required int id,
+    String? name,
+  }) async {
+    final key = ChatInboxPrefs.chatKey(isGroup: isGroup, id: id);
+    await ChatInboxPrefs.markUnread(key);
+
+    // Leave thread so unread stays visible (WhatsApp behavior).
+    final leavingSelected = isGroup
+        ? (_selectedGroup != null && _asInt(_selectedGroup['id']) == id)
+        : (_selectedUser != null && _asInt(_selectedUser['id']) == id);
+
+    if (!mounted) return;
+    setState(() {
+      _markedUnreadKeys = Set<String>.from(ChatInboxPrefs.markedUnreadKeys);
+      if (leavingSelected) {
+        _selectedUser = null;
+        _selectedGroup = null;
+        _messages = [];
+        ChatNotificationRouter.clearActiveThread();
+      }
+      if (isGroup) {
+        _groups = _groups.map((g) {
+          if (g is! Map) return g;
+          if (_asInt(g['id']) != id) return g;
+          final m = Map<String, dynamic>.from(g);
+          final n = _asInt(m['unread_count']) ?? 0;
+          m['unread_count'] = n > 0 ? n : 1;
+          return m;
+        }).toList();
+      } else {
+        _users = _users.map((u) {
+          if (u is! Map) return u;
+          if (_asInt(u['id']) != id) return u;
+          final m = Map<String, dynamic>.from(u);
+          final n = _asInt(m['unread_count']) ?? 0;
+          m['unread_count'] = n > 0 ? n : 1;
+          return m;
+        }).toList();
+      }
+    });
+    final label = name?.trim();
+    final who = (label != null && label.isNotEmpty) ? label : 'Chat';
+    AppToast.success(context, '$who marked as unread');
   }
 
   String? _openChatPinKey() {
@@ -300,53 +514,74 @@ class _ChatPageState extends State<ChatPage> {
   }) async {
     final pinKey = ChatPinPrefs.chatKey(isGroup: isGroup, id: id);
     final pinned = _isChatPinned(pinKey);
+    final muted = _isChatMuted(pinKey);
+    final archived = _isChatArchived(pinKey);
     final canDirectSend =
         !isGroup && user != null && PlatformCapabilities.peerToPeerFileTransfer;
-    final action = await showModalBottomSheet<String>(
+    final action = await PremiumGlass.showSheet<String>(
       context: context,
-      backgroundColor: AppTheme.dialogBg,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => SafeArea(
+      builder: (ctx) => PremiumGlass.sheetBody(
+        context: ctx,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              child: Text(
-                name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
+            PremiumGlass.handle(),
+            PremiumGlass.header(
+              icon: isGroup ? Icons.groups_rounded : Icons.person_rounded,
+              title: name,
+              subtitle: 'Chat options',
+              accentColor: AppTheme.primaryBright,
+              onClose: () => Navigator.pop(ctx),
+            ),
+            const SizedBox(height: 10),
+            PremiumGlass.insetRow(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                children: [
+                  if (canDirectSend)
+                    ListTile(
+                      leading: const Icon(Icons.bolt_rounded, color: Color(0xFF818CF8)),
+                      title: const Text('Send file (P2P)'),
+                      subtitle: const Text('Direct transfer — stays off the server'),
+                      onTap: () => Navigator.pop(ctx, 'p2p'),
+                    ),
+                  ListTile(
+                    leading: Icon(
+                      pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
+                      color: AppTheme.primaryBright,
+                    ),
+                    title: Text(pinned ? 'Unpin chat' : 'Pin chat'),
+                    onTap: () => Navigator.pop(ctx, 'pin'),
+                  ),
+                  ListTile(
+                    leading: Icon(
+                      muted ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                      color: muted ? AppTheme.accent : AppTheme.textMuted,
+                    ),
+                    title: Text(muted ? 'Unmute notifications' : 'Mute notifications'),
+                    onTap: () => Navigator.pop(ctx, 'mute'),
+                  ),
+                  ListTile(
+                    leading: Icon(
+                      archived ? Icons.unarchive_outlined : Icons.archive_outlined,
+                      color: AppTheme.textMuted,
+                    ),
+                    title: Text(archived ? 'Unarchive chat' : 'Archive chat'),
+                    onTap: () => Navigator.pop(ctx, 'archive'),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.mark_chat_unread_outlined, color: AppTheme.accent),
+                    title: const Text('Mark as unread'),
+                    onTap: () => Navigator.pop(ctx, 'unread'),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.info_outline_rounded, color: AppTheme.textMuted),
+                    title: const Text('Chat info'),
+                    onTap: () => Navigator.pop(ctx, 'info'),
+                  ),
+                ],
               ),
             ),
-            if (canDirectSend)
-              ListTile(
-                leading: const Icon(Icons.bolt_rounded, color: Color(0xFF818CF8)),
-                title: const Text('Send file (P2P)'),
-                subtitle: const Text('Direct transfer — stays off the server'),
-                onTap: () => Navigator.pop(ctx, 'p2p'),
-              ),
-            ListTile(
-              leading: Icon(
-                pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded,
-                color: AppTheme.primaryBright,
-              ),
-              title: Text(pinned ? 'Unpin chat' : 'Pin chat'),
-              onTap: () => Navigator.pop(ctx, 'pin'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.info_outline_rounded, color: AppTheme.textMuted),
-              title: const Text('Chat info'),
-              onTap: () => Navigator.pop(ctx, 'info'),
-            ),
-            const SizedBox(height: 8),
           ],
         ),
       ),
@@ -358,6 +593,12 @@ class _ChatPageState extends State<ChatPage> {
     }
     if (action == 'pin') {
       await _toggleChatPin(isGroup: isGroup, id: id, name: name);
+    } else if (action == 'mute') {
+      await _pickMuteDuration(isGroup: isGroup, id: id, name: name);
+    } else if (action == 'archive') {
+      await _toggleChatArchive(isGroup: isGroup, id: id, name: name);
+    } else if (action == 'unread') {
+      await _markChatUnread(isGroup: isGroup, id: id, name: name);
     } else if (action == 'info') {
       if (isGroup) {
         final group = _groups.cast<Map?>().firstWhere(
@@ -618,9 +859,28 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void _consumePendingChatOpen() {
+    if (AppNavigation.instance.pendingOpenP2pReceived) {
+      AppNavigation.instance.pendingOpenP2pReceived = false;
+      setState(() {
+        _chatHubTab = 'received';
+        _selectedUser = null;
+        _selectedGroup = null;
+      });
+      unawaited(_loadP2pReceivedFiles());
+      return;
+    }
+
     final userId = AppNavigation.instance.pendingChatUserId;
     final groupId = AppNavigation.instance.pendingChatGroupId;
     if (userId == null && groupId == null) return;
+
+    // Notification → always show Chats hub + All filter so the thread is findable.
+    if (_chatHubTab != 'chats' || _inboxFilter != 'all') {
+      setState(() {
+        _chatHubTab = 'chats';
+        _inboxFilter = 'all';
+      });
+    }
 
     if (userId != null) {
       for (final u in _users) {
@@ -1127,6 +1387,12 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _selectUser(dynamic user, {bool resetQuotes = true, bool openDetails = false}) async {
     _stopTypingSignal();
     final uid = user['id'];
+    final uidInt = _asInt(uid);
+    if (uidInt != null) {
+      final key = ChatInboxPrefs.chatKey(isGroup: false, id: uidInt);
+      unawaited(ChatInboxPrefs.clearMarkedUnread(key));
+      _markedUnreadKeys.remove(key);
+    }
     setState(() {
       _selectedUser = Map<String, dynamic>.from(user as Map);
       _selectedUser['unread_count'] = 0;
@@ -1160,6 +1426,12 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _selectGroup(dynamic group, {bool resetQuotes = true, bool openDetails = false}) async {
     _stopTypingSignal();
     final gid = group['id'];
+    final gidInt = _asInt(gid);
+    if (gidInt != null) {
+      final key = ChatInboxPrefs.chatKey(isGroup: true, id: gidInt);
+      unawaited(ChatInboxPrefs.clearMarkedUnread(key));
+      _markedUnreadKeys.remove(key);
+    }
     setState(() {
       _selectedGroup = Map<String, dynamic>.from(group as Map);
       _selectedGroup['unread_count'] = 0;
@@ -1916,8 +2188,8 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Map<String, bool> _messageActionFlags(Map<String, dynamic> msg) {
-    final isOwn = msg['is_own'] == true;
-    final msgType = (msg['message_type'] ?? 'text').toString();
+    final isOwn = _isOwnMessage(msg);
+    final msgType = (msg['message_type'] ?? 'text').toString().toLowerCase();
     final text = (msg['message'] ?? '').toString();
     final imageUrl = (msg['image_url'] ?? '').toString();
     final fileUrl = (msg['file_url'] ?? '').toString();
@@ -1929,12 +2201,34 @@ class _ChatPageState extends State<ChatPage> {
       'canCopy': (text.trim().isNotEmpty && (msgType == 'text' || msgType.isEmpty)) ||
           (msgType == 'image' && imageUrl.isNotEmpty),
       'canForward': text.trim().isNotEmpty || openUrl.isNotEmpty,
-      'canEdit': isOwn && (msgType == 'text' || msg['message_type'] == null),
+      'canEdit': _canEditMessage(msg),
       'canDelete': isOwn,
       'hasImage': imageUrl.isNotEmpty,
       'hasOpenUrl': openUrl.isNotEmpty,
       'isOwn': isOwn,
     };
+  }
+
+  bool _isOwnMessage(Map msg) {
+    if (msg['is_own'] == true) return true;
+    final sid = _asInt(msg['sender_id'] ?? msg['sender']);
+    return sid != null && _myUserId != null && sid == _myUserId;
+  }
+
+  bool _canEditMessage(Map msg) {
+    if (!_isOwnMessage(msg)) return false;
+    final t = (msg['message_type'] ?? 'text').toString().trim().toLowerCase();
+    return t.isEmpty || t == 'text';
+  }
+
+  PopupMenuItem<String> _popupTextItem(String value, String label) {
+    return PopupMenuItem<String>(
+      value: value,
+      child: Text(
+        label,
+        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+      ),
+    );
   }
 
   int? _eventMessageId(Map<String, dynamic> data) =>
@@ -2121,6 +2415,11 @@ class _ChatPageState extends State<ChatPage> {
       if (item is! Map) return item;
       final map = Map<String, dynamic>.from(item);
       final mid = _asInt(map['id']);
+      // Normalize soft-delete flag from API (bool / 1 / "true").
+      final deletedRaw = map['is_deleted'];
+      map['is_deleted'] = deletedRaw == true ||
+          deletedRaw == 1 ||
+          deletedRaw?.toString().toLowerCase() == 'true';
 
       Map<String, dynamic>? reply;
       if (map['reply'] is Map) {
@@ -2497,7 +2796,9 @@ class _ChatPageState extends State<ChatPage> {
     final r = await widget.apiService.markAllMessagesRead();
     if (!mounted) return;
     if (r['success'] == true) {
+      unawaited(ChatInboxPrefs.clearAllMarkedUnread());
       setState(() {
+        _markedUnreadKeys = {};
         _users = _users.map((u) {
           if (u is Map) {
             final m = Map<String, dynamic>.from(u);
@@ -2637,28 +2938,26 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   Future<void> _showAttachSheet() async {
     if (_selectedUser == null && _selectedGroup == null) return;
     final mobile = Responsive.isMobile(context);
-    await showModalBottomSheet<void>(
+    await PremiumGlass.showSheet<void>(
       context: context,
-      backgroundColor: AppTheme.dialogBg,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              Row(
+      builder: (ctx) => PremiumGlass.sheetBody(
+        context: ctx,
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PremiumGlass.handle(),
+            PremiumGlass.header(
+              icon: Icons.attach_file_rounded,
+              title: 'Attach',
+              subtitle: 'Photo, document, or direct send',
+              accentColor: const Color(0xFFA855F7),
+              onClose: () => Navigator.pop(ctx),
+            ),
+            const SizedBox(height: 12),
+            PremiumGlass.insetRow(
+              padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
+              child: Row(
                 children: [
                   if (mobile)
                     Expanded(
@@ -2711,12 +3010,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   ),
                 ],
               ),
-              if (_selectedUser != null && PlatformCapabilities.peerToPeerFileTransfer) ...[
-                const SizedBox(height: 10),
-                _attachDirectRow(ctx),
-              ],
+            ),
+            if (_selectedUser != null && PlatformCapabilities.peerToPeerFileTransfer) ...[
+              const SizedBox(height: 10),
+              _attachDirectRow(ctx),
             ],
-          ),
+          ],
         ),
       ),
     );
@@ -2783,43 +3082,88 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
-  Future<void> _pickDirectFile({dynamic peer}) async {
+  Future<void> _loadP2pReceivedFiles() async {
+    final items = await P2pReceivedStore.load();
+    if (!mounted) return;
+    setState(() => _p2pReceivedFiles = items);
+  }
+
+  Future<void> _openP2pSendComposer({dynamic peer}) async {
     final user = peer ?? _selectedUser;
     if (user == null) {
       _showError('Direct send works in 1:1 chat only');
       return;
     }
-    if (_p2pState.isActive) {
+    if (!PlatformCapabilities.peerToPeerFileTransfer) {
+      _showError('Direct send is not available on this device');
+      return;
+    }
+    if (_p2pState.isActive || _p2pSendQueue.isNotEmpty) {
       _showError('A direct transfer is already in progress');
       return;
     }
-    final result = await FilePicker.platform.pickFiles(allowMultiple: false, withData: false);
-    if (result == null || result.files.isEmpty) return;
-    final pf = result.files.first;
-    final path = pf.path;
-    if (path == null || path.isEmpty) {
-      _showError('Could not access the selected file');
-      return;
-    }
-    var size = pf.size;
-    if (size <= 0) size = await File(path).length();
+    final peerName = (user['full_name'] ?? user['username'] ?? 'Contact').toString();
+    final picked = await showChatP2pSendSheet(context: context, peerName: peerName);
+    if (picked == null || picked.isEmpty || !mounted) return;
 
     final peerId = _asInt(user['id']);
     if (peerId == null) return;
-    final peerName = (user['full_name'] ?? user['username'] ?? 'Contact').toString();
 
-    final err = await ChatP2pFileService.instance.sendFile(
-      peerId: peerId,
-      peerName: peerName,
-      filePath: path,
-      fileName: pf.name,
-      fileSize: size,
-    );
-    if (!mounted) return;
-    if (err != null) _showError(err);
+    _p2pSendQueue
+      ..clear()
+      ..addAll(picked);
+    await _drainP2pSendQueue(peerId: peerId, peerName: peerName);
   }
 
-  /// Select a 1:1 chat peer, then open the system file picker for P2P send.
+  Future<void> _drainP2pSendQueue({int? peerId, String? peerName}) async {
+    if (_p2pQueueDraining) return;
+    if (_p2pSendQueue.isEmpty) return;
+    if (_p2pState.isActive) return;
+
+    final user = _selectedUser;
+    final id = peerId ?? _asInt(user?['id']);
+    final name = peerName ??
+        (user?['full_name'] ?? user?['username'] ?? 'Contact').toString();
+    if (id == null) {
+      _p2pSendQueue.clear();
+      return;
+    }
+
+    _p2pQueueDraining = true;
+    try {
+      while (_p2pSendQueue.isNotEmpty && mounted) {
+        if (_p2pState.isActive) break;
+        final next = _p2pSendQueue.removeAt(0);
+        final err = await ChatP2pFileService.instance.sendFile(
+          peerId: id,
+          peerName: name,
+          filePath: next.path,
+          fileName: next.name,
+          fileSize: next.size,
+        );
+        if (!mounted) return;
+        if (err != null) {
+          _showError(err);
+          _p2pSendQueue.clear();
+          break;
+        }
+        // Wait until this transfer leaves active state before next file.
+        while (mounted && ChatP2pFileService.instance.state.isActive) {
+          await Future<void>.delayed(const Duration(milliseconds: 400));
+        }
+        final phase = ChatP2pFileService.instance.state.phase;
+        if (phase == ChatP2pPhase.failed) break;
+      }
+    } finally {
+      _p2pQueueDraining = false;
+    }
+  }
+
+  Future<void> _pickDirectFile({dynamic peer}) async {
+    await _openP2pSendComposer(peer: peer);
+  }
+
+  /// Select a 1:1 chat peer, then open the P2P multi-file composer.
   Future<void> _startDirectSendWithPeer(dynamic user) async {
     if (user == null) return;
     if (!PlatformCapabilities.peerToPeerFileTransfer) {
@@ -2828,7 +3172,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     }
     await _selectUser(user);
     if (!mounted) return;
-    await _pickDirectFile(peer: user);
+    await _openP2pSendComposer(peer: user);
   }
 
   Widget _attachTile({
@@ -3186,25 +3530,6 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   String _formatTime(String? ts) => formatChatBubbleTime(ts);
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  /// Logo â†’ dashboard (home tab). Used when immersive chrome hides the main top bar.
-  Widget _dashboardLogoButton() {
-    return Tooltip(
-      message: 'Dashboard',
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => AppNavigation.instance.goHome(),
-          borderRadius: BorderRadius.circular(10),
-          child: const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-            child: AppLogo(size: 30, showBorder: false),
-          ),
-        ),
-      ),
-    );
-  }
-
   // BUILD
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   @override
@@ -3280,7 +3605,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   Widget _buildSidebar() {
     final immersive = PlatformCapabilities.immersiveChatChrome;
     final showCallsHub = PlatformCapabilities.voiceVideoCall;
+    final showReceivedHub = PlatformCapabilities.peerToPeerFileTransfer;
+    final showHubNav = showCallsHub || showReceivedHub;
     final onCallsTab = showCallsHub && _chatHubTab == 'calls';
+    final onReceivedTab = showReceivedHub && _chatHubTab == 'received';
+    final title = onCallsTab
+        ? 'Calls'
+        : (onReceivedTab ? 'Received' : 'Chats');
     // Sidebar-local padding â€” never use full-window pagePadding (that squeezes search).
     const sidePad = 12.0;
     return Column(
@@ -3302,7 +3633,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                 ),
               Expanded(
                 child: Text(
-                  onCallsTab ? 'Calls' : 'Chats',
+                  title,
                   textAlign: TextAlign.left,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -3318,8 +3649,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                 tooltip: 'More',
                 padding: EdgeInsets.zero,
                 icon: const Icon(Icons.more_vert_rounded, color: AppTheme.textPrimary, size: 24),
-                color: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                color: AppTheme.surface2,
+                surfaceTintColor: Colors.transparent,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+                ),
                 onSelected: (value) {
                   switch (value) {
                     case 'new_group':
@@ -3334,22 +3669,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   }
                 },
                 itemBuilder: (context) => [
-                  if (!onCallsTab)
-                    const PopupMenuItem(
-                      value: 'new_group',
-                      child: Text('New group', style: TextStyle(color: Color(0xFF111B21))),
-                    ),
-                  const PopupMenuItem(
-                    value: 'read_all',
-                    child: Text('Read all', style: TextStyle(color: Color(0xFF111B21))),
-                  ),
-                  const PopupMenuItem(
-                    value: 'settings',
-                    child: Text('Settings', style: TextStyle(color: Color(0xFF111B21))),
-                  ),
+                  if (!onCallsTab && !onReceivedTab)
+                    _popupTextItem('new_group', 'New group'),
+                  _popupTextItem('read_all', 'Read all'),
+                  _popupTextItem('settings', 'Settings'),
                 ],
               ),
-              if (immersive) _dashboardLogoButton(),
             ],
           ),
         ),
@@ -3360,7 +3685,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
             style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
             decoration: InputDecoration(
-              hintText: onCallsTab ? 'Search contacts\u2026' : 'Search\u2026',
+              hintText: onCallsTab
+                  ? 'Search contacts\u2026'
+                  : (onReceivedTab ? 'Search files\u2026' : 'Search\u2026'),
               hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.75), fontSize: 14),
               prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted.withValues(alpha: 0.9), size: 20),
               prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
@@ -3383,9 +3710,13 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             ),
           ),
         ),
-        if (!onCallsTab) _buildInboxFilterChips(),
-        Expanded(child: onCallsTab ? _buildCallsList() : _buildInboxList()),
-        if (showCallsHub) _buildChatHubBottomNav(),
+        if (!onCallsTab && !onReceivedTab) _buildInboxFilterChips(),
+        Expanded(
+          child: onCallsTab
+              ? _buildCallsList()
+              : (onReceivedTab ? _buildReceivedList() : _buildInboxList()),
+        ),
+        if (showHubNav) _buildChatHubBottomNav(),
       ],
     );
   }
@@ -3398,13 +3729,15 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       if (_searchQuery.isNotEmpty && !name.toLowerCase().contains(_searchQuery)) continue;
       final unread = u['unread_count'];
       final id = _asInt(u['id']) ?? 0;
+      final pinKey = ChatPinPrefs.chatKey(isGroup: false, id: id);
+      final serverUnread = unread is int ? unread : int.tryParse('$unread') ?? 0;
       rows.add({
         'kind': 'user',
         'data': u,
         'name': name,
-        'unread': unread is int ? unread : int.tryParse('$unread') ?? 0,
+        'unread': _effectiveUnread(serverUnread, pinKey),
         'at': parseApiDateTime(u['last_message_at']) ?? DateTime.fromMillisecondsSinceEpoch(0),
-        'pinKey': ChatPinPrefs.chatKey(isGroup: false, id: id),
+        'pinKey': pinKey,
       });
     }
     for (final g in _groups) {
@@ -3413,23 +3746,30 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
       if (_searchQuery.isNotEmpty && !name.toLowerCase().contains(_searchQuery)) continue;
       final unread = g['unread_count'];
       final id = _asInt(g['id']) ?? 0;
+      final pinKey = ChatPinPrefs.chatKey(isGroup: true, id: id);
+      final serverUnread = unread is int ? unread : int.tryParse('$unread') ?? 0;
       rows.add({
         'kind': 'group',
         'data': g,
         'name': name,
-        'unread': unread is int ? unread : int.tryParse('$unread') ?? 0,
+        'unread': _effectiveUnread(serverUnread, pinKey),
         'at': parseApiDateTime(g['last_message_at']) ?? DateTime.fromMillisecondsSinceEpoch(0),
-        'pinKey': ChatPinPrefs.chatKey(isGroup: true, id: id),
+        'pinKey': pinKey,
       });
     }
+    // WhatsApp-like: pins → unread → most recent.
     rows.sort((a, b) {
       final pinA = _pinnedChatKeys.indexOf(a['pinKey'] as String);
       final pinB = _pinnedChatKeys.indexOf(b['pinKey'] as String);
       final aPinned = pinA >= 0;
       final bPinned = pinB >= 0;
-      if (aPinned && bPinned) return pinA.compareTo(pinB);
-      if (aPinned) return -1;
-      if (bPinned) return 1;
+      if (aPinned != bPinned) return aPinned ? -1 : 1;
+
+      final unreadA = (a['unread'] as int) > 0;
+      final unreadB = (b['unread'] as int) > 0;
+      if (unreadA != unreadB) return unreadA ? -1 : 1;
+
+      if (aPinned && bPinned && pinA != pinB) return pinA.compareTo(pinB);
       return (b['at'] as DateTime).compareTo(a['at'] as DateTime);
     });
     return rows;
@@ -3439,22 +3779,38 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     final rows = _baseInboxRows();
     switch (_inboxFilter) {
       case 'unread':
-        return rows.where((r) => (r['unread'] as int) > 0).toList();
+        return rows
+            .where((r) =>
+                !_isChatArchived(r['pinKey'] as String) &&
+                (r['unread'] as int) > 0)
+            .toList();
       case 'favorites':
-        return rows.where((r) => _isChatPinned(r['pinKey'] as String)).toList();
+        return rows
+            .where((r) =>
+                !_isChatArchived(r['pinKey'] as String) &&
+                _isChatPinned(r['pinKey'] as String))
+            .toList();
       case 'groups':
-        return rows.where((r) => r['kind'] == 'group').toList();
+        return rows
+            .where((r) =>
+                !_isChatArchived(r['pinKey'] as String) &&
+                r['kind'] == 'group')
+            .toList();
+      case 'archived':
+        return rows.where((r) => _isChatArchived(r['pinKey'] as String)).toList();
       default:
-        return rows;
+        return rows.where((r) => !_isChatArchived(r['pinKey'] as String)).toList();
     }
   }
 
-  ({int unread, int favorites, int groups}) _inboxFilterCounts() {
+  ({int unread, int favorites, int groups, int archived}) _inboxFilterCounts() {
     final rows = _baseInboxRows();
+    final active = rows.where((r) => !_isChatArchived(r['pinKey'] as String));
     return (
-      unread: rows.where((r) => (r['unread'] as int) > 0).length,
-      favorites: rows.where((r) => _isChatPinned(r['pinKey'] as String)).length,
-      groups: rows.where((r) => r['kind'] == 'group').length,
+      unread: active.where((r) => (r['unread'] as int) > 0).length,
+      favorites: active.where((r) => _isChatPinned(r['pinKey'] as String)).length,
+      groups: active.where((r) => r['kind'] == 'group').length,
+      archived: rows.where((r) => _isChatArchived(r['pinKey'] as String)).length,
     );
   }
 
@@ -3513,6 +3869,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             chip(label: 'Favorites', value: 'favorites', count: counts.favorites),
             const SizedBox(width: 8),
             chip(label: 'Groups', value: 'groups', count: counts.groups),
+            const SizedBox(width: 8),
+            chip(label: 'Archived', value: 'archived', count: counts.archived),
           ],
         ),
       ),
@@ -3522,8 +3880,9 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   static const _waGreen = Color(0xFF25D366);
   static const _waGreenLight = Color(0xFFD9FDD3);
 
-  int _totalInboxUnread() =>
-      _baseInboxRows().fold<int>(0, (sum, r) => sum + (r['unread'] as int));
+  int _totalInboxUnread() => _baseInboxRows()
+      .where((r) => !_isChatArchived(r['pinKey'] as String))
+      .fold<int>(0, (sum, r) => sum + (r['unread'] as int));
 
   Widget _buildChatHubBottomNav() {
     final unreadTotal = _totalInboxUnread();
@@ -3620,11 +3979,19 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             label: 'Chats',
             badge: unreadTotal,
           ),
-          tabItem(
-            id: 'calls',
-            icon: Icons.call_rounded,
-            label: 'Calls',
-          ),
+          if (PlatformCapabilities.voiceVideoCall)
+            tabItem(
+              id: 'calls',
+              icon: Icons.call_rounded,
+              label: 'Calls',
+            ),
+          if (PlatformCapabilities.peerToPeerFileTransfer)
+            tabItem(
+              id: 'received',
+              icon: Icons.bolt_rounded,
+              label: 'Received',
+              badge: _p2pState.phase == ChatP2pPhase.incoming ? 1 : null,
+            ),
         ],
       ),
     );
@@ -3934,6 +4301,97 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     );
   }
 
+  String _fmtP2pSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  Widget _buildReceivedList() {
+    final incoming = _p2pState.phase == ChatP2pPhase.incoming;
+    final active = _p2pState.isActive ||
+        _p2pState.phase == ChatP2pPhase.complete ||
+        _p2pState.phase == ChatP2pPhase.failed;
+    final q = _searchQuery;
+    final history = _p2pReceivedFiles.where((e) {
+      if (q.isEmpty) return true;
+      return (e['name']?.toString() ?? '').toLowerCase().contains(q);
+    }).toList();
+
+    if (!incoming && !active && history.isEmpty) {
+      return _buildEmpty(
+        'No received files yet\nWhen someone sends a P2P file, tap Receive here.',
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadP2pReceivedFiles,
+      color: const Color(0xFF818CF8),
+      backgroundColor: AppTheme.surface2,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
+        children: [
+          if (incoming || active) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+              child: Text(
+                incoming ? 'Incoming now' : 'Transfer',
+                style: TextStyle(
+                  color: AppTheme.textMuted.withValues(alpha: 0.9),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ),
+            ChatP2pTransferSheet(
+              state: _p2pState,
+              onAccept: () => unawaited(_acceptP2pFile()),
+              onReject: () => unawaited(ChatP2pFileService.instance.rejectIncoming()),
+              onCancel: () => unawaited(ChatP2pFileService.instance.cancel()),
+              onOpenFile: _p2pState.savedPath == null
+                  ? null
+                  : () => unawaited(LocalFileActions.openFile(_p2pState.savedPath!)),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (history.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+              child: Text(
+                'Received files',
+                style: TextStyle(
+                  color: AppTheme.textMuted.withValues(alpha: 0.9),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ),
+            ...history.map((item) {
+              final name = item['name']?.toString() ?? 'File';
+              final path = item['path']?.toString() ?? '';
+              final contentUri = item['contentUri']?.toString();
+              final size = item['size'] is int
+                  ? item['size'] as int
+                  : int.tryParse('${item['size']}') ?? 0;
+              return P2pReceivedFileTile(
+                name: name,
+                sizeLabel: size > 0 ? _fmtP2pSize(size) : '',
+                onTap: path.isEmpty
+                    ? null
+                    : () => unawaited(LocalFileActions.openFile(path, contentUri: contentUri)),
+                onLongPress: path.isEmpty
+                    ? null
+                    : () => unawaited(LocalFileActions.openFolder(path)),
+              );
+            }),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildInboxList() {
     if (_isLoadingUsers && _users.isEmpty) return _buildLoader('Loading chats...');
     final rows = _inboxRows();
@@ -3947,6 +4405,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             return 'No favorite chats\nPin a chat to add it here';
           case 'groups':
             return 'No groups yet';
+          case 'archived':
+            return 'No archived chats';
           default:
             return 'No chats yet';
         }
@@ -3990,6 +4450,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         final timeLabel = _formatChatListTime(data['last_message_at']);
         final pinKey = row['pinKey'] as String;
         final isPinned = _isChatPinned(pinKey);
+        final isMuted = _isChatMuted(pinKey);
 
         return Material(
           color: Colors.transparent,
@@ -4045,6 +4506,14 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                             ),
                             if (timeLabel.isNotEmpty) ...[
                               const SizedBox(width: 6),
+                              if (isMuted) ...[
+                                Icon(
+                                  Icons.notifications_off_outlined,
+                                  size: 14,
+                                  color: AppTheme.textMuted.withValues(alpha: 0.9),
+                                ),
+                                const SizedBox(width: 4),
+                              ],
                               if (isPinned) ...[
                                 Icon(
                                   Icons.push_pin_rounded,
@@ -4500,7 +4969,6 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             final showP2p = !isGroup &&
                 PlatformCapabilities.peerToPeerFileTransfer &&
                 !veryCompact;
-            final showLogo = PlatformCapabilities.immersiveChatChrome && !compact;
             final showSettings = isGroup && !veryCompact;
 
             return Container(
@@ -4611,10 +5079,10 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   ],
                   if (showP2p)
                     IconButton(
-                      tooltip: 'Send file (P2P)',
+                      tooltip: 'Send files (P2P)',
                       onPressed: _selectedUser == null
                           ? null
-                          : () => unawaited(_pickDirectFile()),
+                          : () => unawaited(_openP2pSendComposer()),
                       icon: const Icon(Icons.bolt_rounded, color: Color(0xFF818CF8), size: 22),
                       visualDensity: VisualDensity.compact,
                     ),
@@ -4662,7 +5130,6 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted, size: 22),
                       visualDensity: VisualDensity.compact,
                     ),
-                  if (showLogo) _dashboardLogoButton(),
                   if (veryCompact &&
                       (isGroup ||
                           (!isGroup &&
@@ -4672,11 +5139,16 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       tooltip: 'More',
                       icon: const Icon(Icons.more_vert_rounded, color: Color(0xFFE9EDEF), size: 22),
                       color: AppTheme.surface2,
+                      surfaceTintColor: Colors.transparent,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+                      ),
                       onSelected: (v) {
                         if (v == 'settings') _showGroupSettings(_selectedGroup);
                         if (v == 'video') _startCall(CallKind.video);
                         if (v == 'audio') _startCall(CallKind.audio);
-                        if (v == 'p2p') unawaited(_pickDirectFile());
+                        if (v == 'p2p') unawaited(_openP2pSendComposer());
                         if (v == 'wallpaper') unawaited(_showWallpaperPicker());
                         if (v == 'pin' && chatPinId != null) {
                           unawaited(_toggleChatPin(
@@ -4688,22 +5160,15 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                       },
                       itemBuilder: (_) => [
                         if (chatPinId != null)
-                          PopupMenuItem(
-                            value: 'pin',
-                            child: Text(chatPinned ? 'Unpin chat' : 'Pin chat'),
-                          ),
-                        const PopupMenuItem(value: 'wallpaper', child: Text('Wallpaper')),
+                          _popupTextItem('pin', chatPinned ? 'Unpin chat' : 'Pin chat'),
+                        _popupTextItem('wallpaper', 'Wallpaper'),
                         if (!isGroup && PlatformCapabilities.voiceVideoCall) ...[
-                          const PopupMenuItem(value: 'video', child: Text('Video call')),
-                          const PopupMenuItem(value: 'audio', child: Text('Voice call')),
+                          _popupTextItem('video', 'Video call'),
+                          _popupTextItem('audio', 'Voice call'),
                         ],
                         if (!isGroup && PlatformCapabilities.peerToPeerFileTransfer)
-                          const PopupMenuItem(
-                            value: 'p2p',
-                            child: Text('Send file (P2P)'),
-                          ),
-                        if (isGroup)
-                          const PopupMenuItem(value: 'settings', child: Text('Group settings')),
+                          _popupTextItem('p2p', 'Send file (P2P)'),
+                        if (isGroup) _popupTextItem('settings', 'Group settings'),
                       ],
                     ),
                 ],
@@ -5247,7 +5712,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
 
   // â”€â”€â”€ Message Bubble (WhatsApp: shrink-wrap, sent right / received left) â”€â”€â”€
   Widget _buildMessageBubble(dynamic msg) {
-    final isOwn = msg['is_own'] == true;
+    final isOwn = msg is Map && _isOwnMessage(msg);
     final isGroup = _selectedGroup != null;
     final senderName = msg['sender_name'] ?? msg['sender_username'] ?? msg['sender_full_name'] ?? '';
     final text = msg['message'] ?? '';
@@ -5794,8 +6259,16 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           ),
           IconButton(
             tooltip: 'Delete',
-            onPressed: () => unawaited(runAndClear(_deleteSelectedMessages)),
-            icon: const Icon(Icons.delete_outline_rounded, color: iconColor, size: 24),
+            onPressed: _selectedMessages().any(_isOwnMessage)
+                ? () => unawaited(runAndClear(_deleteSelectedMessages))
+                : null,
+            icon: Icon(
+              Icons.delete_outline_rounded,
+              color: _selectedMessages().any(_isOwnMessage)
+                  ? iconColor
+                  : iconColor.withValues(alpha: 0.35),
+              size: 24,
+            ),
             visualDensity: VisualDensity.compact,
           ),
           IconButton(
@@ -5807,8 +6280,12 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           PopupMenuButton<String>(
             tooltip: 'More',
             icon: const Icon(Icons.more_vert_rounded, color: iconColor, size: 24),
-            color: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            color: AppTheme.surface2,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+            ),
             onSelected: (action) async {
               if (single == null) {
                 if (action == 'copy') {
@@ -5845,8 +6322,8 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
                   _clearMessageSelection();
                   break;
                 case 'edit':
-                  _showEditDialog(single);
                   _clearMessageSelection();
+                  _showEditDialog(single);
                   break;
                 case 'pin':
                   AppToast.info(context, 'Pin is not available yet');
@@ -5856,25 +6333,25 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
             itemBuilder: (_) {
               final items = <PopupMenuEntry<String>>[];
               if (single != null) {
-                items.add(const PopupMenuItem(value: 'info', child: Text('Info')));
-                items.add(const PopupMenuItem(value: 'share', child: Text('Share')));
+                items.add(_popupTextItem('info', 'Info'));
+                items.add(_popupTextItem('share', 'Share'));
               }
               if (single != null && flags['canCopy'] == true) {
-                items.add(const PopupMenuItem(value: 'copy', child: Text('Copy')));
+                items.add(_popupTextItem('copy', 'Copy'));
               } else if (single == null) {
-                items.add(const PopupMenuItem(value: 'copy', child: Text('Copy')));
+                items.add(_popupTextItem('copy', 'Copy'));
               }
               if (single != null && flags['hasImage'] == true) {
-                items.add(const PopupMenuItem(value: 'view', child: Text('View')));
+                items.add(_popupTextItem('view', 'View'));
               }
               if (single != null && flags['hasOpenUrl'] == true) {
-                items.add(const PopupMenuItem(value: 'open', child: Text('Open externally')));
+                items.add(_popupTextItem('open', 'Open externally'));
               }
               if (single != null && flags['canEdit'] == true) {
-                items.add(const PopupMenuItem(value: 'edit', child: Text('Edit')));
+                items.add(_popupTextItem('edit', 'Edit'));
               }
               if (single != null) {
-                items.add(const PopupMenuItem(value: 'pin', child: Text('Pin')));
+                items.add(_popupTextItem('pin', 'Pin'));
               }
               return items;
             },
@@ -5946,38 +6423,91 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   }
 
   Future<void> _deleteSelectedMessages() async {
-    final msgs = _selectedMessages();
-    if (msgs.isEmpty) return;
+    final msgs = _selectedMessages().where((m) => _isOwnMessage(m)).toList();
+    if (msgs.isEmpty) {
+      _showError('You can only delete your own messages');
+      return;
+    }
     final label = msgs.length == 1 ? 'Delete this message?' : 'Delete ${msgs.length} messages?';
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         backgroundColor: AppTheme.dialogBg,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Delete', style: TextStyle(color: AppTheme.textPrimary)),
         content: Text(label, style: const TextStyle(color: AppTheme.textMuted)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           TextButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
             child: const Text('Delete', style: TextStyle(color: AppTheme.danger)),
           ),
         ],
       ),
     );
-    if (ok != true) return;
-    var failed = 0;
+    if (ok != true || !mounted) return;
+
+    final ids = <int>[];
     for (final m in msgs) {
-      final r = await widget.apiService.deleteMessage(m['id']);
-      if (r['success'] != true) failed++;
+      final mid = _asInt(m['id']);
+      if (mid != null) ids.add(mid);
+    }
+    if (ids.isEmpty) {
+      _showError('Could not delete these messages');
+      return;
+    }
+
+    var failed = 0;
+    final groupId = _asInt(_selectedGroup?['id']);
+    final isGroup = _selectedGroup != null;
+    final deletedIds = <int>[];
+    for (final mid in ids) {
+      final r = await widget.apiService.deleteMessage(
+        mid,
+        isGroup: isGroup,
+        groupId: groupId,
+      );
+      if (r['success'] == true) {
+        deletedIds.add(mid);
+      } else {
+        failed++;
+      }
     }
     if (!mounted) return;
-    _silentRefresh();
-    if (failed == 0) {
-      _showSuccess(msgs.length == 1 ? 'Message deleted' : 'Messages deleted');
-    } else {
-      _showError('Deleted ${msgs.length - failed} of ${msgs.length}');
+    if (deletedIds.isNotEmpty) {
+      _markMessagesDeletedLocally(deletedIds);
     }
+    if (failed == 0) {
+      _showSuccess(ids.length == 1 ? 'Message deleted' : 'Messages deleted');
+    } else if (deletedIds.isEmpty) {
+      _showError('Failed to delete');
+    } else {
+      _showError('Deleted ${deletedIds.length} of ${ids.length}');
+    }
+  }
+
+  void _markMessagesDeletedLocally(Iterable<int> ids) {
+    final idSet = ids.toSet();
+    if (idSet.isEmpty || !mounted) return;
+    setState(() {
+      _messages = _messages.map((m) {
+        if (m is! Map) return m;
+        final mid = _asInt(m['id']);
+        if (mid == null || !idSet.contains(mid)) return m;
+        return {
+          ...Map<String, dynamic>.from(m),
+          'is_deleted': true,
+          'message': '',
+          'image_url': null,
+          'file_url': null,
+          'voice_url': null,
+        };
+      }).toList();
+      _selectedMessageIds.removeWhere(idSet.contains);
+    });
   }
 
   Future<void> _forwardSelectedMessages() async {
@@ -6113,7 +6643,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
     BuildContext? anchorContext,
   }) async {
     if (msg is! Map) return;
-    final isOwn = msg['is_own'] == true;
+    final isOwn = _isOwnMessage(msg);
     final msgType = (msg['message_type'] ?? 'text').toString();
     final text = (msg['message'] ?? '').toString();
     final imageUrl = (msg['image_url'] ?? '').toString();
@@ -6124,7 +6654,7 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
         : (fileUrl.isNotEmpty ? fileUrl : (voiceUrl.isNotEmpty ? voiceUrl : ''));
     final canCopy = (text.trim().isNotEmpty && (msgType == 'text' || msgType.isEmpty)) ||
         (msgType == 'image' && imageUrl.isNotEmpty);
-    final canEdit = isOwn && (msgType == 'text' || msg['message_type'] == null);
+    final canEdit = _canEditMessage(msg);
     final canForward = text.trim().isNotEmpty || openUrl.isNotEmpty;
     final desktop = PlatformCapabilities.isDesktop;
 
@@ -6542,15 +7072,29 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   }
 
   void _showEditDialog(dynamic msg) {
-    final controller = TextEditingController(text: msg['message'] ?? '');
-    showDialog(
+    if (msg is! Map) return;
+    if (!_canEditMessage(msg)) {
+      _showError('Only your text messages can be edited');
+      return;
+    }
+    final msgId = _asInt(msg['id']);
+    if (msgId == null) {
+      _showError('Could not edit this message');
+      return;
+    }
+    final controller = TextEditingController(text: (msg['message'] ?? '').toString());
+    showDialog<void>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         backgroundColor: AppTheme.dialogBg,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Edit Message', style: TextStyle(color: AppTheme.textPrimary)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+        ),
+        title: const Text('Edit Message', style: TextStyle(color: AppTheme.textPrimary)),
         content: TextField(
           controller: controller,
+          autofocus: true,
           minLines: 1,
           maxLines: 6,
           keyboardType: TextInputType.multiline,
@@ -6558,21 +7102,59 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
           textCapitalization: TextCapitalization.sentences,
           style: const TextStyle(color: AppTheme.textPrimary, height: 1.35),
           decoration: InputDecoration(
-            filled: true, fillColor: AppTheme.surface.withValues(alpha: 0.85),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
-            enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.border)),
-            focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.primary)),
+            filled: true,
+            fillColor: AppTheme.surface.withValues(alpha: 0.85),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppTheme.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppTheme.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppTheme.primary),
+            ),
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context),
-            child: Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+          ),
           ElevatedButton(
             onPressed: () async {
-              Navigator.pop(context);
-              final result = await widget.apiService.editMessage(msg['id'], controller.text);
-              if (result['success']) { _silentRefresh(); _showSuccess('Message edited'); }
-              else { _showError('Failed to edit'); }
+              final next = controller.text.trim();
+              if (next.isEmpty) {
+                _showError('Message cannot be empty');
+                return;
+              }
+              Navigator.pop(dialogCtx);
+              final result = await widget.apiService.editMessage(
+                msgId,
+                next,
+                isGroup: _selectedGroup != null,
+                groupId: _asInt(_selectedGroup?['id']),
+              );
+              if (!mounted) return;
+              if (result['success'] == true) {
+                setState(() {
+                  _messages = _messages.map((m) {
+                    if (m is! Map) return m;
+                    if (_asInt(m['id']) != msgId) return m;
+                    return {
+                      ...Map<String, dynamic>.from(m),
+                      'message': next,
+                      'edited_at': DateTime.now().toIso8601String(),
+                    };
+                  }).toList();
+                });
+                unawaited(_silentRefresh());
+                _showSuccess('Message edited');
+              } else {
+                _showError(result['error']?.toString() ?? 'Failed to edit');
+              }
             },
             style: AppTheme.primaryElevatedButton(),
             child: const Text('Save', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
@@ -6583,9 +7165,55 @@ Remove-Item '$stopFile' -ErrorAction SilentlyContinue
   }
 
   Future<void> _deleteMessage(dynamic msg) async {
-    final result = await widget.apiService.deleteMessage(msg['id']);
-    if (result['success']) { _silentRefresh(); _showSuccess('Message deleted'); }
-    else { _showError('Failed to delete'); }
+    if (msg is! Map) return;
+    if (!_isOwnMessage(msg)) {
+      _showError('You can only delete your own messages');
+      return;
+    }
+    final msgId = _asInt(msg['id']);
+    if (msgId == null) {
+      _showError('Could not delete this message');
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: AppTheme.dialogBg,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+        ),
+        title: const Text('Delete message?', style: TextStyle(color: AppTheme.textPrimary)),
+        content: const Text(
+          'This message will be removed for everyone in this chat.',
+          style: TextStyle(color: AppTheme.textMuted),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: const Text('Delete', style: TextStyle(color: AppTheme.danger, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final result = await widget.apiService.deleteMessage(
+      msgId,
+      isGroup: _selectedGroup != null,
+      groupId: _asInt(_selectedGroup?['id']),
+    );
+    if (!mounted) return;
+    if (result['success'] == true) {
+      _markMessagesDeletedLocally([msgId]);
+      _showSuccess('Message deleted');
+    } else {
+      _showError(result['error']?.toString() ?? 'Failed to delete');
+    }
   }
 
   // â”€â”€â”€ Create Group Dialog â”€â”€â”€
@@ -7479,6 +8107,11 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
               enabled: !_saving,
               icon: const Icon(Icons.more_vert, color: AppTheme.textMuted, size: 20),
               color: AppTheme.surface2,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+              ),
               onSelected: (value) {
                 if (value == 'admin' || value == 'member') {
                   _setMemberRole(uid, value);
@@ -7488,9 +8121,15 @@ class _GroupSettingsSheetState extends State<_GroupSettingsSheet> {
               },
               itemBuilder: (_) => [
                 if (role != 'admin')
-                  const PopupMenuItem(value: 'admin', child: Text('Make admin')),
+                  const PopupMenuItem(
+                    value: 'admin',
+                    child: Text('Make admin', style: TextStyle(color: AppTheme.textPrimary)),
+                  ),
                 if (role == 'admin')
-                  const PopupMenuItem(value: 'member', child: Text('Make member')),
+                  const PopupMenuItem(
+                    value: 'member',
+                    child: Text('Make member', style: TextStyle(color: AppTheme.textPrimary)),
+                  ),
                 if (canRemove)
                   const PopupMenuItem(
                     value: 'remove',

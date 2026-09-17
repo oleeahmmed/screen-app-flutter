@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -37,38 +38,54 @@ Future<void> showVaultEntryDetailSheet({
         minChildSize: 0.45,
         maxChildSize: 0.95,
         expand: false,
-        builder: (_, scrollCtrl) => Container(
-          decoration: BoxDecoration(
-            color: AppTheme.surface2,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-          ),
-          child: ListView(
-            controller: scrollCtrl,
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
-            children: [
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 14),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.22),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+        builder: (_, scrollCtrl) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.14),
+                    AppTheme.primary.withValues(alpha: 0.12),
+                    AppTheme.surface2.withValues(alpha: 0.92),
+                  ],
+                ),
+                border: Border(
+                  top: BorderSide(color: Colors.white.withValues(alpha: 0.22)),
                 ),
               ),
-              VaultEntryDetailForm(
-                apiService: apiService,
-                projectId: projectId,
-                entry: entry,
-                isAdmin: isAdmin,
-                canEdit: canEdit,
-                currentUserId: currentUserId,
-                onChanged: onChanged,
-                embedded: false,
+              child: ListView(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.22),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  VaultEntryDetailForm(
+                    apiService: apiService,
+                    projectId: projectId,
+                    entry: entry,
+                    isAdmin: isAdmin,
+                    canEdit: canEdit,
+                    currentUserId: currentUserId,
+                    onChanged: onChanged,
+                    embedded: false,
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),

@@ -25,6 +25,7 @@ class ProjectKanbanBoard extends StatefulWidget {
   final void Function(int stageId) onCreateTask;
   final VoidCallback onAddStage;
   final void Function(int stageId, String name) onDeleteStage;
+  final void Function(Map<String, dynamic> stage) onEditStage;
   final void Function(Map<String, dynamic> task) onAssigneeTap;
   final void Function(Map<String, dynamic> task) onTaskMenu;
 
@@ -37,6 +38,7 @@ class ProjectKanbanBoard extends StatefulWidget {
     required this.onCreateTask,
     required this.onAddStage,
     required this.onDeleteStage,
+    required this.onEditStage,
     required this.onAssigneeTap,
     required this.onTaskMenu,
   });
@@ -492,10 +494,12 @@ class _ProjectKanbanBoardState extends State<ProjectKanbanBoard> {
               color: AppTheme.surface2,
               onSelected: (v) {
                 if (v == 'add') widget.onCreateTask(stageId);
+                if (v == 'edit') widget.onEditStage(Map<String, dynamic>.from(col));
                 if (v == 'delete') widget.onDeleteStage(stageId, col['name']?.toString() ?? '');
               },
               itemBuilder: (_) => [
                 const PopupMenuItem(value: 'add', child: Text('Add task')),
+                const PopupMenuItem(value: 'edit', child: Text('Edit stage')),
                 const PopupMenuItem(value: 'delete', child: Text('Delete stage', style: TextStyle(color: Colors.redAccent))),
               ],
             ),

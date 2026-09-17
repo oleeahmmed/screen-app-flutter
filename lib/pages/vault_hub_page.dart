@@ -211,19 +211,19 @@ class _VaultHubPageState extends State<VaultHubPage> {
         onTap: () => _openVault(vault),
         borderRadius: BorderRadius.circular(18),
         child: Ink(
-          padding: const EdgeInsets.all(14),
-          decoration: AppTheme.loginInsetDecoration(borderRadius: 16),
+          padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+          decoration: AppTheme.loginInsetDecoration(borderRadius: 14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Row(
                 children: [
                   VaultTheme.iconBox(
                     icon: LucideIcons.folderLock,
                     color: VaultTheme.violet,
-                    size: 40,
-                    iconSize: 18,
+                    size: 34,
+                    iconSize: 16,
                   ),
                   const Spacer(),
                   if (isAdmin)
@@ -246,57 +246,61 @@ class _VaultHubPageState extends State<VaultHubPage> {
                     ),
                 ],
               ),
-              const SizedBox(height: 10),
-              Text(
-                projectName,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  height: 1.2,
-                  letterSpacing: -0.2,
-                ),
-              ),
-              if (customerName.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text(
-                  customerName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppTheme.textMuted.withValues(alpha: 0.92),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 10),
-              Row(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    LucideIcons.layers,
-                    size: 13,
-                    color: VaultTheme.violetBright.withValues(alpha: 0.85),
+                  Text(
+                    projectName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13.5,
+                      height: 1.15,
+                      letterSpacing: -0.2,
+                    ),
                   ),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                      '$catCount categor${catCount == 1 ? 'y' : 'ies'}',
+                  if (customerName.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      customerName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: VaultTheme.violetBright.withValues(alpha: 0.9),
+                        color: AppTheme.textMuted.withValues(alpha: 0.92),
                         fontSize: 11,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
-                  ),
-                  Icon(
-                    Icons.arrow_forward_rounded,
-                    size: 16,
-                    color: AppTheme.textMuted.withValues(alpha: 0.5),
+                  ],
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(
+                        LucideIcons.layers,
+                        size: 13,
+                        color: VaultTheme.violetBright.withValues(alpha: 0.85),
+                      ),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          '$catCount categor${catCount == 1 ? 'y' : 'ies'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: VaultTheme.violetBright.withValues(alpha: 0.9),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 16,
+                        color: AppTheme.textMuted.withValues(alpha: 0.5),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -341,8 +345,14 @@ class _VaultHubPageState extends State<VaultHubPage> {
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       final width = constraints.maxWidth;
-                      final crossAxisCount = width >= 720 ? 3 : (width >= 380 ? 2 : 1);
-                      const gap = 12.0;
+                      final crossAxisCount = width >= 900
+                          ? 3
+                          : (width >= 520 ? 2 : 1);
+                      const gap = 10.0;
+                      // Compact row cards — old 0.88 ratio made 3-col tiles huge/tall.
+                      final tileHeight = crossAxisCount == 1
+                          ? 112.0
+                          : (width < 640 ? 126.0 : 122.0);
 
                       return GridView.builder(
                         physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
@@ -351,7 +361,7 @@ class _VaultHubPageState extends State<VaultHubPage> {
                           crossAxisCount: crossAxisCount,
                           mainAxisSpacing: gap,
                           crossAxisSpacing: gap,
-                          childAspectRatio: crossAxisCount == 1 ? 2.35 : 0.88,
+                          mainAxisExtent: tileHeight,
                         ),
                         itemCount: filtered.length,
                         itemBuilder: (_, i) => _vaultCard(filtered[i]),

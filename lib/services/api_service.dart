@@ -1420,39 +1420,62 @@ class ApiService {
   }
 
   // ─── Edit Message ───
-  Future<Map<String, dynamic>> editMessage(int messageId, String newText) async {
+  Future<Map<String, dynamic>> editMessage(
+    int messageId,
+    String newText, {
+    bool isGroup = false,
+    int? groupId,
+  }) async {
     try {
-      final response = await http
-          .patch(
-            Uri.parse('${AppConfig.chatMessageDetailUrl}$messageId/'),
-            headers: _getHeaders(),
-            body: jsonEncode({'message': newText}),
-          )
-          .timeout(Duration(seconds: 10));
+      await ensureAuth();
+      final url = isGroup && groupId != null
+          ? AppConfig.groupMessageDetailUrl(groupId, messageId)
+          : '${AppConfig.chatMessageDetailUrl}$messageId/';
+      final response = await _authorizedPatch(
+        Uri.parse(url),
+        body: jsonEncode({'message': newText}),
+        timeout: const Duration(seconds: 10),
+      );
       if (response.statusCode == 200) {
-        return {'success': true, 'data': jsonDecode(response.body)};
+        return {'success': true, 'data': jsonDecode(_responseText(response))};
       }
-      return {'success': false, 'error': 'Failed to edit message'};
+      String err = 'Failed to edit message';
+      try {
+        final body = jsonDecode(_responseText(response));
+        if (body is Map && body['error'] != null) err = body['error'].toString();
+      } catch (_) {}
+      return {'success': false, 'error': err};
     } catch (e) {
-      return {'success': false, 'error': '$e'};
+      return {'success': false, 'error': _networkErrorMessage(e)};
     }
   }
 
   // ─── Delete Message ───
-  Future<Map<String, dynamic>> deleteMessage(int messageId) async {
+  Future<Map<String, dynamic>> deleteMessage(
+    int messageId, {
+    bool isGroup = false,
+    int? groupId,
+  }) async {
     try {
-      final response = await http
-          .delete(
-            Uri.parse('${AppConfig.chatMessageDetailUrl}$messageId/'),
-            headers: _getHeaders(),
-          )
-          .timeout(Duration(seconds: 10));
-      if (response.statusCode == 200) {
+      await ensureAuth();
+      final url = isGroup && groupId != null
+          ? AppConfig.groupMessageDetailUrl(groupId, messageId)
+          : '${AppConfig.chatMessageDetailUrl}$messageId/';
+      final response = await _authorizedDelete(
+        Uri.parse(url),
+        timeout: const Duration(seconds: 10),
+      );
+      if (response.statusCode == 200 || response.statusCode == 204) {
         return {'success': true};
       }
-      return {'success': false, 'error': 'Failed to delete message'};
+      String err = 'Failed to delete message';
+      try {
+        final body = jsonDecode(_responseText(response));
+        if (body is Map && body['error'] != null) err = body['error'].toString();
+      } catch (_) {}
+      return {'success': false, 'error': err};
     } catch (e) {
-      return {'success': false, 'error': '$e'};
+      return {'success': false, 'error': _networkErrorMessage(e)};
     }
   }
 
@@ -2667,8 +2690,53 @@ class ApiService {
       final response = await http
           .patch(Uri.parse('${AppConfig.projectsUrl}$projectId/stages/$stageId/'), headers: _getHeaders(), body: jsonEncode(data))
           .timeout(Duration(seconds: 10));
-      if (response.statusCode == 200) return {'success': true};
-      return {'success': false, 'error': 'Failed to update stage'};
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      String err = 'Failed to update stage';
+      try {
+        final body = jsonDecode(response.body);
+        if (body is Map && body['error'] != null) err = body['error'].toString();
+      } catch (_) {}
+      return {'success': false, 'error': err};
+    } catch (e) {
+      return {'success': false, 'error': '$e'};
+    }
+  }
+
+  /// Move a stage (+ its tasks) to another project.
+  /// [onNameConflict]: `merge` (default) or `rename`.
+  Future<Map<String, dynamic>> moveStage({
+    required int projectId,
+    required int stageId,
+    required int targetProjectId,
+    String? name,
+    String onNameConflict = 'merge',
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'target_project_id': targetProjectId,
+        'on_name_conflict': onNameConflict,
+        if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+      };
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.projectsUrl}$projectId/stages/$stageId/move/'),
+            headers: _getHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (response.statusCode == 200) {
+        return {'success': true, 'data': jsonDecode(response.body)};
+      }
+      String err = 'Failed to move stage';
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          err = (decoded['error'] ?? decoded['detail'] ?? err).toString();
+        }
+      } catch (_) {}
+      return {'success': false, 'error': err};
     } catch (e) {
       return {'success': false, 'error': '$e'};
     }

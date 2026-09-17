@@ -1,3 +1,5 @@
+import 'chat_inbox_prefs.dart';
+
 /// Tracks which chat thread is open so we can suppress duplicate tray toasts.
 abstract final class ChatNotificationRouter {
   static bool chatTabActive = false;
@@ -30,6 +32,10 @@ abstract final class ChatNotificationRouter {
     int? groupId,
   }) {
     if (myUserId != null && senderId == myUserId) return true;
+    // Local mute (WhatsApp-style) — no tray/sound for this chat.
+    if (ChatInboxPrefs.isMutedPeer(peerId: peerId, groupId: groupId)) {
+      return true;
+    }
     if (!chatTabActive) return false;
     if (groupId != null) return activeGroupId == groupId;
     if (peerId != null) return activePeerId == peerId;

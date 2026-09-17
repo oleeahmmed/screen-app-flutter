@@ -8,6 +8,7 @@ import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../utils/app_toast.dart';
 import '../utils/task_helpers.dart';
+import 'premium_glass.dart';
 import 'premium_task_pickers.dart';
 
 /// My Task card — list (phone) or grid (tablet+) layouts.
@@ -201,18 +202,16 @@ class _MyTaskCardState extends State<MyTaskCard> {
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => _openDetail(context),
-          onLongPress: () => _showQuickActions(context),
-          borderRadius: BorderRadius.circular(14),
-          child: Ink(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              color: Colors.white.withValues(alpha: 0.045),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-            ),
+      child: PremiumGlass.panel(
+        padding: EdgeInsets.zero,
+        borderRadius: 14,
+        elevated: false,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => _openDetail(context),
+            onLongPress: () => _showQuickActions(context),
+            borderRadius: BorderRadius.circular(14),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(14),
               child: IntrinsicHeight(
@@ -291,19 +290,30 @@ class _MyTaskCardState extends State<MyTaskCard> {
                                     size: 18,
                                     color: AppTheme.textMuted.withValues(alpha: 0.75),
                                   ),
-                                  color: const Color(0xFF152238),
+                                  color: AppTheme.surface2,
+                                  surfaceTintColor: Colors.transparent,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+                                  ),
                                   onSelected: (v) {
                                     if (v == 'assign') unawaited(_openAssignee());
                                     if (v == 'stage') unawaited(_openStage());
                                     if (v == 'detail') _openDetail(context);
                                   },
                                   itemBuilder: (_) => [
-                                    const PopupMenuItem(value: 'detail', child: Text('Open')),
-                                    const PopupMenuItem(value: 'assign', child: Text('Assign')),
+                                    const PopupMenuItem(
+                                      value: 'detail',
+                                      child: Text('Open', style: TextStyle(color: AppTheme.textPrimary)),
+                                    ),
+                                    const PopupMenuItem(
+                                      value: 'assign',
+                                      child: Text('Assign', style: TextStyle(color: AppTheme.textPrimary)),
+                                    ),
                                     if (widget.stages.isNotEmpty)
                                       const PopupMenuItem(
                                         value: 'stage',
-                                        child: Text('Change stage'),
+                                        child: Text('Change stage', style: TextStyle(color: AppTheme.textPrimary)),
                                       ),
                                   ],
                                 ),
@@ -334,20 +344,16 @@ class _MyTaskCardState extends State<MyTaskCard> {
     final people = taskAssigneeListFrom(task);
     final accent = isCompleted ? AppTheme.success : priorityColor;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _openDetail(context),
-        onLongPress: () => _showQuickActions(context),
-        borderRadius: BorderRadius.circular(16),
-        child: Ink(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            color: Colors.white.withValues(alpha: 0.05),
-            border: Border.all(
-              color: accent.withValues(alpha: 0.22),
-            ),
-          ),
+    return PremiumGlass.panel(
+      padding: EdgeInsets.zero,
+      borderRadius: 16,
+      elevated: false,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _openDetail(context),
+          onLongPress: () => _showQuickActions(context),
+          borderRadius: BorderRadius.circular(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -466,16 +472,15 @@ class _MyTaskCardState extends State<MyTaskCard> {
   void _showQuickActions(BuildContext context) {
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF152238),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
       builder: (ctx) {
-        return SafeArea(
+        return PremiumGlass.sheetBody(
+          context: ctx,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox(height: 8),
+              PremiumGlass.handle(),
               ListTile(
                 leading: const Icon(Icons.open_in_new_rounded, color: AppTheme.primaryBright),
                 title: const Text('Open task', style: TextStyle(color: AppTheme.textPrimary)),

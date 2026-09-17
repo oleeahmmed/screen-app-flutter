@@ -28,6 +28,7 @@ import 'pages/projects_page.dart';
 import 'pages/task_detail_page.dart';
 import 'services/local_notification_service.dart';
 import 'services/prefs_repair.dart';
+import 'services/chat_inbox_prefs.dart';
 import 'services/push_keepalive_service.dart';
 import 'services/notification_launch_router.dart';
 import 'pages/login_page.dart';
@@ -229,7 +230,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     PushService.onOpenFromNotification = _openFromNotificationData;
     _notificationService.onUnreadCountChanged = _onUnreadCountChanged;
     _initializeApp();
-    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+    if (!kIsWeb && (Platform.isLinux || Platform.isWindows || Platform.isMacOS)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         debugPrint('Desktop build — API: ${AppConfig.apiBaseUrl}');
       });
@@ -240,6 +241,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     try {
       await PrefsRepair.repairIfNeeded();
       await _apiService.initToken();
+      await ChatInboxPrefs.load();
       final prefs = await SharedPreferences.getInstance();
       AppSession.setConsent(prefs.getBool('screenshot_monitoring_consent') ?? false);
       await _checkLoginStatus().timeout(const Duration(seconds: 12));
@@ -638,6 +640,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       return;
     }
 
+    if (payload != null && payload.startsWith('p2p_file:')) {
+      AppNavigation.instance.goChatP2pReceived();
+      return;
+    }
+
     final map = data ?? NotificationLaunchRouter.tryDecodeMap(payload);
     final resolvedPayload = payload ??
         (map != null ? NotificationLaunchRouter.encodePayloadFromData(map) : null);
@@ -833,6 +840,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
     // Mobile tray alerts are drawn by PushAlertService at the WS/FCM source.
     if (LocalNotificationService.supported &&
+        !kIsWeb &&
         !Platform.isAndroid &&
         !Platform.isIOS &&
         (!inForeground || isChat)) {

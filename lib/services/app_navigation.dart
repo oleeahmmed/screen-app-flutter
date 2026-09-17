@@ -23,6 +23,8 @@ class AppNavigation {
   int unreadNotifs = 0;
   int? pendingChatUserId;
   int? pendingChatGroupId;
+  /// When true, Chat tab should open the P2P Received inbox.
+  bool pendingOpenP2pReceived = false;
   void Function()? onPendingChatOpen;
 
   void Function(int index)? onSelectTab;
@@ -59,6 +61,14 @@ class AppNavigation {
   void goChatWithPeer({int? userId, int? groupId}) {
     pendingChatUserId = userId;
     pendingChatGroupId = groupId;
+    goChat();
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      onPendingChatOpen?.call();
+    });
+  }
+
+  void goChatP2pReceived() {
+    pendingOpenP2pReceived = true;
     goChat();
     SchedulerBinding.instance.addPostFrameCallback((_) {
       onPendingChatOpen?.call();

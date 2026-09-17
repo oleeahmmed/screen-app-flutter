@@ -372,7 +372,8 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Widget _buildLoginForm() {
-    return Column(
+    return AutofillGroup(
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _label('Username'),
@@ -380,10 +381,14 @@ class _LoginPageState extends State<LoginPage> {
           controller: _usernameController,
           enabled: !_isLoading,
           autocorrect: false,
+          enableSuggestions: false,
           textCapitalization: TextCapitalization.none,
+          keyboardType: TextInputType.text,
+          textInputAction: TextInputAction.next,
+          autofillHints: const [AutofillHints.username],
           style: const TextStyle(color: AppTheme.textPrimary),
           decoration: _glassInput(hint: 'Enter your username'),
-          onSubmitted: (_) => _login(),
+          onSubmitted: (_) => FocusScope.of(context).nextFocus(),
         ),
         const SizedBox(height: 16),
         _label('Password'),
@@ -391,9 +396,20 @@ class _LoginPageState extends State<LoginPage> {
           controller: _passwordController,
           enabled: !_isLoading,
           obscureText: !_showPassword,
+          // Web: without these, obscure fields often ignore keystrokes.
+          autocorrect: false,
+          enableSuggestions: false,
+          enableIMEPersonalizedLearning: false,
+          keyboardType: TextInputType.visiblePassword,
+          textInputAction: TextInputAction.done,
+          autofillHints: const [AutofillHints.password],
           style: const TextStyle(color: AppTheme.textPrimary),
           decoration: _glassInput(hint: '••••••••').copyWith(
+            suffixIconConstraints: const BoxConstraints(minWidth: 44, minHeight: 40),
             suffixIcon: IconButton(
+              tooltip: _showPassword ? 'Hide password' : 'Show password',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 40),
               icon: Icon(
                 _showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
                 color: const Color(0xFF64748B),
@@ -452,6 +468,7 @@ class _LoginPageState extends State<LoginPage> {
           loading: _isLoading,
         ),
       ],
+      ),
     );
   }
 

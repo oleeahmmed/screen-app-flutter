@@ -41,6 +41,8 @@ class _ProfilePageState extends State<ProfilePage> {
   final _desigCtrl = TextEditingController();
   final _deptCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
+  final _secondaryPhoneCtrl = TextEditingController();
+  final _descriptionCtrl = TextEditingController();
   String? _photoUrl;
   bool _consent = false;
   bool _sound = true;
@@ -77,6 +79,8 @@ class _ProfilePageState extends State<ProfilePage> {
     _desigCtrl.dispose();
     _deptCtrl.dispose();
     _phoneCtrl.dispose();
+    _secondaryPhoneCtrl.dispose();
+    _descriptionCtrl.dispose();
     super.dispose();
   }
 
@@ -91,10 +95,14 @@ class _ProfilePageState extends State<ProfilePage> {
       _desigCtrl.text = em['designation']?.toString() ?? '';
       _deptCtrl.text = em['department']?.toString() ?? '';
       _phoneCtrl.text = em['phone']?.toString() ?? '';
+      _secondaryPhoneCtrl.text = em['secondary_phone']?.toString() ?? '';
+      _descriptionCtrl.text = em['description']?.toString() ?? '';
     } else {
       _desigCtrl.clear();
       _deptCtrl.clear();
       _phoneCtrl.clear();
+      _secondaryPhoneCtrl.clear();
+      _descriptionCtrl.clear();
     }
   }
 
@@ -148,6 +156,8 @@ class _ProfilePageState extends State<ProfilePage> {
       'designation': _desigCtrl.text.trim(),
       'department': _deptCtrl.text.trim(),
       'phone': _phoneCtrl.text.trim(),
+      'secondary_phone': _secondaryPhoneCtrl.text.trim(),
+      'description': _descriptionCtrl.text.trim(),
       'screenshot_monitoring_consent': _consent,
     });
     if (!mounted) return;
@@ -487,10 +497,66 @@ class _ProfilePageState extends State<ProfilePage> {
           _divider(),
           _field(_phoneCtrl, 'Phone', Icons.phone_outlined, TextInputType.phone),
           _divider(),
+          _field(
+            _secondaryPhoneCtrl,
+            'Secondary number',
+            Icons.phone_android_outlined,
+            TextInputType.phone,
+            'Optional alternate number',
+          ),
+          _divider(),
+          _multilineField(
+            _descriptionCtrl,
+            'Description',
+            Icons.notes_outlined,
+            'Optional notes or bio',
+          ),
+          _divider(),
           _field(_desigCtrl, 'Designation', Icons.work_outline_rounded),
           _divider(),
           _field(_deptCtrl, 'Department', Icons.apartment_rounded, null, 'e.g. Engineering'),
         ],
+      ),
+    );
+  }
+
+  Widget _multilineField(
+    TextEditingController ctrl,
+    String label,
+    IconData icon, [
+    String? hint,
+  ]) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: TextField(
+        controller: ctrl,
+        minLines: 2,
+        maxLines: 4,
+        keyboardType: TextInputType.multiline,
+        textCapitalization: TextCapitalization.sentences,
+        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          labelStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 13),
+          hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.5)),
+          prefixIcon: Icon(icon, size: 20, color: AppTheme.textMuted.withValues(alpha: 0.85)),
+          filled: true,
+          fillColor: Colors.white.withValues(alpha: 0.04),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: AppTheme.primary.withValues(alpha: 0.6)),
+          ),
+        ),
       ),
     );
   }

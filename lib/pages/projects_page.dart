@@ -1379,6 +1379,204 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
               ), child: Text('Add'))],
     )));
   }
+
+  Future<void> _showEditStageDialog(Map<String, dynamic> stage) async {
+    final sid = int.tryParse('${stage['id']}');
+    if (sid == null) return;
+    final nc = TextEditingController(text: stage['name']?.toString() ?? '');
+    var color = (stage['color']?.toString().isNotEmpty == true)
+        ? stage['color'].toString()
+        : '#3B82F6';
+    final cls = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#64748B', '#06B6D4', '#c2f50a'];
+    if (!cls.contains(color)) cls.add(color);
+
+    var targetProjectId = widget.projectId;
+    var saving = false;
+    List<Map<String, dynamic>> projects = [];
+
+    final projectsRes = await widget.apiService.getProjects();
+    if (projectsRes['success'] == true) {
+      final raw = projectsRes['data'];
+      final list = raw is List
+          ? raw
+          : (raw is Map && raw['results'] is List)
+              ? raw['results'] as List
+              : <dynamic>[];
+      projects = list
+          .whereType<Map>()
+          .map((p) => Map<String, dynamic>.from(p))
+          .where((p) {
+            final id = int.tryParse('${p['id']}');
+            final archived = p['is_archived'] == true;
+            final active = p['is_active'] != false;
+            return id != null && !archived && active;
+          })
+          .toList();
+    }
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: AppTheme.surface2,
+          title: const Text('Edit Stage', style: TextStyle(color: Colors.white)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _tf(nc, 'Stage Name *'),
+                const SizedBox(height: 12),
+                Text('Color', style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: cls
+                      .map(
+                        (c) => GestureDetector(
+                          onTap: () => setD(() => color = c),
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: _parseHex(c),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: color == c ? Colors.white : Colors.transparent,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+                const SizedBox(height: 16),
+                Text('Move to project', style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+                const SizedBox(height: 6),
+                DropdownButtonFormField<int>(
+                  value: projects.any((p) => int.tryParse('${p['id']}') == targetProjectId)
+                      ? targetProjectId
+                      : widget.projectId,
+                  dropdownColor: AppTheme.surface2,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.06),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                  items: [
+                    DropdownMenuItem(
+                      value: widget.projectId,
+                      child: const Text('Keep on this project'),
+                    ),
+                    ...projects
+                        .where((p) => int.tryParse('${p['id']}') != widget.projectId)
+                        .map(
+                          (p) => DropdownMenuItem(
+                            value: int.tryParse('${p['id']}'),
+                            child: Text(
+                              p['name']?.toString() ?? 'Project',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                  ],
+                  onChanged: saving
+                      ? null
+                      : (v) {
+                          if (v != null) setD(() => targetProjectId = v);
+                        },
+                ),
+                if (targetProjectId != widget.projectId) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tasks in this stage move with it. Same name on the target project is merged automatically.',
+                    style: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.9), fontSize: 11, height: 1.35),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final name = nc.text.trim();
+                      if (name.isEmpty) return;
+                      setD(() => saving = true);
+                      if (targetProjectId != widget.projectId) {
+                        final r = await widget.apiService.moveStage(
+                          projectId: widget.projectId,
+                          stageId: sid,
+                          targetProjectId: targetProjectId,
+                          name: name,
+                          onNameConflict: 'merge',
+                        );
+                        if (!ctx.mounted) return;
+                        if (r['success'] != true) {
+                          setD(() => saving = false);
+                          AppToast.updateFailed(context, r['error']?.toString());
+                          return;
+                        }
+                        // Also update color on destination stage when possible
+                        final data = r['data'];
+                        final newStage = data is Map ? data['stage'] : null;
+                        final newId = newStage is Map ? int.tryParse('${newStage['id']}') : null;
+                        if (newId != null) {
+                          await widget.apiService.updateStage(
+                            targetProjectId,
+                            newId,
+                            {'color': color},
+                          );
+                        }
+                        if (!ctx.mounted) return;
+                        Navigator.pop(ctx);
+                        final msg = data is Map ? data['message']?.toString() : null;
+                        AppToast.saved(context, message: msg ?? 'Stage moved');
+                        _load();
+                        return;
+                      }
+                      final r = await widget.apiService.updateStage(
+                        widget.projectId,
+                        sid,
+                        {'name': name, 'color': color},
+                      );
+                      if (!ctx.mounted) return;
+                      if (r['success'] != true) {
+                        setD(() => saving = false);
+                        AppToast.updateFailed(context, r['error']?.toString());
+                        return;
+                      }
+                      Navigator.pop(ctx);
+                      AppToast.saved(context, message: 'Stage updated');
+                      _load();
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.featureVault,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text(saving ? 'Saving…' : 'Save Changes'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _deleteStage(int sid, String name) async {
     final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(backgroundColor: AppTheme.surface2,
       title: Text('Delete "$name"?', style: TextStyle(color: Colors.white)), content: Text('Tasks move to another stage.', style: TextStyle(color: AppTheme.textMuted)),
@@ -2723,6 +2921,7 @@ class _ProjectDetailViewState extends State<ProjectDetailView> with SingleTicker
       onCreateTask: _showCreateTaskInStageDialog,
       onAddStage: _showAddStageDialog,
       onDeleteStage: _deleteStage,
+      onEditStage: _showEditStageDialog,
       onAssigneeTap: _showKanbanAssigneePicker,
       onTaskMenu: _showKanbanTaskMenu,
     );

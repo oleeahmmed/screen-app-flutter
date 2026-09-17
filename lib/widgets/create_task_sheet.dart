@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -149,10 +151,24 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet> {
           constraints: BoxConstraints(maxHeight: maxH),
           child: ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-            child: DecoratedBox(
-              decoration: AppTheme.taskCardDecoration(borderRadius: 20).copyWith(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-              ),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Colors.white.withValues(alpha: 0.14),
+                      AppTheme.primary.withValues(alpha: 0.12),
+                      AppTheme.surface2.withValues(alpha: 0.92),
+                    ],
+                  ),
+                  border: Border(
+                    top: BorderSide(color: Colors.white.withValues(alpha: 0.22)),
+                  ),
+                ),
               child: SafeArea(
                 top: false,
                 child: Column(
@@ -366,6 +382,7 @@ class _CreateTaskSheetState extends State<_CreateTaskSheet> {
           ),
         ),
       ),
+    ),
     );
   }
 }

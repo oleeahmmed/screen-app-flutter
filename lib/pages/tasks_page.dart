@@ -16,6 +16,7 @@ import '../utils/task_helpers.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/create_task_sheet.dart';
 import '../widgets/my_task_card.dart';
+import '../widgets/premium_glass.dart';
 
 class TasksPage extends StatefulWidget {
   final ApiService apiService;
@@ -521,82 +522,87 @@ class _TasksPageState extends State<TasksPage> {
 
     return Padding(
       padding: EdgeInsets.fromLTRB(sidePad, immersive ? 6 : 10, sidePad, 10),
-      child: Row(
-        children: [
-          if (immersive)
-            IconButton(
-              tooltip: 'Home',
-              onPressed: () => AppNavigation.instance.goHome(),
-              icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: AppTheme.textPrimary),
-              visualDensity: VisualDensity.compact,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-            ),
-          _ProgressRing(pct: _overallPct, size: 44),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'My Tasks',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.4,
+      child: PremiumGlass.panel(
+        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+        borderRadius: 18,
+        elevated: true,
+        child: Row(
+          children: [
+            if (immersive)
+              IconButton(
+                tooltip: 'Home',
+                onPressed: () => AppNavigation.instance.goHome(),
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18, color: AppTheme.textPrimary),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              ),
+            _ProgressRing(pct: _overallPct, size: 44),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'My Tasks',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.4,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppTheme.textMuted.withValues(alpha: 0.95),
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w500,
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppTheme.textMuted.withValues(alpha: 0.95),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          _HeaderIcon(
-            tooltip: 'Filter by project',
-            icon: Icons.folder_outlined,
-            active: projectActive,
-            onTap: _openFiltersSheet,
-          ),
-          _HeaderIcon(
-            tooltip: 'Refresh',
-            icon: Icons.refresh_rounded,
-            onTap: () => _load(),
-          ),
-          if (immersive)
             _HeaderIcon(
-              tooltip: 'New task',
-              icon: Icons.add_rounded,
-              active: true,
-              onTap: _openCreateTask,
+              tooltip: 'Filter by project',
+              icon: Icons.folder_outlined,
+              active: projectActive,
+              onTap: _openFiltersSheet,
             ),
-          if (immersive)
-            Tooltip(
-              message: 'Dashboard',
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => AppNavigation.instance.goHome(),
-                  borderRadius: BorderRadius.circular(10),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                    child: AppLogo(size: 28, showBorder: false),
+            _HeaderIcon(
+              tooltip: 'Refresh',
+              icon: Icons.refresh_rounded,
+              onTap: () => _load(),
+            ),
+            if (immersive)
+              _HeaderIcon(
+                tooltip: 'New task',
+                icon: Icons.add_rounded,
+                active: true,
+                onTap: _openCreateTask,
+              ),
+            if (immersive)
+              Tooltip(
+                message: 'Dashboard',
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => AppNavigation.instance.goHome(),
+                    borderRadius: BorderRadius.circular(10),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                      child: AppLogo(size: 28, showBorder: false),
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -622,19 +628,19 @@ class _TasksPageState extends State<TasksPage> {
                 icon: Icon(Icons.close_rounded, size: 18, color: AppTheme.textMuted.withValues(alpha: 0.8)),
               ),
         filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.05),
+        fillColor: Colors.white.withValues(alpha: 0.08),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppTheme.primaryBright.withValues(alpha: 0.45)),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: AppTheme.primaryBright.withValues(alpha: 0.55)),
         ),
       ),
     );
@@ -671,13 +677,10 @@ class _TasksPageState extends State<TasksPage> {
       );
     }
 
-    return Container(
+    return PremiumGlass.panel(
       padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
+      borderRadius: 14,
+      elevated: false,
       child: Row(
         children: [
           seg('To do', 'pending', _pendingCount),
@@ -891,10 +894,8 @@ class _TasksPageState extends State<TasksPage> {
   Future<void> _openFiltersSheet() async {
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF152238),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
       isScrollControlled: true,
       builder: (ctx) {
         return StatefulBuilder(
@@ -904,88 +905,66 @@ class _TasksPageState extends State<TasksPage> {
               setModal(() {});
             }
 
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 36,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(2),
+            return PremiumGlass.sheetBody(
+              context: ctx,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  PremiumGlass.handle(),
+                  PremiumGlass.header(
+                    icon: Icons.folder_outlined,
+                    title: 'Filter by project',
+                    subtitle: 'Then pick a stage from that project',
+                    onClose: () => Navigator.pop(ctx),
+                  ),
+                  const SizedBox(height: 14),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(ctx).height * 0.48,
+                    ),
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: [
+                        _projectFilterTile(
+                          label: 'All Projects',
+                          count: _countInProject(null),
+                          pct: _overallPct,
+                          selected: _selectedProjectId == null,
+                          onTap: () {
+                            apply(() {
+                              _selectedProjectId = null;
+                              _clearStageFilter();
+                            });
+                            Navigator.pop(ctx);
+                          },
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Filter by project',
-                      style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Then pick a stage from that project',
-                      style: TextStyle(
-                        color: AppTheme.textMuted.withValues(alpha: 0.9),
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxHeight: MediaQuery.sizeOf(ctx).height * 0.48,
-                      ),
-                      child: ListView(
-                        shrinkWrap: true,
-                        children: [
-                          _projectFilterTile(
-                            label: 'All Projects',
-                            count: _countInProject(null),
-                            pct: _overallPct,
-                            selected: _selectedProjectId == null,
-                            onTap: () {
-                              apply(() {
-                                _selectedProjectId = null;
-                                _clearStageFilter();
-                              });
-                              Navigator.pop(ctx);
-                            },
-                          ),
-                          const SizedBox(height: 6),
-                          ..._projects.map(
-                            (p) => Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: _projectFilterTile(
-                                label: p['name']?.toString() ?? 'Project',
-                                count: _countInProject(_projectId(p)),
-                                pct: _projectPct(p),
-                                selected: _selectedProjectId == _projectId(p),
-                                onTap: () {
-                                  apply(() {
-                                    final next = _projectId(p);
-                                    if (_selectedProjectId != next) {
-                                      _clearStageFilter();
-                                    }
-                                    _selectedProjectId = next;
-                                  });
-                                  Navigator.pop(ctx);
-                                },
-                              ),
+                        const SizedBox(height: 6),
+                        ..._projects.map(
+                          (p) => Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: _projectFilterTile(
+                              label: p['name']?.toString() ?? 'Project',
+                              count: _countInProject(_projectId(p)),
+                              pct: _projectPct(p),
+                              selected: _selectedProjectId == _projectId(p),
+                              onTap: () {
+                                apply(() {
+                                  final next = _projectId(p);
+                                  if (_selectedProjectId != next) {
+                                    _clearStageFilter();
+                                  }
+                                  _selectedProjectId = next;
+                                });
+                                Navigator.pop(ctx);
+                              },
                             ),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             );
           },
